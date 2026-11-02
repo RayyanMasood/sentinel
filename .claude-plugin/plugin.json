@@ -1,0 +1,10 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "description": "Holds Claude to a signed-off plan as a state machine, detects when it is stuck, and shows the plan live in a pane and in the browser.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Syed Rayyan Masood"
+  },
+  "license": "MIT"
+}

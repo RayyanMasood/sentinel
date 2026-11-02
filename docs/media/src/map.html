@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+  .ripple { border-color: var(--blue-fill); }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · teams</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · Team invites</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 15.6
+fetch('data/map.json').then(r => r.json()).then(({ moments, said }) => {
+  const tool = (at, done, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, 'ok'] })
+  const res = (at, text) => {
+    const ls = text.split('\n').filter(Boolean)
+    return { at, cls: 'ln res', html: esc(ls[0]) + (ls.length > 1 ? `\n<span class="more">… +${ls.length - 1} lines (ctrl+o to expand)</span>` : '') }
+  }
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Add team invites, from the table to the release.' },
+    tool(-1, -1, 'plan', 'action: "define", title: "Team invites", …'),
+    res(-1, said.locked),
+    tool(-1, -1, 'Update', 'src/api/invites/accept.ts'),
+    res(-1, 'Updated src/api/invites/accept.ts with 40 additions'),
+    tool(-1, -1, 'Bash', 'npm test -- invites/accept'),
+    res(-1, 'Tests: 7 passed, 7 total'),
+    tool(-1, -1, 'plan', 'action: "advance", to: "expire"'),
+    res(-1, said.expire),
+    tool(4.2, 4.5, 'Update', 'src/jobs/expire.ts'),
+    res(4.5, 'Updated src/jobs/expire.ts with 24 additions'),
+    tool(5.4, 6.0, 'Bash', 'npm test -- invites/expire'),
+    res(6.0, 'Tests: 6 passed, 6 total'),
+    tool(6.6, 7.0, 'plan', 'action: "advance", to: "limit"'),
+    res(7.0, said.limit),
+    tool(9.6, 9.9, 'Update', 'src/api/invites/limit.ts'),
+    res(9.9, 'Updated src/api/invites/limit.ts with 31 additions'),
+    tool(10.4, 10.9, 'Bash', 'npm test -- invites/limit'),
+    res(10.9, 'Tests: 4 passed, 4 total'),
+    tool(11.3, 11.7, 'plan', 'action: "advance", to: "form"'),
+    res(11.7, said.form),
+    tool(12.6, 12.9, 'Write', 'src/ui/InviteForm.tsx'),
+    res(12.9, 'Wrote 58 lines to src/ui/InviteForm.tsx'),
+  ]
+  const shows = [[0, 'expire'], [4.5, 'expire-edit'], [7.0, 'limit'], [9.9, 'limit-edit'], [11.7, 'form'], [12.9, 'form-edit']]
+  const band = shows.map(([at, m]) => [at, moments[m].band, ''])
+  const term = terminal($('term'), rows, { typed: [0, 0, 0, ''], band })
+  const OPEN = 3.75, BACK = 9.15
+  const cap = captions($('caps'), [
+    [0.4, 'The Map shows the whole plan, in its groups.'],
+    [OPEN, 'Click a state to see what it was for and what happened along the way.'],
+    [BACK, 'Groups fold away as the run moves past them.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments, { view: 'map' })
+  const doc = () => dash.doc(), q = s => doc().querySelector(s)
+  const parts = {
+    plan: () => box(q('#pbox')),
+    group: () => box(q('#v-map rect.fr.live')),
+    accept: () => box(q('#v-map [data-task="accept"]')),
+    back: () => box(q('#tpBack')),
+    along: () => { const h = [...doc().querySelectorAll('#v-task h3')].find(e => e.textContent.trim() === 'Along the way'); return box(h, h?.nextElementSibling) },
+  }
+  // Where the camera's top edge sits: a part centred, or a part's top just inside the frame.
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const top = part => () => (parts[part]()?.y ?? 0) - 6
+  // Each shot: from when, the top edge, and how far in. A slight push in while the task page is open, its Back bar in view.
+  const shots = [[0, () => 0, 1], [0.7, centre('plan'), 1], [OPEN + 0.05, top('plan'), 1.04], [BACK, centre('plan'), 1]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 1.9, hold: 1.2, tone: 'blue', box: parts.group, pad: 4 },
+    { at: 6.4, hold: 1.5, tone: 'blue', box: parts.along, pad: 8 },
+    { at: 12.0, hold: 2.4, tone: 'blue', box: parts.group, pad: 4 },
+  ]
+  let cam = { s: 1, x: 0, y: 0 }
+  const on = part => () => { const b = parts[part](); if (!b) return null; const p = dash.place(b, cam); return [p.x + p.w * 0.45, p.y + p.h * 0.5] }
+  const point = pointer($('pointer'), $('ripple'), [{ at: 2.7, to: on('accept') }, { at: 4.4, to: () => [1130, 545] }, { at: 8.3, to: on('back') }], [3.7, BACK - 0.05], { hide: 9.7 })
+  let along = null
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    dash.show(cue(t, shows)[1], t)
+    // The task page opens and closes as a click on the page would, and scrolls inside the plan box.
+    const page = t >= OPEN && t < BACK
+    dash.eval(page ? 'detailId || showTask("accept")' : 'detailId && hideTask()')
+    if (page) {
+      const pb = q('#pbox'), h = [...doc().querySelectorAll('#v-task h3')].find(e => e.textContent.trim() === 'Along the way')
+      along ??= h.getBoundingClientRect().top - pb.getBoundingClientRect().top + pb.scrollTop - 150
+      pb.scrollTop = lerp(0, along, prog(t, 5.0, 1.3, inOut))
+    }
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const k = i === 0 ? 1 : prog(t, shots[i][0], 0.95, inOut), a = shots[Math.max(0, i - 1)], b = shots[i]
+    const zoom = lerp(a[2], b[2], k)
+    cam = dash.look(lerp(a[1](), b[1](), k), zoom, (760 - 760 / zoom) / 2)
+    rings(t, marks, cam)
+    point(t)
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

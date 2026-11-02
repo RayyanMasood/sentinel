@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Flows</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+  .band.ask .txt { color: #b1b9f9; }
+  .ripple { border-color: var(--blue-fill); }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · hooks</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span></div><div class="prompt"></div><div class="toast">Sentinel: Claude drafted the flow "review". Save it from the band above the prompt</div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 16.4
+fetch('data/flows.json').then(r => r.json()).then(({ moments }) => {
+  const tool = (at, done, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, 'ok'] })
+  // What Sentinel answers a drafted flow (register.tsx, draftFlow), up to where the terminal cuts it.
+  const held = 'Sentinel holds the flow "review" for the user. They save it from the band above the prompt or the dashboard, …'
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Make a flow I can reuse: lint, then a review I sign off.' },
+    tool(0.5, 1.0, 'plan', 'action: "flow", name: "review", states: [lint, read], …'),
+    { at: 1.0, cls: 'ln res', html: esc(held) },
+    { at: 1.6, cls: 'ln say gap', html: 'Drafted review: lint the change, then walk you through the diff. Save it when it looks right.' },
+    { at: 4.9, cls: 'ln you gap', html: 'Sign outgoing webhooks so receivers can check them.' },
+    { at: 5.4, cls: 'ln say gap', html: 'Plan ready: sign, api, docs. Type /sentinel lock to check it as a draft.' },
+    { at: 6.6, cls: 'ln you gap', html: '/sentinel lock' },
+  ]
+  const shows = [[0, 'before'], [1.0, 'drafted'], [4.0, 'saved'], [6.9, 'plan'], [11.4, 'added']]
+  const band = [[0, ''], [1.0, moments.drafted.band, 'ask', ['Save to project', 'Save personal', 'Discard']], [4.0, ''],
+    [6.9, moments.plan.band, 'warn', ['Review', 'Lock']], [11.4, moments.added.band, 'warn', ['Review', 'Lock']]]
+  const term = terminal($('term'), rows, { typed: [5.85, 6.35, 6.6, '/sentinel lock'], band, toast: [1.1, 3.6] })
+  const cap = captions($('caps'), [
+    [0.4, 'A flow is a set of states you can reuse.'],
+    [2.7, 'Claude drafts it; you check it and save it.'],
+    [6.7, 'Add it to a plan while you check the draft.'],
+    [11.9, 'Its states go in together, where you put them.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments, { view: 'list' })
+  const q = s => dash.doc().querySelector(s)
+  const parts = {
+    head: () => box(q('#dfl .slip-h')),
+    save: () => box([...dash.doc().querySelectorAll('#dfl button')].find(b => b.textContent.trim().toLowerCase() === 'save flow')),
+    row: () => box(q('#ftBody tr')),
+    slot: () => box(q('#v-list button.slot[data-state="api"]')),
+    picker: () => box(q('#v-list .picker')),
+    add: () => box(q('#v-list .picker button[data-act="add"][data-name="review"]')),
+    group: () => box(q('#v-list .flow')),
+  }
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const shots = [[0, () => 0], [2.5, centre('save')], [4.05, () => 0], [6.9, () => 0], [7.9, centre('slot')], [9.65, centre('picker')], [11.5, centre('group')]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 1.5, hold: 0.9, tone: 'blue', box: parts.head },
+    { at: 4.5, hold: 1.6, tone: 'blue', box: parts.row },
+    { at: 12.1, hold: 3.0, tone: 'blue', box: parts.group, pad: 8 },
+  ]
+  let cam = { s: 1, x: 0, y: 0 }
+  const on = part => () => { const b = parts[part](); if (!b) return null; const p = dash.place(b, cam); return [p.x + p.w * 0.5, p.y + p.h * 0.55] }
+  const point = pointer($('pointer'), $('ripple'), [
+    { at: 2.9, to: on('save') }, { at: 8.7, to: on('slot') }, { at: 10.5, to: on('add') },
+  ], [3.8, 9.5, 11.3], { hide: 12.0, away: [[4.2, 8.7]] })
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    // The picker the slot opens belongs to the page; it is closed before the flow goes in, and before the click.
+    if (t < 9.5 || t >= 11.4) dash.eval('if (pickAt) { pickAt = null; renderList() }')
+    dash.route(t < 6.9 ? '#flows' : '')
+    dash.show(cue(t, shows)[1], t)
+    if (t >= 9.5 && t < 11.4) dash.eval(`if (!pickAt) document.querySelector('#v-list button.slot[data-state="api"]')?.click()`)
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    cam = dash.look(y)
+    rings(t, marks, cam)
+    point(t)
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

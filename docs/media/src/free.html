@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your OK, or hands-free</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+  .ripple { border-color: var(--blue-fill); }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · reports</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · CSV export for reports</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 19.4
+fetch('data/free.json').then(r => r.json()).then(({ moments, said }) => {
+  const lines = s => s.split('\n').filter(Boolean)
+  const tool = (at, done, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, 'ok'] })
+  const res = (at, text, { full = false, cut } = {}) => {
+    const ls = lines(text)
+    let html = esc(cut ? ls[0].slice(0, ls[0].indexOf(cut) + cut.length) + ' …' : ls[0])
+    if (full) html = ls.map(esc).join('\n')
+    else if (ls.length > 1) html += `\n<span class="more">… +${ls.length - 1} lines (ctrl+o to expand)</span>`
+    return { at, cls: 'ln res', html }
+  }
+  const sent = said.approved.slice(0, said.approved.indexOf('yourself') + 'yourself'.length) + ' …'
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Add a CSV export to the reports page.' },
+    tool(-1, -1, 'plan', 'action: "define", title: "CSV export for reports", …'),
+    res(-1, said.locked),
+    tool(0.6, 1.0, 'plan', 'action: "propose", intent: "One row per report: date, report, …"'),
+    res(1.0, said.proposed, { cut: 'and on the dashboard.' }),
+    { at: 1.5, cls: 'ln say gap', html: 'columns needs your OK first. I propose one row per report (date, report, owner, total), UTF-8 with a header row.' },
+    { at: 4.3, cls: 'ln you gap', html: esc(sent) },
+    tool(5.2, 5.4, 'Read', 'src/reports/model.ts'),
+    res(5.4, 'Read 96 lines'),
+    tool(5.8, 6.1, 'plan', 'action: "advance", to: "api"'),
+    res(6.1, 'Moved to api.'),
+    tool(6.6, 6.9, 'Update', 'src/api/export.ts'),
+    res(6.9, 'Updated src/api/export.ts with 42 additions'),
+    tool(7.3, 7.6, 'plan', 'action: "decide", topic: "Export route", choice: "GET /reports/export …"'),
+    res(7.6, said.decided),
+    tool(8.1, 8.6, 'plan', 'action: "advance", to: "button"'),
+    res(8.6, 'Moved to button.'),
+    tool(9.0, 9.3, 'Write', 'src/ui/ExportButton.tsx'),
+    res(9.3, 'Wrote 31 lines to src/ui/ExportButton.tsx'),
+    tool(9.7, 10.2, 'plan', 'action: "advance", to: "docs"'),
+    res(10.2, said.reviewed),
+    tool(10.6, 10.9, 'plan', 'action: "propose", intent: "Add GET /reports/export and its …"'),
+    res(10.9, said.ahead),
+    tool(11.4, 11.7, 'Update', 'docs/api.md'),
+    res(11.7, 'Updated docs/api.md with 19 additions'),
+    tool(12.1, 13.0, 'plan', 'action: "advance", to: "done"'),
+    res(13.0, said.done, { full: true }),
+  ]
+  const shows = [[0, 'locked'], [1.0, 'asks'], [4.1, 'free'], [6.1, 'api'], [7.6, 'decided'], [8.6, 'button'], [10.2, 'reviewed'], [10.9, 'ahead'], [13.0, 'done']]
+  const band = shows.map(([at, m]) => [at, moments[m].band, m === 'asks' ? 'warn' : ''])
+  const term = terminal($('term'), rows, { typed: [0, 0, 0, ''], band })
+  sfx(3.9, 'click')
+  const cap = captions($('caps'), [
+    [0.8, 'A state can wait for your OK before it starts.'],
+    [3.0, 'Approve it, or go hands-free and step away.'],
+    [5.0, 'Claude then makes those calls itself.'],
+    [13.4, 'Each one is listed for you to check later.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments)
+  const all = s => [...dash.doc().querySelectorAll(s)]
+  const after = e => { const out = []; for (let x = e?.nextElementSibling; x; x = x.nextElementSibling) out.push(x); return out }
+  const parts = {
+    free: () => box(all('button').find(b => b.textContent.trim() === 'Approve and go hands-free')),
+    line: () => box(dash.doc().querySelector('#olScroll')),
+    decided: () => { const h = all('#side h2').find(e => e.textContent.trim().startsWith('Decided')); return box(h, ...after(h)) },
+  }
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const shots = [[0, () => 0], [5.6, centre('line')], [13.5, centre('decided')]]
+  const rings = ringer($('rings'))
+  const marks = [{ at: 14.6, hold: 3.6, tone: 'blue', box: parts.decided, pad: 8 }]
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    dash.show(cue(t, shows)[1], t)
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    const cam = dash.look(y)
+    rings(t, marks, cam)
+    // The pointer comes in and presses "Approve and go hands-free" on the dashboard.
+    const p = $('pointer'), k = prog(t, 2.6, 1.0, inOut)
+    const b = t < 4.1 ? parts.free() : null
+    const at = b ? dash.place(b, cam) : null
+    const to = at ? [at.x + at.w * 0.62, at.y + at.h * 0.55] : (p.last ?? [900, 640])
+    p.last = to
+    p.style.opacity = prog(t, 2.6, 0.2) * (1 - prog(t, 4.4, 0.25))
+    p.style.transform = `translate(${lerp(1010, to[0], k)}px, ${lerp(650, to[1], k)}px)`
+    const rip = prog(t, 3.9, 0.5)
+    Object.assign($('ripple').style, { left: to[0] + 'px', top: to[1] + 'px', opacity: t >= 3.9 ? 0.9 * (1 - rip) : 0, transform: `scale(${0.4 + rip})` })
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

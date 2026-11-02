@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>When Claude goes in circles</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+  .band.err .txt { color: var(--t-red); }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · hooks</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div><div class="toast">Sentinel: stuck (cycle in retry). Recovery note sent.</div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · Retry failed webhooks</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 14.4
+fetch('data/stuck.json').then(r => r.json()).then(({ moments, said }) => {
+  const tool = (at, done, ok, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, ok ? 'ok' : 'no'] })
+  const res = (at, text, no = false) => ({ at, cls: 'ln res' + (no ? ' no' : ''), html: text })
+  const more = n => `\n<span class="more">… +${n} lines (ctrl+o to expand)</span>`
+  const locked = said.locked.split('\n')
+  const failed = 'FAIL tests/webhook.test.ts › retries three times\nexpected 3 attempts, received 4'
+  const edit = (at, done, what) => [tool(at, done, true, 'Update', 'src/webhooks/retry.ts'), res(done, `Updated src/webhooks/retry.ts with ${what}`)]
+  const test = (at, done) => [tool(at, done, false, 'Bash', 'npm test -- webhook'), res(done, esc(failed), true)]
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Retry failed webhook deliveries with backoff.' },
+    tool(-1, -1, true, 'plan', 'action: "define", title: "Retry failed webhooks", …'),
+    res(-1, esc(locked[0]) + more(locked.length - 1)),
+    ...edit(-1, -1, '12 additions'),
+    ...test(-1, -1),
+    ...edit(-1, -1, '1 addition and 1 removal'),
+    ...test(-1, -1),
+    ...edit(0.5, 0.8, '1 addition and 1 removal'),
+    ...test(1.2, 1.8),
+    ...edit(2.2, 2.5, '1 addition and 1 removal'),
+    ...test(2.9, 3.5),
+    { at: 6.9, cls: 'ln say gap', html: 'The test fails the same way each time, so another change to retry.ts will not help. I will read the scheduler first.' },
+    tool(7.7, 8.0, true, 'Read', 'src/webhooks/schedule.ts'),
+    res(8.0, 'Read 58 lines'),
+    ...edit(8.6, 8.9, '3 additions and 2 removals'),
+    tool(9.4, 10.0, true, 'Bash', 'npm test -- webhook'),
+    res(10.0, 'Tests: 9 passed, 9 total'),
+  ]
+  const shows = [[0, 'c4'], [0.8, 'c5'], [1.8, 'c6'], [2.5, 'c7'], [3.5, 'c8'], [8.0, 'read'], [8.9, 'edit'], [10.0, 'passed']]
+  const band = shows.map(([at, m]) => [at, moments[m].band, moments[m].vm.trap ? 'err' : ''])
+  const term = terminal($('term'), rows, { typed: [0, 0, 0, ''], band, toast: [3.6, 6.6] })
+  const cap = captions($('caps'), [
+    [0.3, 'Health drops when calls stop moving the work forward.'],
+    [3.7, 'Going in circles marks the run stuck, and Claude gets a note.'],
+    [9.6, 'Something new breaks the loop, and the run carries on.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments)
+  const q = s => dash.doc().querySelector(s)
+  const parts = {
+    time: () => box(q('#twPanel')),
+    chart: () => box(q('#tw')),
+    stuck: () => box(q('#word'), q('#say')),
+    told: () => { const h = textEl(dash.doc(), 'The same failure'), w = textEl(dash.doc(), 'What Sentinel told the model'); return box(h, w?.nextElementSibling) },
+  }
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const shots = [[0, centre('time')], [3.75, () => 40], [6.0, centre('told')], [10.1, centre('time')]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 4.7, hold: 1.4, tone: 'red', box: parts.stuck, pad: 10 },
+    { at: 6.95, hold: 1.9, tone: 'red', box: parts.told, pad: 8 },
+    { at: 11.1, hold: 2.4, tone: 'green', box: parts.chart, pad: 8 },
+  ]
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    dash.show(cue(t, shows)[1], t)
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    rings(t, marks, dash.look(y))
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

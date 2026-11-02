@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How a run goes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · payments</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · Partial refunds</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 29.6
+fetch('data/run.json').then(r => r.json()).then(({ moments, said }) => {
+  const lines = s => s.split('\n').filter(Boolean)
+  const tool = (at, done, ok, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, ok ? 'ok' : 'no'] })
+  // A result shows its first line and says how many more Claude Code folds away, as it does.
+  const res = (at, text, { no = false, full = false, cut } = {}) => {
+    const ls = lines(text)
+    let html = esc(cut ? ls[0].slice(0, ls[0].indexOf(cut) + cut.length) + ' …' : ls[0])
+    if (full) html = ls.map(esc).join('\n')
+    else if (ls.length > 1) html += `\n<span class="more">… +${ls.length - 1} lines (ctrl+o to expand)</span>`
+    return { at, cls: 'ln res' + (no ? ' no' : ''), html }
+  }
+  const ask = 'Add partial refunds to the payments service.'
+  const rows = [
+    { at: 1.7, cls: 'ln you', html: esc(ask) },
+    { at: 2.1, cls: 'ln say gap', html: 'You approved the plan. Locking it.' },
+    tool(2.5, 3.0, true, 'plan', 'action: "define", title: "Partial refunds", …'),
+    res(3.0, said.locked),
+    tool(5.9, 6.3, true, 'Read', 'src/payments/capture.ts'),
+    res(6.3, 'Read 214 lines'),
+    tool(6.9, 7.3, true, 'plan', 'action: "advance", to: "service"'),
+    res(7.3, said.service),
+    tool(8.1, 8.5, true, 'Update', 'src/refund.ts'),
+    res(8.5, 'Updated src/refund.ts with 18 additions'),
+    tool(9.4, 9.8, false, 'Update', 'src/billing/ledger.ts'),
+    res(9.8, said.refused, { no: true, cut: 'the file and a reason;' }),
+    tool(12.9, 13.3, true, 'plan', 'action: "amend", files: ["src/billing/ledger.ts"], …'),
+    res(13.3, said.amended),
+    tool(15.2, 15.6, true, 'Update', 'src/billing/ledger.ts'),
+    res(15.6, 'Updated src/billing/ledger.ts with 4 additions'),
+    tool(16.9, 18.3, false, 'plan', 'action: "advance", to: "verify"'),
+    res(18.3, said.failed, { no: true }),
+    tool(20.2, 20.6, true, 'Update', 'src/refund.ts'),
+    res(20.6, 'Updated src/refund.ts with 1 addition and 1 removal'),
+    tool(21.7, 22.8, true, 'plan', 'action: "advance", to: "verify"'),
+    res(22.8, said.verify),
+    tool(24.9, 26.4, true, 'plan', 'action: "advance", to: "done"'),
+    res(26.4, said.done, { full: true }),
+  ]
+  // What the dashboard shows from each moment on; Sentinel's line above the prompt follows it once the plan is locked.
+  const shows = [[0, 'locked'], [7.3, 'service'], [8.5, 'working'], [9.8, 'refused'], [13.3, 'amended'], [15.6, 'edited'],
+    [16.9, 'checking'], [18.3, 'failed'], [20.6, 'fixed'], [21.7, 'checking2'], [22.8, 'verify'], [24.9, 'final'], [26.4, 'done']]
+  const band = [[0, ''], [3.0, moments.locked.band, ''], ...shows.slice(1).map(([at, m]) => [at, moments[m].band, m === 'final' ? 'acc' : ''])]
+  const term = terminal($('term'), rows, { typed: [0.35, 1.45, 1.7, ask], band })
+  sfx(4.35, 'click')
+  const cap = captions($('caps'), [
+    [2.6, 'Approve a plan and Sentinel locks it.'],
+    [9.0, "Every edit is checked against the state's files."],
+    [12.6, 'Widening the scope goes on the record.'],
+    [16.4, 'A state is done when its check passes.'],
+    [21.2, 'When it passes, the next state starts.'],
+    [24.4, 'Before the end, every check runs again.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments)
+  const q = s => dash.doc().querySelector(s)
+  const all = s => [...dash.doc().querySelectorAll(s)]
+  const after = e => { const out = []; for (let x = e?.nextElementSibling; x; x = x.nextElementSibling) out.push(x); return out }
+  const parts = {
+    say: () => box(q('#say')),
+    refused: () => box(all('#ledger tr').filter(r => r.querySelector('td.err')).at(-1)),
+    mayEdit: () => { const dt = all('#side dt').find(e => e.textContent.trim() === 'May edit'); return box(dt, dt?.nextElementSibling) },
+    runs: () => { const h = all('#side h3').find(e => e.textContent.trim().startsWith('Check runs')); return box(h, ...after(h)) },
+    line: () => box(q('#olScroll')),
+    here: () => box(q('#olScroll .st.now')),
+    title: () => box(q('#word'), q('#say')),
+  }
+  // Where the camera looks: the top of the page, or a part of it centred.
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const shots = [[0, () => 0], [9.85, centre('refused')], [13.35, centre('mayEdit')], [16.95, centre('runs')], [21.75, centre('line')], [24.95, () => 0]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 7.45, hold: 1.1, tone: 'blue', box: parts.say },
+    { at: 10.75, hold: 1.5, tone: 'red', box: parts.refused },
+    { at: 14.3, hold: 1.6, tone: 'blue', box: parts.mayEdit },
+    { at: 18.4, hold: 1.7, tone: 'red', box: parts.runs },
+    { at: 22.9, hold: 1.3, tone: 'green', box: parts.here, pad: 10 },
+    { at: 26.55, hold: 2.1, tone: 'green', box: parts.title, pad: 10 },
+  ]
+
+  function seek(t) {
+    // Claude Code alone, until Open brings up the dashboard beside it.
+    const open = prog(t, 4.55, 0.8, inOut), enter = prog(t, 4.95, 0.6)
+    // In portrait it waits in the middle of the frame and settles under the browser.
+    if (PORTRAIT) $('term').style.translate = `0 ${lerp(-455, 0, open)}px`
+    else $('term').style.transform = `translateX(${lerp(366, 24, open)}px)`
+    $('term').style.opacity = prog(t, 0, 0.3)
+    $('web').style.opacity = enter
+    $('web').style.transform = `translateX(${(1 - enter) * 36}px) scale(${0.985 + 0.015 * enter})`
+    const { btn } = term(t)
+    cap(t)
+    dash.show(cue(t, shows)[1], t)
+    // The camera eases from where the last shot looked to where this one looks.
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    rings(t, marks, dash.look(y))
+    // The pointer comes in, presses Open, and goes.
+    const p = $('pointer'), r = btn.getBoundingClientRect(), to = [r.left + r.width / 2, r.top + r.height / 2]
+    const k = prog(t, 3.5, 0.8, inOut)
+    p.style.opacity = prog(t, 3.5, 0.2) * (1 - prog(t, 4.9, 0.25))
+    p.style.transform = `translate(${lerp(1080, to[0], k)}px, ${lerp(640, to[1], k)}px)`
+    btn.classList.toggle('press', t >= 4.35 && t < 4.75)
+    const rip = prog(t, 4.35, 0.5)
+    Object.assign($('ripple').style, { left: to[0] + 'px', top: to[1] + 'px', opacity: t >= 4.35 ? 0.9 * (1 - rip) : 0, transform: `scale(${0.4 + rip})` })
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "sentinel",
+  "owner": {
+    "name": "Syed Rayyan Masood"
+  },
+  "plugins": [
+    {
+      "name": "sentinel",
+      "source": "./"
+    }
+  ],
+  "metadata": {
+    "description": "Holds a signed-off plan as a state machine and shows it live."
+  }
+}

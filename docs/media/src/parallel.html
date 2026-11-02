@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parallel states</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · orders</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · Order search</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 16.8
+fetch('data/parallel.json').then(r => r.json()).then(({ moments, said }) => {
+  const tool = (at, done, name, args) => ({ at, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [done, 'ok'] })
+  // A result shows its first line, or the lines picked by how they start, and how many more there are.
+  const res = (at, text, ...starts) => {
+    const ls = text.split('\n').filter(Boolean)
+    const shown = starts.length ? ls.filter(l => starts.some(s => l.startsWith(s))) : ls.slice(0, 1)
+    const more = ls.length - shown.length
+    return { at, cls: 'ln res', html: shown.map(esc).join('\n') + (more ? `\n<span class="more">… +${more} lines (ctrl+o to expand)</span>` : '') }
+  }
+  const sentinel = (at, text) => ({ at, cls: 'ln you gap', html: esc(text.split('\n')[0]) })
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Add search to the orders page.' },
+    tool(-1, -1, 'plan', 'action: "define", title: "Order search", …'),
+    res(-1, said.locked),
+    tool(-1, -1, 'Read', 'src/db/orders.ts'),
+    res(-1, 'Read 120 lines'),
+    tool(-1, -1, 'plan', 'action: "advance", to: "index"'),
+    res(-1, said.index, 'Moved', 'Ready'),
+    tool(1.4, 1.8, 'plan', 'action: "brief", to: "filters", brief: "Chips for status, date and total …"'),
+    res(1.8, said.filters),
+    tool(2.5, 2.9, 'plan', 'action: "brief", to: "empty", brief: "OrderEmpty.tsx: a message when …"'),
+    res(2.9, said.empty),
+    tool(6.1, 6.4, 'Update', 'db/migrations/0051_order_search.sql'),
+    res(6.4, 'Updated db/migrations/0051_order_search.sql with 12 additions'),
+    tool(7.2, 7.8, 'plan', 'action: "advance", to: "api"'),
+    res(7.8, said.api, 'Moved', 'Running'),
+    sentinel(9.6, said.filtersIn),
+    tool(11.2, 11.5, 'Update', 'src/api/orders/search.ts'),
+    res(11.5, 'Updated src/api/orders/search.ts with 38 additions'),
+    sentinel(13.0, said.emptyIn),
+  ]
+  const shows = [[0, 'index'], [1.8, 'one'], [2.9, 'briefed'], [6.4, 'work'], [7.8, 'api'], [9.6, 'filters-in'], [11.5, 'api-edit'], [13.0, 'empty-in']]
+  const band = shows.map(([at, m]) => [at, moments[m].band, ''])
+  const term = terminal($('term'), rows, { typed: [0, 0, 0, ''], band })
+  const cap = captions($('caps'), [
+    [0.4, 'With parallel states on, Claude hands ready states to member agents.'],
+    [4.5, 'Each member works in its own worktree, on its state’s files only.'],
+    [9.4, 'Sentinel runs a member’s check there, then brings its work back.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments, { view: 'map' })
+  const q = s => dash.doc().querySelector(s), all = s => dash.doc().querySelectorAll(s)
+  const parts = {
+    plan: () => box(q('#pbox')),
+    cards: () => box(q('#v-map [data-task="filters"]'), q('#v-map [data-task="empty"]')),
+    who: () => box(q('#whoBox')),
+    // The member lanes: their names and their rows, bars and all.
+    lanes: () => box(...[...all('#who .wname')].slice(1), ...[...all('#who .wrow')].slice(1)),
+    filters: () => box(q('#who .wbar[data-task="filters"]')),
+  }
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  // The hero, then the Map as the members start, then the lanes.
+  const shots = [[0, () => 0], [1.0, centre('plan')], [4.3, centre('who')]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 3.1, hold: 0.9, tone: 'blue', box: parts.cards, pad: 6 },
+    { at: 5.2, hold: 2.4, tone: 'blue', box: parts.lanes, pad: 6 },
+    { at: 9.9, hold: 2.2, tone: 'green', box: parts.filters, pad: 4 },
+  ]
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    dash.show(cue(t, shows)[1], t)
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    rings(t, marks, dash.look(y))
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>

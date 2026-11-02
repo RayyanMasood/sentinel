@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en" class="portrait">
+<head>
+<meta charset="utf-8">
+<title>Sentinel feed cut</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  /* The feed cut: an opening card, four clips laid out for portrait, and an end card. 1080 × 1350, rendered to MP4. */
+  .part { position: absolute; inset: 0; width: 1080px; height: 1350px; border: 0; visibility: hidden; }
+  .chapter { position: absolute; left: 40px; top: 44px; color: var(--ink-3); font: 800 15px/20px var(--f-caps); letter-spacing: .16em; text-transform: uppercase; opacity: 0; }
+  .card { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; padding: 0 84px 60px; opacity: 0; }
+  .card > * { will-change: transform, opacity; }
+  .mark { display: flex; align-items: center; gap: 14px; color: var(--ink); font: 800 22px/1 var(--f-caps); letter-spacing: .18em; text-transform: uppercase; }
+  .mark svg { width: 40px; height: 40px; }
+  .card h1 { margin-top: 44px; color: var(--ink); font: 800 92px/1.02 var(--f-caps); letter-spacing: -.02em; }
+  .card p { max-width: 880px; margin-top: 32px; color: var(--ink-2); font: 400 32px/1.42 var(--f-text); }
+  #end h1 { font-size: 66px; }
+  #end code { display: block; margin-top: 40px; padding: 20px 24px; border: 1px solid var(--hair); border-radius: 8px; background: var(--panel); color: var(--ink); font: 500 23px/1.3 var(--f-code); white-space: nowrap; }
+  #end b { color: var(--blue); font-weight: 600; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position: absolute">
+  <symbol id="logo" viewBox="-130 -130 260 260">
+    <mask id="logo-under" maskUnits="userSpaceOnUse" x="-130" y="-130" width="260" height="260"><rect x="-130" y="-130" width="260" height="260" fill="#fff"/><path d="M0 0C-35 -45 -92 -50 -100 0" fill="none" stroke="#000" stroke-width="33"/><circle cx="-100" r="27"/></mask>
+    <g transform="scale(-1 1) rotate(-60)" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round"><g id="logo-q"><path d="M0 0C45 -35 50 -92 0 -100"/><path d="M0 -100C-62 -100 -100 -62 -100 -38V0" mask="url(#logo-under)"/><circle cy="-100" r="17" fill="currentColor" stroke="none"/></g><use href="#logo-q" transform="rotate(90)"/><use href="#logo-q" transform="rotate(180)"/><use href="#logo-q" transform="rotate(270)"/></g>
+  </symbol>
+</svg>
+<div class="card" id="hook">
+  <div class="mark"><svg aria-hidden="true"><use href="#logo"/></svg>Sentinel</div>
+  <h1>Hold Claude Code to the plan you approved.</h1>
+  <p>Sentinel is an open-source plugin. It checks each tool call against the plan and shows the run live in your browser.</p>
+</div>
+<div class="chapter" id="chapter"></div>
+<div class="card" id="end">
+  <div class="mark"><svg aria-hidden="true"><use href="#logo"/></svg>Sentinel</div>
+  <h1>Install it from Claude Code.</h1>
+  <code>/plugin install sentinel --marketplace RayyanMasood/sentinel</code>
+  <p>Open source, MIT. <b>github.com/RayyanMasood/sentinel</b></p>
+</div>
+<script src="stage.js"></script>
+<script>
+const HOOK = 4.2, END = 6.0
+const parts = [
+  { name: 'run', label: 'How a run goes' },
+  { name: 'stuck', label: 'When Claude goes in circles' },
+  { name: 'map', label: 'The Map' },
+  { name: 'parallel', label: 'Parallel states' },
+  { name: 'flows', label: 'Flows' },
+]
+// Each clip in its own frame, laid out for portrait and driven from this page's clock. They load one at a time: each
+// tells its dashboard which plan view to open through the same localStorage, read as the dashboard starts.
+for (const p of parts) p.frame = document.body.insertBefore(el('iframe', 'part'), $('chapter'))
+const ready = (async () => {
+  for (const p of parts) {
+    const loaded = new Promise(res => p.frame.addEventListener('load', res, { once: true }))
+    p.frame.src = `${p.name}.html?render&portrait`
+    await loaded
+    const w = p.frame.contentWindow
+    while (!w.scene) await new Promise(r => setTimeout(r, 50))
+    await Promise.all([w.document.fonts.ready, w.scene.ready])
+    p.scene = w.scene
+  }
+})().then(() => {
+  let at = HOOK
+  for (const p of parts) { p.at = at; at += p.scene.duration }
+  scene.duration = at + END
+  // The clips' sounds on this clock: a clip's rings join its list when it first draws, so each is drawn once here.
+  // Rising bells with the opening card, a card set down as each chapter comes in, and a chime with the end card.
+  scene.sounds = [[0.2, 'intro'], [at + 0.35, 'chime']]
+  for (const p of parts) {
+    p.scene.seek(0)
+    scene.sounds.push([p.at, 'chapter'], ...p.scene.sounds.filter(([t]) => t < p.scene.duration).map(([t, n]) => [p.at + t, n]))
+  }
+  scene.sounds.sort((a, b) => a[0] - b[0])
+})
+
+// A card's lines rise in one after another, from `at`, and the card fades out from `out`.
+function card(id, t, at, out = Infinity) {
+  const c = $(id)
+  c.style.opacity = t < at - 0.01 ? 0 : 1 - prog(t, out, 0.5)
+  ;[...c.children].forEach((e, i) => {
+    const k = prog(t, at + 0.25 * i + (i > 1 ? 0.35 : 0), 0.7)
+    e.style.opacity = k
+    e.style.transform = `translateY(${(1 - k) * 22}px)`
+  })
+}
+
+function seek(t) {
+  card('hook', t, 0.2, HOOK - 0.55)
+  let label = '', shown = 0
+  for (const p of parts) {
+    const local = t - p.at, on = local >= 0 && local < p.scene.duration
+    p.frame.style.visibility = on ? 'visible' : 'hidden'
+    if (!on) continue
+    p.scene.seek(local)
+    label = p.label
+    shown = prog(local, 0.1, 0.4) * (1 - prog(local, p.scene.duration - 0.7, 0.5))
+  }
+  if (label) $('chapter').textContent = label
+  $('chapter').style.opacity = shown
+  card('end', t, scene.duration - END + 0.1)
+}
+
+const scene = { duration: 0, size: [1080, 1350], fps: 30, ext: 'mp4', seek, ready }
+play(scene)
+</script>
+</body>
+</html>
