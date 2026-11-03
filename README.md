@@ -4,7 +4,7 @@ Sentinel is a Claude Code plugin that holds the plan you approved as a state mac
 
 ![Claude works through a plan while the Sentinel dashboard follows each step](docs/media/run.webp)
 
-On a long task, an agent can drift from the plan, edit files nobody agreed to, say a step is done without proving it, or go round in circles. Sentinel catches each of these as it happens and tells Claude what to do instead. It adds no model calls: every rule is a hook on a tool call. It is a cut-down version of the belief-state idea in "Beyond Memory: Harnessing Long-Horizon Agents with Explicit Belief States" (arXiv 2610.01415).
+On a long task, an agent can drift from the plan, edit files nobody agreed to, say a step is done without proving it, or go round in circles. Sentinel catches each of these as it happens and tells Claude what to do instead. Its Library sets how much testing each plan asks for, from quick checks to proof that a test fails without the change. It adds no model calls: every rule is a hook on a tool call. It is a cut-down version of the belief-state idea in "Beyond Memory: Harnessing Long-Horizon Agents with Explicit Belief States" (arXiv 2610.01415).
 
 ## How a run goes
 
@@ -35,6 +35,8 @@ Sentinel labels each tool call by whether it moved the work forward. Over the la
 At `H ≤ 0.25` the run is stuck. Claude gets a note that names the pattern (cycle, drift or static), the file version it went back to and the failure that keeps coming back, with what to try next. The dashboard turns red and offers a field for your own hint, which reaches Claude with its next tool result, and a Pause button.
 
 ## Library
+
+![The user picks the Thorough weight, ticks one of Claude's suggestions on the draft, switches an instruction off for that plan and locks it; Claude then reads its instructions for the first state](docs/media/library.webp)
 
 The Library holds what Sentinel adds to every plan: instructions, which are short texts Sentinel hands Claude at set moments, and flows, which are states that go into the plan itself. Sentinel ships built-ins of both. You switch any item on or off, write your own, and pick a weight that decides how much testing the built-ins ask for.
 
@@ -229,7 +231,7 @@ tests/                        plugin and helper tests
 docs/media/src/               the clips in this README
 ```
 
-The clips play real runs through `hooks/core.ts` and show them on the real dashboard. To make them again, run `node docs/media/src/runs.mjs`, then `npx -y -p playwright@1.64.1 -c "node docs/media/src/render.cjs run free stuck flows map"` (it needs Chrome and Python with Pillow).
+The clips play real runs through `hooks/core.ts` and show them on the real dashboard. To make them again, run `node docs/media/src/runs.mjs`, then `npx -y -p playwright@1.64.1 -c "node docs/media/src/render.cjs run free stuck library flows map"` (it needs Chrome and Python with Pillow).
 
 ## License
 

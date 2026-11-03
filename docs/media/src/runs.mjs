@@ -1,7 +1,8 @@
 // Plays the runs the README clips show through Sentinel's own logic (hooks/core.ts) and saves, for each moment a clip
 // needs, what the dashboard receives and what Sentinel says: node docs/media/src/runs.mjs. Node runs the TypeScript as is.
 import { writeFileSync } from 'node:fs'
-import { act, addFlow, besideNote, briefRefusal, emptyRun, flowOf, HANDS_FREE, handsFree, healthWord, heard, laneCall, laneDone, memberIn, observe, outOfScope, recordStart, startMember, summarize } from '../../../hooks/core.ts'
+import { act, addFlow, besideNote, briefRefusal, emptyRun, flowOf, fnv, HANDS_FREE, handsFree, healthWord, heard, laneCall, laneDone, libraryOn, lockDraft, memberIn, observe, outOfScope, recordStart, startMember, summarize } from '../../../hooks/core.ts'
+import { BUILTIN_FLOWS, BUILTINS } from '../../../hooks/builtins.ts'
 
 const MIN = 60_000
 // A fixed morning, so the clips show the same times on every render.
@@ -24,8 +25,26 @@ function band(vm) {
   return `Sentinel: ${a.id} ${a.pos}/${a.of}${hl ? ` · H ${hl.H.toFixed(2)} ${healthWord(hl.H)}` : ''}`
 }
 
+// The Library as the plugin's snapshot carries it (register.tsx, libraryView): the built-ins and the project's own
+// instructions with their switches worked out from the two switches files, and the flows, built-in ones without a file.
+const BUILT_FLOWS = BUILTIN_FLOWS.map(f => ({ ...f, scope: 'built-in', trusted: true }))
+function library(project = {}, personal = {}, own = [], flows = BUILT_FLOWS) {
+  const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in', trusted: true })), ...own.map(i => ({ kind: 'told', trusted: true, ...i }))]
+  const { weight, on } = libraryOn([...items, ...flows], project, personal)
+  return {
+    library: { weight, project, personal, instructions: items.map(i => ({ ...i, on: on.includes(i.name) })), flowsOn: Object.fromEntries(flows.map(f => [f.name, on.includes(f.name)])) },
+    flows,
+  }
+}
+// What a plan is locked with (register.tsx, planLibrary): the weight, every item on, and the instructions Claude is told.
+function planLib({ library: l }, off = []) {
+  const on = [...l.instructions.filter(i => i.on).map(i => i.name), ...Object.keys(l.flowsOn).filter(n => l.flowsOn[n])].filter(n => !off.includes(n))
+  const told = l.instructions.filter(i => i.kind === 'told' && on.includes(i.name)).map(({ name, description, at, files, text }) => ({ name, ...(description ? { description } : {}), at, ...(files ? { files } : {}), text }))
+  return { weight: l.weight, on, told }
+}
+
 // What the page gets: the view model, plus the fields the plugin adds when it writes the page (register.tsx).
-const page = r => ({ ...summarize(r), savedAt: now, parallel: false, members: {}, flows: [] })
+const page = (r, lib = library()) => ({ ...summarize(r), savedAt: now, parallel: false, members: {}, ...lib, ...(r.draft ? { draftKey: fnv(JSON.stringify(r.draft)), draftLibrary: r.draft.library } : {}) })
 const ok = out => {
   if (out.ok === false) throw new Error(out.text)
   return out
@@ -234,15 +253,16 @@ function reviewFlow() {
   })
   if (typeof review === 'string') throw new Error(review)
   const saved = { ...review, scope: 'project', file: '.sentinel/flows/review.json', trusted: true }
-  const keep = (name, r, extra = {}) => {
-    const vm = { ...page(r), ...extra }
+  // The user's flows list first, then the built-in ones, as the plugin loads them.
+  const keep = (name, r, flows, extra = {}) => {
+    const vm = { ...page(r, library({}, {}, [], [...flows, ...BUILT_FLOWS])), ...extra }
     moments[name] = { now, vm, band: band(vm) }
   }
-  keep('before', emptyRun(), { flows: [changelog] })
-  keep('drafted', { ...emptyRun(), flowDraft: review }, { flows: [changelog] })
+  keep('before', emptyRun(), [changelog])
+  keep('drafted', { ...emptyRun(), flowDraft: review }, [changelog])
   wait(1)
   said.saved = `Saved the flow "review" to .sentinel/flows/review.json.`
-  keep('saved', emptyRun(), { flows: [saved, changelog], flowSaid: { at: now, ok: true, text: said.saved } })
+  keep('saved', emptyRun(), [saved, changelog], { flowSaid: { at: now, ok: true, text: said.saved } })
   wait(3)
   const plan = {
     action: 'define', title: 'Webhook signatures',
@@ -252,18 +272,19 @@ function reviewFlow() {
       { id: 'docs', label: 'Document it', files: ['docs/webhooks.md'], title: 'Explain how to verify', problem: 'Receivers need the steps.', approach: 'Add a section with an example.' },
     ],
   }
+  // After /sentinel lock the run is signed off for review, and a define becomes the draft the user checks. The plugin
+  // gives each new draft the Library as it stands.
   const draft = input => {
-    // After /sentinel lock the run is signed off for review, and a define becomes the draft the user checks.
-    const out = act({ ...emptyRun(), signedOff: true, review: true }, input, '', {}, now)
+    const out = act({ ...emptyRun(), signedOff: true, review: true }, { ...input, library: planLib(library()) }, '', {}, now)
     if (!out.run.draft) throw new Error(`no draft: ${out.text}`)
     return out.run
   }
-  keep('plan', draft(plan), { flows: [saved, changelog] })
+  keep('plan', draft(plan), [saved, changelog])
   wait(1)
   const added = addFlow(plan, review, { at: 'after', state: 'api' }, 'Added by you after api')
   if (typeof added === 'string') throw new Error(added)
   said.added = 'Added review after api.'
-  keep('added', draft(added), { flows: [saved, changelog] })
+  keep('added', draft(added), [saved, changelog])
   return { moments, said }
 }
 
@@ -408,6 +429,53 @@ function orderSearch() {
   return { moments, said }
 }
 
+// The Library: the user picks Thorough on the dashboard, then checks a draft. They tick one of Claude's answers beyond the
+// brief, switch one instruction off for this plan only, and lock it. Claude then hears the instructions for its first state.
+function rateLimits() {
+  const moments = {}, said = {}
+  const own = [{ name: 'api-errors', description: 'Errors a person can act on', at: 'start', files: ['src/api/**'], text: 'Every error the API returns carries a code and one sentence that says what to do next.', scope: 'project', file: '.sentinel/instructions/api-errors.json' }]
+  const keep = (name, r, lib, extra = {}) => {
+    const vm = { ...page(r, lib), ...extra }
+    moments[name] = { now, vm, band: band(vm) }
+  }
+  const standard = library({}, {}, own)
+  const thorough = library({ weight: 'thorough' }, {}, own)
+  keep('standard', emptyRun(), standard)
+  wait(1)
+  said.weight = 'The weight is thorough for this project. The built-ins follow it; your own items keep their switches.'
+  keep('thorough', emptyRun(), thorough, { flowSaid: { at: now, ok: true, text: said.weight } })
+  wait(2)
+  const plan = {
+    action: 'define', title: 'Rate limits',
+    states: [
+      { id: 'limiter', label: 'Limit each key', check: 'npm test -- limit', files: ['src/api/limit.ts', 'tests/limit.test.ts'], title: 'Hold each key to 60 a minute', problem: 'One client can flood the API and slow it for everyone.', approach: 'A token bucket per API key, answering 429 with a Retry-After header.' },
+      { id: 'load', label: 'Load test', check: 'npm run load -- limit', files: ['tests/load/limit.js'], title: 'Show the limit holds under load', problem: 'A limiter can pass its tests and still leak under real traffic.', approach: 'Send 5,000 requests a minute from 20 keys and count what gets through.' },
+      { id: 'docs', label: 'Document the limits', files: ['docs/api.md'], title: 'Tell clients the limits', problem: 'Clients need to know the limit and what a 429 means.', approach: 'Add a section with the headers and an example.' },
+    ],
+    depth: [
+      { id: 'load', ask: 'proof', text: 'A load test at 5,000 requests a minute shows the limit holds', state: 'load' },
+      { id: 'raw', ask: 'raw', text: "Start from last week's spike of 429s in the gateway logs" },
+    ],
+  }
+  const draft = l => {
+    const out = act({ ...emptyRun(), signedOff: true, review: true }, { ...plan, library: l }, '', {}, now)
+    if (!out.run.draft) throw new Error(`no draft: ${out.text}`)
+    return out.run
+  }
+  keep('draft', draft(planLib(thorough)), thorough)
+  wait(1)
+  // The draft card's switch changes the plan's copy only (register.tsx, libplan).
+  const copy = draft(planLib(thorough, ['measure-before-delete']))
+  keep('copy', copy, thorough)
+  wait(1)
+  // Locked with "load" ticked, so its state stays (register.tsx, lockNow). Entering limiter, the check has to fail first.
+  const run = recordStart(lockDraft(copy, t(), now), 'npm test -- limit', false, t()).run
+  said.locked = `Locked "${run.plan.title}" at ${run.active}.`
+  said.status = ok(act(run, { action: 'status' }, t(), {}, now)).text
+  keep('locked', run, thorough)
+  return { moments, said }
+}
+
 const write = (name, data) => {
   writeFileSync(new URL(`./data/${name}.json`, import.meta.url), JSON.stringify(data))
   console.log(`wrote data/${name}.json`)
@@ -418,3 +486,4 @@ write('stuck', webhookRetry())
 write('flows', reviewFlow())
 write('map', teamInvites())
 write('parallel', orderSearch())
+write('library', rateLimits())

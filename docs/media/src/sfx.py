@@ -29,17 +29,23 @@ def band(x, lo, hi):
     return np.fft.irfft(np.fft.rfft(x) / (1 + ((f - mid) / half) ** 4), len(x))
 
 
+def release(t, sec):
+    """Fades the last 30% of a sound to zero, so it dies away instead of stopping where its samples end. Against the
+    silence of the opening and end cards a cut is audible even 50 dB down."""
+    return np.minimum(1, (sec - t) / (0.3 * sec))
+
+
 def tone(freq, sec, decay, attack=0.002):
     t = span(sec)
-    return np.sin(2 * np.pi * freq * t) * np.exp(-t / decay) * np.minimum(1, t / attack)
+    return np.sin(2 * np.pi * freq * t) * np.exp(-t / decay) * np.minimum(1, t / attack) * release(t, sec)
 
 
 def burst(sec, decay, lo, hi):
     t = span(sec)
-    return band(rng.standard_normal(len(t)), lo, hi) * np.exp(-t / decay)
+    return band(rng.standard_normal(len(t)), lo, hi) * np.exp(-t / decay) * release(t, sec)
 
 
-def bell(freq, sec=1.2):
+def bell(freq, sec=3.0):
     return tone(freq, sec, 0.35) + 0.35 * tone(2.01 * freq, sec, 0.18) + 0.15 * tone(3.02 * freq, sec, 0.1)
 
 
@@ -86,7 +92,7 @@ def glide(start, end, sec, fall, decay, attack=0.002):
     """A tone whose pitch drops from start to end Hz, quickly (fall is the time constant)."""
     t = span(sec)
     f = end + (start - end) * np.exp(-t / fall)
-    return np.sin(2 * np.pi * np.cumsum(f) / RATE) * np.exp(-t / decay) * np.minimum(1, t / attack)
+    return np.sin(2 * np.pi * np.cumsum(f) / RATE) * np.exp(-t / decay) * np.minimum(1, t / attack) * release(t, sec)
 
 
 def deny():
@@ -95,11 +101,11 @@ def deny():
 
 
 def ring_blue():
-    return lay((0, level(swish(), -38)), (0.45, level(tone(988, 0.6, 0.2) + 0.3 * tone(1976, 0.6, 0.1), -32)))
+    return lay((0, level(swish(), -38)), (0.45, level(tone(988, 1.2, 0.2) + 0.3 * tone(1976, 1.2, 0.1), -32)))
 
 
 def ring_red():
-    return lay((0, level(swish(), -38)), (0.45, level(tone(330, 0.5, 0.15, 0.006) + 0.7 * tone(392, 0.5, 0.13, 0.006), -27)))
+    return lay((0, level(swish(), -38)), (0.45, level(tone(330, 1.0, 0.15, 0.006) + 0.7 * tone(392, 1.0, 0.13, 0.006), -27)))
 
 
 def ring_green():
@@ -120,7 +126,7 @@ def toast():
     """A short pop, rising."""
     t = span(0.09)
     f = 700 + 600 * np.minimum(1, t / 0.05)
-    return level(np.sin(2 * np.pi * np.cumsum(f) / RATE) * np.exp(-t / 0.03) * np.minimum(1, t / 0.002), -27)
+    return level(np.sin(2 * np.pi * np.cumsum(f) / RATE) * np.exp(-t / 0.03) * np.minimum(1, t / 0.002) * release(t, 0.09), -27)
 
 
 def chapter():
@@ -133,7 +139,7 @@ def chapter():
 
 def intro():
     """The opening card: three soft bells rising, E5, G5, C6, in the family of the end chime."""
-    return lay((0, level(bell(659, 1.4), -28)), (0.09, level(bell(784, 1.4), -27)), (0.18, level(bell(1047, 1.6), -24)))
+    return lay((0, level(bell(659), -28)), (0.09, level(bell(784), -27)), (0.18, level(bell(1047), -24)))
 
 
 def chime():

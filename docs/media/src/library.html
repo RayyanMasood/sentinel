@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Library</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  #term { left: 24px; top: 24px; width: 468px; height: 567px; }
+  #web { left: 516px; top: 24px; width: 660px; height: 567px; }
+  #veil { position: absolute; inset: 0; background: #e4e9ed; pointer-events: none; }
+  .ripple { border-color: var(--blue-fill); }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · api</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span></div><div class="prompt"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<div class="caps" id="caps"></div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<div id="veil"></div>
+<script src="stage.js"></script>
+<script>
+const D = 17.6
+fetch('data/library.json').then(r => r.json()).then(({ moments, said }) => {
+  // What Claude reads when it asks for the status after the lock: the state's instructions onward, up to where the
+  // terminal cuts it.
+  const told = said.status.slice(said.status.indexOf('Your instructions'))
+  const rows = [
+    { at: -1, cls: 'ln you', html: 'Rate limit the public API: 60 requests a minute per key.' },
+    { at: -1, cls: 'ln say gap', html: 'Plan ready: limiter, load, docs, with two suggestions beyond the brief. Type /sentinel lock to check it as a draft.' },
+    { at: 6.0, cls: 'ln you gap', html: '/sentinel lock' },
+    { at: 13.2, cls: 'ln tool gap', html: '<b>plan</b><em>(action: "status")</em>', done: [13.6, 'ok'] },
+    { at: 13.6, cls: 'ln res', html: esc(told) },
+  ]
+  // The user picks Thorough, signs off, ticks an answer, switches one instruction off for this plan, and locks it.
+  const shows = [[0, 'standard'], [3.0, 'thorough'], [6.3, 'draft'], [10.9, 'copy'], [12.9, 'locked']]
+  const band = [[0, ''], [6.3, moments.draft.band, 'warn', ['Review', 'Lock']], [12.9, moments.locked.band, '']]
+  const term = terminal($('term'), rows, { typed: [5.0, 5.7, 6.0, '/sentinel lock'], band })
+  const cap = captions($('caps'), [
+    [0.4, 'The Library holds what Sentinel tells Claude, and when.'],
+    [2.9, 'A weight sets how much testing each plan carries.'],
+    [6.5, 'Claude suggests what an expert would add; you pick.'],
+    [9.9, 'Each plan keeps its own copy of the switches.'],
+    [13.2, 'Claude hears each instruction when it applies.'],
+  ], D - 0.4)
+
+  const dash = dashboard($('screen'), moments, { width: 900 })
+  const q = s => dash.doc().querySelector(s)
+  const parts = {
+    thorough: () => box(q('#weights [data-weight="thorough"]')),
+    fwc: () => box(q('#ilist [data-ins="built-in/fails-without-change"]')),
+    deep: () => box(q('#slip .deep')),
+    tick: () => box(q('#slip input[data-deep="load"]')),
+    planins: () => box(q('#slip .planins')),
+    off: () => box(q('#slip input[data-plan="measure-before-delete"]')?.closest('.sw')),
+    lock: () => box(q('#stub [data-act="lock"]')),
+  }
+  const centre = part => () => {
+    const b = parts[part](), span = dash.span()
+    return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0
+  }
+  const shots = [[0, () => 0], [3.6, centre('fwc')], [6.35, () => 0], [7.0, centre('deep')], [9.4, centre('off')], [11.3, () => 0]]
+  const rings = ringer($('rings'))
+  const marks = [
+    { at: 4.5, hold: 1.4, tone: 'blue', box: parts.fwc },
+    { at: 7.6, hold: 1.0, tone: 'blue', box: parts.deep, pad: 8 },
+    { at: 13.3, hold: 2.6, tone: 'green', box: () => box(q('#pass')), pad: 4 },
+  ]
+  let cam = { s: 1, x: 0, y: 0 }
+  const on = part => () => { const b = parts[part](); if (!b) return null; const p = dash.place(b, cam); return [p.x + p.w * 0.5, p.y + p.h * 0.55] }
+  const point = pointer($('pointer'), $('ripple'), [
+    { at: 1.9, to: on('thorough') }, { at: 7.9, to: on('tick') }, { at: 9.9, to: on('off') }, { at: 11.7, to: on('lock') },
+  ], [2.8, 8.8, 10.7, 12.6], { hide: 13.2, away: [[3.4, 7.8]] })
+
+  function seek(t) {
+    $('term').style.opacity = $('web').style.opacity = prog(t, 0, 0.3)
+    term(t)
+    cap(t)
+    dash.route(t < 6.3 ? '#library' : '')
+    dash.show(cue(t, shows)[1], t)
+    // The tick is the page's own state, kept while the draft changes; set from the clock so any frame can be drawn.
+    dash.eval(`depthPicked.${t >= 8.8 ? 'add' : 'delete'}('load'); { const x = document.querySelector('#slip input[data-deep="load"]'); if (x) x.checked = ${t >= 8.8} }`)
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    cam = dash.look(y)
+    rings(t, marks, cam)
+    point(t)
+    $('veil').style.opacity = prog(t, D - 0.7, 0.5)
+  }
+  play({ duration: D, seek, ready: dash.ready })
+})
+</script>
+</body>
+</html>
