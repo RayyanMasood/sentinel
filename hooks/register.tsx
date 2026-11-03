@@ -1,10 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { Checking, FlowDef, Run, StateDef, View } from '../types'
+import type { Checking, Depth, FlowDef, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PlanLibrary, Run, StateDef, Switches, View, Weight } from '../types'
+import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import {
   AUTO_CAP, RETRIES, VIEWS, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
+  instructionOf, libraryOn, withWeight, librarySection, toldHere, dropStates,
+  rerunOf, snapWanted, withSnap, type Without,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -102,7 +105,26 @@ const SCHEMA = {
     intent: { type: 'string', description: 'propose: what you will do in the state, in plain words for the user' },
     evidence: { type: 'string', description: 'advance: what you found (needed for states without a check and for loops)' },
     outcome: { type: 'string', description: 'advance forward: what was done in the state you leave, in one or two plain sentences, shown on its task page' },
-    files: { type: 'array', items: { type: 'string' }, description: 'amend: files to add to the active state' },
+    files: { type: 'array', items: { type: 'string' }, description: 'amend: files to add to the active state. flow, for an instruction at start or close: only the states that edit these globs hear it' },
+    text: { type: 'string', description: 'flow: in place of states, an instruction (words Sentinel hands Claude at one moment) for the user to save: its text, a few plain lines' },
+    at: {
+      type: 'string', enum: ['draft', 'start', 'close', 'final', 'always'],
+      description: "flow, with text: the instruction's moment: draft (while a plan is drafted), start (as a state that edits files starts), close (before such a state advances; told at its start), final (before the plan completes), always (every turn)",
+    },
+    depth: {
+      type: 'array',
+      description: 'define, for a draft the user locks with /sentinel lock: your answers to what an expert would do here, the rawest material to start from, the methods, and what shows the result is right. The user ticks the ones they want as they lock it; nothing is ticked unless they pick it',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'a short word the user ticks with /sentinel lock <id>' },
+          text: { type: 'string', description: 'the answer, one line' },
+          ask: { type: 'string', enum: ['expert', 'raw', 'methods', 'proof'], description: 'the question it answers' },
+          state: { type: 'string', description: 'a state of this plan that is there only for this answer: Sentinel takes it out unless the user ticks the answer' },
+        },
+        required: ['id', 'text'],
+      },
+    },
     check: { type: 'string', description: 'amend: replace the active state check' },
     reason: { type: 'string', description: 'amend, decide, escalate, skip: why' },
     topic: { type: 'string', description: 'decide: what was decided' },
@@ -117,12 +139,12 @@ export const register: Register = on => {
     await $.tool.register({ name: 'plan', description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
     await $.command.register({
       name: 'sentinel',
-      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, lock (sign off the agreed plan), pause, resume, skip <state>, hands-free [off], reset, parallel on|off (experimental), flows, add <flow> <where>, drop <flow>, flow save project|personal, flow trust <flow>, flow discard',
-      argumentHint: '[focus|map|ledger|browser|lock|pause|resume|skip <state>|hands-free|hands-free off|reset|parallel on|parallel off|flows|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow trust <flow>|flow discard]',
+      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
+      argumentHint: '[focus|map|ledger|browser|lock|lock <depth ids>|pause|resume|skip <state>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
     })
     // Final checks and check runs a lost session left showing are over.
     await change($, r => (r.sweep || r.checking ? { ...r, sweep: undefined, checking: undefined } : r))
-    void loadFlows($).catch(() => undefined)
+    void libraryView($).catch(() => undefined)
     // A new session starts empty; say so when the project holds an unfinished plan.
     void after($).then(async () => {
       const s = (await read($, run)).plan ? undefined : await saved($)
@@ -131,18 +153,29 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // The Library's draft and always instructions reach Claude as one section of the system prompt.
+  on('prompt.compose', async ($, e, next) => {
+    const res = await next(e)
+    const text = await promptSection($)
+    return text ? { sections: [...res.sections, { id: 'sentinel:library', text, scope: 'session' as const }] } : res
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'sentinel' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     // What changes the plan is the user's alone: typed at the prompt, sent through Remote Control or run headless
     // (claude -p), never run by the model or another plugin. The engine stamps every run's origin; only the test kit
     // leaves it out.
     const by = (e.origin as { kind?: string } | undefined)?.kind
-    if (/^(lock|reset|pause|resume|skip|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
+    if (/^(lock|reset|pause|resume|skip|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s|on\s|off\s|weight\s|trust\s)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
       return { text: `Only the user runs /sentinel ${arg.split(/\s/)[0]}, typed at the prompt.` }
     }
-    if (arg === 'lock') {
+    const locking = /^lock(?:\s+(.+))?$/.exec(arg)
+    if (locking) {
       const r = await read($, run)
-      if (r.draft) return { text: await lockNow($) }
+      // The ids after lock tick the draft's depth answers.
+      const picked = locking[1]?.split(/\s+/) ?? []
+      if (r.draft) return { text: await lockNow($, picked) }
+      if (picked.length) return { text: 'There is no draft to lock yet. Tick its depth answers with the /sentinel lock that locks it.' }
       await change($, x => ({ ...x, ...freshCount(x, new Date().toISOString()), signedOff: true, review: true, held: undefined }))
       // A define the model sent before the sign-off becomes the draft as it is. One that starts partway needs the
       // checks of its earlier states run, so the model sends that one again.
@@ -175,7 +208,14 @@ export const register: Register = on => {
     if (arg === 'resume') return { text: await resume($) }
     if (arg === 'browser') return { text: await openBrowser($) }
     if (arg.startsWith('skip ')) return { text: await skipNow($, e.args.trim().slice(5).trim()) }
-    if (arg === 'flows') return { text: await flowList($) }
+    // flows is the list's older name.
+    if (arg === 'library' || arg === 'flows') return { text: await libraryList($) }
+    const sw = /^(on|off)\s+(\S+)(\s+personal)?$/.exec(arg)
+    if (sw) return { text: (await switchNow($, sw[2]!, sw[1] === 'on', sw[3] ? 'personal' : 'project')).text }
+    const weight = /^weight\s+(\S+)(\s+personal)?$/.exec(arg)
+    if (weight) return { text: (await weightNow($, weight[1]!, weight[2] ? 'personal' : 'project')).text }
+    const trusting = /^trust\s+(\S+)$/.exec(arg)
+    if (trusting) return { text: (await trustNow($, trusting[1]!)).text }
     if (arg.startsWith('add ')) return { text: await addNow($, e.args.trim().slice(4).trim()) }
     if (arg.startsWith('drop ')) {
       const as = e.args.trim().slice(5).trim()
@@ -250,6 +290,8 @@ export const register: Register = on => {
         await lane($, r, e.agentId!, { label: `${tool} ${rel}`, file: ran.isError || ran.deny !== undefined ? undefined : rel })
         return ran
       }
+      // A visit the user locked with /sentinel lock has no snapshot yet: it is taken before the first edit.
+      await snapStart($)
       // A file already edited in this state: its last version stands for "before", so it is read once, after the edit.
       // ponytail: a Bash change between two edits goes unseen as a version; read before every edit if loops get missed.
       const before = visitOf(r).findLast(c => c.file === rel && c.ver !== undefined)?.ver ?? (await hashOf($, file))
@@ -520,14 +562,36 @@ async function openPane($: $, focus: boolean) {
   await $.ui.open({ id: PANE, title: 'Sentinel' })
 }
 
-async function lockNow($: $): Promise<string> {
+// Locks the draft with the depth answers the user ticked, by id; none are ticked unless picked. A state that an
+// unticked answer names comes out first, unless a ticked one names it too. /sentinel lock, the band's Lock and the
+// dashboard's all come here.
+async function lockNow($: $, picked: string[] = []): Promise<string> {
+  const r = await read($, run)
+  const depth = (r.draft && r.held?.depth) || []
+  const ticked = (id: string) => picked.some(p => p.toLowerCase() === id.toLowerCase())
+  const unknown = picked.filter(p => !depth.some(x => x.id.toLowerCase() === p.toLowerCase()))
+  if (r.draft && unknown.length) {
+    return depth.length ? `${unknown.join(', ')} ${unknown.length > 1 ? 'are' : 'is'} not one of the draft's depth answers: ${depth.map(x => x.id).join(', ')}. Nothing was locked.`
+      : 'The draft has no depth answers to tick. Lock it with /sentinel lock alone.'
+  }
+  const chosen = depth.filter(x => ticked(x.id))
+  const left = depth.filter(x => !ticked(x.id))
+  const gone = [...new Set(left.flatMap(x => (x.state && !chosen.some(c => c.state === x.state) ? [x.state] : [])))]
+  if (gone.length) {
+    const why = await changeDraft($, held => ({ ...dropStates(held, gone), depth: undefined }), '')
+    if (why) return `Sentinel couldn't take out ${gone.join(', ')}: ${why}`
+  }
   let d: Run | undefined
-  await change($, r => (r.draft ? (d = lockDraft(r, now())) : r))
+  await change($, x => (x.draft ? (d = lockDraft(x, now())) : x))
   if (!d) return 'No draft to lock.'
   void after($)
-  later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}. Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.`
+  const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
+  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took].filter(Boolean).join(' ')
+  later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
+  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}`
 }
+// The answers in one sentence, each without its closing full stop.
+const texts = (xs: Depth[]) => xs.map(x => x.text.replace(/\.+$/, '')).join('; ')
 
 async function pause($: $): Promise<string> {
   const r = await read($, run)
@@ -607,19 +671,25 @@ async function saved($: $): Promise<Run | undefined> {
 // stops the model's call, which then changes nothing.
 async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal): Promise<Result> {
   const typed = user || spoke()
-  let input = relInput(await $.session.root(), raw)
+  // What a plan is locked with comes from the switches files, never from the model.
+  const { library: _library, ...sent } = raw
+  let input = relInput(await $.session.root(), sent)
   const label = `plan ${input.action}${input.to ? ` → ${input.to}` : ''}`
   if (input.action === 'brief') return brief($, input, label)
   if (input.action === 'flow') return draftFlow($, input, label)
   // advance runs the check itself, unless the state's last call is a passing run of it that still holds. Plan calls
   // in between change no files.
   const was = await read($, run)
-  // A new plan gets the flows the user's rules add.
-  const ruled = input.action === 'define' && was.signedOff ? withRules(input, (await loadFlows($).catch(() => [])).filter(f => f.trusted)) : undefined
+  // A new plan, or a new draft, takes the Library as the switches set it now. A revise keeps the draft's copy. The
+  // flows that are on add themselves by their rules.
+  const lib = input.action === 'define' ? await libraryNow($).catch(() => undefined) : undefined
+  if (lib) input = { ...input, library: planLibrary(lib) }
+  const ruled = lib && was.signedOff ? withRules(input, lib.flows.filter(f => lib.on.includes(f.name))) : undefined
   if (ruled) input = ruled.input
   const check = input.action === 'advance' ? forwardCheck(was, input.to) : undefined
   let note: string | undefined
   let slow: string | undefined
+  let passing = !!check
   if (check && !knownPass(was, visitOf(was).findLast(c => c.kind !== 'plan'), check)) {
     const ran = await runCheck($, check, { signal })
     if ('deny' in ran) return record($, { deny: `Sentinel couldn't run \`${check}\`: ${ran.deny}` }, { kind: 'plan', label, denied: true })
@@ -627,7 +697,12 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     if (ran.stuck) return record($, { deny: stuckText(check, ran) }, { kind: 'plan', label, denied: true })
     note = await track($, { kind: 'check', label: check, pass: ran.pass, ...failSig(ran.text), tail: tailOf(ran.text), touches: was.touches ?? 0 })
     slow = slowNote(was, check, ran.took)
+    passing = ran.pass
   }
+  // fails-without-change: a passing check runs again in a copy of the project without the visit's code changes.
+  const wo = passing ? rerunOf(was) : undefined
+  const without: Without | undefined = typeof wo === 'string' ? { skipped: wo } : wo && (await rerun($, check!, was.active!, wo, signal))
+  if (signal?.aborted) return { deny: STOPPED }
   // A plan picked up partway: the checks of the states it starts after have to pass now.
   const proofs: Proofs = {}
   // Done states fixed in this state: their checks run again before it moves on.
@@ -644,7 +719,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   let late: string[] = []
   if (input.action === 'advance' || input.action === 'skip') {
     const now0 = await read($, run)
-    if (act(now0, input, now(), {}, Date.now(), typed).event === 'complete') {
+    if (act(now0, input, now(), {}, Date.now(), typed, without).event === 'complete') {
       const out = await finalChecks($, sweepChecks(now0, check).filter(c => !proofs[c]), proofs, signal)
       if (out.cut && !signal?.aborted) {
         const fails = Object.entries(proofs).filter(([, p]) => !p.pass).map(([c, p]) => `\`${c}\`: ${p.sigText}`)
@@ -667,7 +742,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   let acted: Acted | undefined
   let fresh = false
   await change($, r => {
-    acted = act(r, input, now(), proofs, Date.now(), typed)
+    acted = act(r, input, now(), proofs, Date.now(), typed, without)
     fresh = !!acted.run.pending && acted.run.pending !== r.pending
     return acted.run
   })
@@ -698,115 +773,304 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     ? `Sentinel added the user's flows by their rules: ${ruled.added.join(', ')}. Their states are part of the plan.${ruled.many.length ? ` Rules that matched many states: ${ruled.many.join(', ')}. Tell the user.` : ''}`
     : undefined
   const offered = a.event === 'drafted' && flowsSeen?.length
-    ? `Saved flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
+    ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
   return attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), beside), apart), unrun), rules), offered)
 }
 
-// ---- flows ----
+// ---- the library: flows and instructions ----
 
 type Scope = 'project' | 'personal'
-type Saved = FlowDef & { scope: Scope; file: string; trusted: boolean }
+type Kind = 'flow' | 'instruction'
+// A flow as the Library holds it: from a file, or built in (no file, always trusted). weights: a built-in's, which a
+// file that takes its place keeps.
+type Saved = FlowDef & { scope: LibraryScope; file: string; trusted: boolean; weights?: Weight[] }
+type SavedIns = InstructionDef & { scope: Scope; file: string; trusted: boolean }
 const isScope = (v: unknown): v is Scope => v === 'project' || v === 'personal'
-const shownDir = (scope: Scope) => (scope === 'project' ? '.sentinel/flows' : '~/.sentinel/flows')
-// The flows on disk as last read, the files that didn't read as one, what the user asked for in the dashboard's
-// "Ask Claude for a flow", and the outcome of the dashboard's last save or delete.
+const DIRS = { flow: 'flows', instruction: 'instructions' } as const
+const shown = (scope: Scope, rest: string) => `${scope === 'project' ? '' : '~/'}.sentinel/${rest}`
+const shownDir = (scope: Scope, kind: Kind = 'flow') => shown(scope, DIRS[kind])
+const NO_HOME = 'Sentinel found no home folder (HOME or USERPROFILE) for your personal Library.'
+// The flows and instructions on disk as last read, the files that didn't read as one, what the user asked for in the
+// dashboard's "Ask Claude for a flow", and the outcome of the dashboard's last save or delete.
 let flowsSeen: Saved[] | undefined
 let flowBad: string[] = []
 let flowAsk: string | undefined
 let flowSaid: { at: number; ok: boolean; text: string } | undefined
 
-async function flowDir($: $, scope: Scope): Promise<string | undefined> {
-  if (scope === 'project') return `${await $.session.root()}/.sentinel/flows`
+// The project's .sentinel folder, or the one in the user's home folder.
+async function sentinelDir($: $, scope: Scope): Promise<string | undefined> {
+  if (scope === 'project') return `${await $.session.root()}/.sentinel`
   const home = (await $.env.get('HOME').catch(() => undefined)) || (await $.env.get('USERPROFILE').catch(() => undefined))
-  return home ? `${home.replace(/\\/g, '/').replace(/\/$/, '')}/.sentinel/flows` : undefined
+  return home ? `${home.replace(/\\/g, '/').replace(/\/$/, '')}/.sentinel` : undefined
+}
+const itemDir = async ($: $, kind: Kind, scope: Scope) => {
+  const dir = await sentinelDir($, scope)
+  return dir ? `${dir}/${DIRS[kind]}` : undefined
 }
 
-// A rule puts checks in plans that nobody looks at first, so only a flow Sentinel saved on this computer, unchanged since,
-// adds itself. A file from a clone, a teammate's commit or the model still lists and can be added by hand; its rule waits
-// until the user saves it here or types /sentinel flow trust. The store keeps each saved file's flow, by path.
+// A rule puts checks in plans that nobody looks at first, and an instruction puts words in front of Claude, so only a
+// file Sentinel saved on this computer, unchanged since, is on. A file from a clone, a teammate's commit or the model
+// still lists, and a flow can still be added by hand, but it stays off until the user saves it here or types
+// /sentinel trust. The store keeps each saved file's item, by path.
 const TRUSTED = 'trustedFlows'
-async function trust($: $, file: string, f?: FlowDef): Promise<void> {
+async function trust($: $, file: string, item?: object): Promise<void> {
   const t = { ...((await $.store.get(TRUSTED).catch(() => undefined)) as Record<string, string> | undefined) }
-  if (f) t[file] = JSON.stringify(f)
+  if (item) t[file] = JSON.stringify(item)
   else delete t[file]
   await $.store.set(TRUSTED, t)
 }
+// An item as its file holds it, without what the Library adds.
+const defOf = <T extends { scope: unknown; file: string; trusted: boolean; weights?: unknown }>({ scope: _s, file: _f, trusted: _t, weights: _w, ...def }: T) => def
+const nameTaken = (name: string, by: Kind) => `"${name}" is already the name of ${by === 'flow' ? 'a flow' : 'an instruction'}.`
 
-// The project's flows, then the personal ones. A file's name is its flow's name; on a clash the project's wins.
-async function loadFlows($: $): Promise<Saved[]> {
-  const out: Saved[] = []
+// The flows and instructions on disk, the project's first, then the personal ones. A file's name is its item's name;
+// on a clash within a kind the project's wins. A name serves one item across both kinds: a built-in keeps it over a
+// file of the other kind, and a flow over an instruction. A file with a built-in's name of its own kind takes the
+// built-in's place and keeps its weights.
+async function loadLibrary($: $): Promise<{ flows: Saved[]; instructions: SavedIns[] }> {
   const bad: string[] = []
   const t = ((await $.store.get(TRUSTED).catch(() => undefined)) ?? {}) as Record<string, string>
-  for (const scope of ['project', 'personal'] as const) {
-    const dir = await flowDir($, scope)
-    for (const e of dir ? await $.fs.list(dir).catch(() => []) : []) {
-      if (e.kind !== 'file' || !e.name.endsWith('.json')) continue
-      let f: FlowDef | string
-      try {
-        f = flowOf({ ...JSON.parse(String(await $.fs.read(`${dir}/${e.name}`))), name: e.name.slice(0, -5) })
-      } catch (err) {
-        f = err instanceof Error ? err.message : String(err)
+  async function files<T extends { name: string }>(kind: Kind, of: (raw: unknown) => T | string) {
+    const out: (T & { scope: Scope; file: string; trusted: boolean })[] = []
+    for (const scope of ['project', 'personal'] as const) {
+      const dir = await itemDir($, kind, scope)
+      for (const e of dir ? await $.fs.list(dir).catch(() => []) : []) {
+        if (e.kind !== 'file' || !e.name.endsWith('.json')) continue
+        let f: T | string
+        try {
+          f = of({ ...JSON.parse(String(await $.fs.read(`${dir}/${e.name}`))), name: e.name.slice(0, -5) })
+        } catch (err) {
+          f = err instanceof Error ? err.message : String(err)
+        }
+        if (typeof f === 'string') bad.push(`${shown(scope, `${DIRS[kind]}/${e.name}`)}: ${f}`)
+        else if (!out.some(x => x.name === f.name)) out.push({ ...f, scope, file: `${dir}/${e.name}`, trusted: t[`${dir}/${e.name}`] === JSON.stringify(f) })
       }
-      if (typeof f === 'string') bad.push(`${shownDir(scope)}/${e.name}: ${f}`)
-      else if (!out.some(x => x.name === f.name)) out.push({ ...f, scope, file: `${dir}/${e.name}`, trusted: t[`${dir}/${e.name}`] === JSON.stringify(f) })
     }
+    return out
   }
+  const own = (x: { name: string; scope: Scope }, kind: Kind, others: readonly { name: string }[]) =>
+    !others.some(o => o.name === x.name) || (bad.push(`${shown(x.scope, `${DIRS[kind]}/${x.name}.json`)}: ${nameTaken(x.name, kind === 'flow' ? 'instruction' : 'flow')}`), false)
+  const mine = (await files('flow', flowOf)).filter(f => own(f, 'flow', BUILTINS))
+  const instructions = (await files('instruction', instructionOf)).filter(x => own(x, 'instruction', [...mine, ...BUILTIN_FLOWS]))
+  const flows: Saved[] = [
+    ...mine.map(f => {
+      const b = BUILTIN_FLOWS.find(x => x.name === f.name)
+      return b ? { ...f, weights: b.weights } : f
+    }),
+    ...BUILTIN_FLOWS.filter(b => !mine.some(f => f.name === b.name)).map(b => ({ ...b, scope: 'built-in' as const, file: '', trusted: true })),
+  ]
   flowBad = bad
-  return (flowsSeen = out)
+  flowsSeen = flows
+  return { flows, instructions }
+}
+const loadFlows = async ($: $) => (await loadLibrary($)).flows
+
+// The instructions as the Library lists them: the built-ins, each replaced by a file of its name, then the user's own.
+// The user's are told; one that replaces a built-in keeps its weights.
+function insItems(user: SavedIns[]): Omit<LibraryItem, 'on'>[] {
+  const mine = ({ file: _file, ...x }: SavedIns, weights?: Weight[]) => ({ ...x, file: shown(x.scope, `instructions/${x.name}.json`), kind: 'told' as const, ...(weights ? { weights } : {}) })
+  return [
+    ...BUILTINS.map(b => {
+      const f = user.find(x => x.name === b.name)
+      return f ? mine(f, b.weights) : { ...b, scope: 'built-in' as const, trusted: true }
+    }),
+    ...user.filter(x => !BUILTINS.some(b => b.name === x.name)).map(x => mine(x)),
+  ]
 }
 
-async function saveFlow($: $, raw: unknown, scope: Scope): Promise<{ ok: boolean; text: string }> {
-  const f = flowOf(raw)
+// A switches file as saved. A missing or bad one reads as {}, and what in it is neither the weight nor a switch is left out.
+async function switches($: $, scope: Scope): Promise<Switches> {
+  const dir = await sentinelDir($, scope)
+  if (!dir) return {}
+  try {
+    const s = JSON.parse(String(await $.fs.read(`${dir}/library.json`))) as Record<string, unknown>
+    const on = s.on && typeof s.on === 'object' && !Array.isArray(s.on) ? Object.fromEntries(Object.entries(s.on).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> : {}
+    return { ...(WEIGHTS.includes(s.weight as Weight) ? { weight: s.weight as Weight } : {}), ...(Object.keys(on).length ? { on } : {}) }
+  } catch {
+    return {}
+  }
+}
+
+async function saveSwitches($: $, scope: Scope, s: Switches): Promise<string | undefined> {
+  const dir = await sentinelDir($, scope)
+  if (!dir) return NO_HOME
+  // The project's switches are committed with the code, so the folder's ignore file lets them through.
+  if (scope === 'project') await $.fs.write(`${dir}/.gitignore`, IGNORE)
+  await $.fs.write(`${dir}/library.json`, `${JSON.stringify(s, null, 2)}\n`)
+  void after($)
+}
+
+// The Library as it stands: its flows and instructions, both switches files, the weight in force and what is on.
+async function libraryNow($: $) {
+  const { flows, instructions } = await loadLibrary($)
+  const items = insItems(instructions)
+  const project = await switches($, 'project')
+  const personal = await switches($, 'personal')
+  return { flows, items, project, personal, ...libraryOn([...items, ...flows], project, personal) }
+}
+
+// The Library as the dashboard reads it, kept for the snapshot as last read.
+let librarySeen: LibraryView | undefined
+async function libraryView($: $): Promise<LibraryView> {
+  const l = await libraryNow($)
+  return (librarySeen = {
+    weight: l.weight, project: l.project, personal: l.personal,
+    instructions: l.items.map(x => ({ ...x, on: l.on.includes(x.name) })),
+    flowsOn: Object.fromEntries(l.flows.map(f => [f.name, l.on.includes(f.name)])),
+  })
+}
+
+// The system prompt's section. While a plan runs: the always instructions it was locked with. Otherwise no plan is
+// locked, so the Library as it is now gives its always and its draft instructions.
+// ponytail: reads the Library's files on every render while no plan runs; cache them if that shows.
+async function promptSection($: $): Promise<string> {
+  const r = await read($, run)
+  const running = isUnfinished(r)
+  const told = running ? r.library?.told ?? [] : planLibrary(await libraryNow($)).told
+  const at = (m: InstructionAt) => told.filter(x => x.at === m)
+  return librarySection(at('always'), running ? [] : at('draft'))
+}
+
+// What a new plan is locked with: the weight, every item on, and the instructions on that Claude is told.
+function planLibrary(l: { weight: Weight; on: string[]; items: Omit<LibraryItem, 'on'>[] }): PlanLibrary {
+  const told = l.items.filter(x => x.kind === 'told' && l.on.includes(x.name))
+  return { weight: l.weight, on: l.on, told: told.map(({ name, description, at, files, text }) => ({ name, ...(description ? { description } : {}), at, ...(files ? { files } : {}), text })) }
+}
+
+// A flow (it has states) or an instruction, saved to the project or the user's own folder, and trusted. A name serves
+// one item across both kinds, so a name the other kind has is refused; an item of the same kind is replaced.
+async function saveItem($: $, raw: unknown, scope: Scope): Promise<{ ok: boolean; text: string }> {
+  const kind: Kind = raw && typeof raw === 'object' && 'text' in raw && !('states' in raw) ? 'instruction' : 'flow'
+  const f = kind === 'flow' ? flowOf(raw) : instructionOf(raw)
   if (typeof f === 'string') return { ok: false, text: f }
-  const dir = await flowDir($, scope)
-  if (!dir) return { ok: false, text: 'Sentinel found no home folder (HOME or USERPROFILE) for personal flows.' }
-  // Project flows are committed with the code, so the folder's ignore file lets them through.
+  const { flows, instructions } = await loadLibrary($)
+  if ((kind === 'flow' ? [...BUILTINS, ...instructions] : flows).some(x => x.name === f.name)) {
+    return { ok: false, text: `${nameTaken(f.name, kind === 'flow' ? 'instruction' : 'flow')} Flows and instructions need names of their own.` }
+  }
+  const dir = await itemDir($, kind, scope)
+  if (!dir) return { ok: false, text: NO_HOME }
+  // Project items are committed with the code, so the folder's ignore file lets them through.
   if (scope === 'project') await $.fs.write(`${await $.session.root()}/.sentinel/.gitignore`, IGNORE)
   await $.fs.write(`${dir}/${f.name}.json`, `${JSON.stringify(f, null, 2)}\n`)
   await trust($, `${dir}/${f.name}.json`, f)
-  await loadFlows($)
+  await loadLibrary($)
   void after($)
-  return { ok: true, text: `Saved the flow "${f.name}" to ${shownDir(scope)}/${f.name}.json.` }
+  return { ok: true, text: `Saved the ${kind} "${f.name}" to ${shownDir(scope, kind)}/${f.name}.json.` }
 }
 
-// $.fs has no delete, so Node does it, as the dashboard needs Node anyway. The path goes in as an argument.
-async function deleteFlow($: $, name: string, scope: Scope): Promise<{ ok: boolean; text: string }> {
-  const dir = await flowDir($, scope)
-  const file = `${dir}/${name}.json`
-  if (!dir || !/^[a-z0-9][a-z0-9-]*$/.test(name) || !(await $.fs.exists(file).catch(() => false))) return { ok: false, text: `There is no ${scope} flow "${name}".` }
-  const ok = await $.process.run(['node', '-e', 'require("fs").rmSync(process.argv[1])', file], { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
-  if (ok) await trust($, file)
-  await loadFlows($)
-  void after($)
-  return ok ? { ok, text: `Deleted the flow "${name}" from ${shownDir(scope)}.` } : { ok, text: `Sentinel couldn't delete ${shownDir(scope)}/${name}.json. Delete it by hand.` }
+// $.fs has no delete, so Node does it, as the dashboard needs Node anyway. The path goes in as an argument. A name
+// serves one item, so the flow or the instruction of that name goes.
+async function deleteItem($: $, name: string, scope: Scope): Promise<{ ok: boolean; text: string }> {
+  for (const kind of ['flow', 'instruction'] as const) {
+    const dir = await itemDir($, kind, scope)
+    const file = `${dir}/${name}.json`
+    if (!dir || !/^[a-z0-9][a-z0-9-]*$/.test(name) || !(await $.fs.exists(file).catch(() => false))) continue
+    const ok = await $.process.run(['node', '-e', 'require("fs").rmSync(process.argv[1])', file], { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
+    if (ok) await trust($, file)
+    await loadLibrary($)
+    void after($)
+    return ok ? { ok, text: `Deleted the ${kind} "${name}" from ${shownDir(scope, kind)}.` } : { ok, text: `Sentinel couldn't delete ${shownDir(scope, kind)}/${name}.json. Delete it by hand.` }
+  }
+  return { ok: false, text: `There is no ${scope} flow or instruction "${name}".` }
 }
 
-// A flow the model drafted: held until the user saves or discards it.
+const scopeWords = (scope: Scope) => (scope === 'project' ? 'for this project' : 'in your default')
+type Reply = { ok: boolean; text: string }
+const no = (text: string): Reply => ({ ok: false, text })
+const noItem = (name: string) => no(`There is no instruction or flow "${name}". /sentinel library lists them.`)
+
+// /sentinel on|off <name> [personal]: one item's switch, for this project or as the user's default. null (the
+// dashboard's reset) takes the switch out, so the item follows the weight and the other file again.
+async function switchNow($: $, name: string, on: boolean | null, scope: Scope): Promise<Reply> {
+  const l = await libraryNow($)
+  const item = [...l.items, ...l.flows].find(x => x.name === name)
+  if (!item) return noItem(name)
+  const was = scope === 'project' ? l.project : l.personal
+  const { [name]: _gone, ...rest } = was.on ?? {}
+  const keep = on === null ? rest : { ...rest, [name]: on }
+  const next: Switches = { ...(was.weight ? { weight: was.weight } : {}), ...(Object.keys(keep).length ? { on: keep } : {}) }
+  const why = await saveSwitches($, scope, next)
+  if (why) return no(why)
+  const now = libraryOn([...l.items, ...l.flows], scope === 'project' ? next : l.project, scope === 'personal' ? next : l.personal).on.includes(name)
+  if (on === null) return { ok: true, text: `${name} has no switch ${scopeWords(scope)} now, so it is ${now ? 'on' : 'off'}.` }
+  const stays = now === on ? '' : item.trusted ? ` This project's switches decide it, so it stays ${now ? 'on' : 'off'}.` : ` It stays off until you trust it: /sentinel trust ${name}.`
+  return { ok: true, text: `${name} is ${on ? 'on' : 'off'} ${scopeWords(scope)}.${stays}` }
+}
+
+// /sentinel weight light|standard|thorough [personal]. The weight decides that file's built-ins, so their switches go.
+async function weightNow($: $, weight: string, scope: Scope): Promise<Reply> {
+  if (!(WEIGHTS as readonly string[]).includes(weight)) return no('Use /sentinel weight light, standard or thorough, and personal after it for your default.')
+  const l = await libraryNow($)
+  const weighted = [...l.items, ...l.flows].filter(x => x.weights).map(x => x.name)
+  const why = await saveSwitches($, scope, withWeight(scope === 'project' ? l.project : l.personal, weight as Weight, weighted))
+  if (why) return no(why)
+  const over = scope === 'personal' && l.project.weight ? ` This project picked ${l.project.weight}, which wins here.` : ''
+  return { ok: true, text: `The weight is ${weight} ${scopeWords(scope)}.${over || ' The built-ins follow it; your own items keep their switches.'}` }
+}
+
+// /sentinel trust <name> (or flow trust <name>): a file Sentinel didn't save here, trusted as it is now.
+async function trustNow($: $, name: string): Promise<Reply> {
+  const { flows, instructions } = await loadLibrary($)
+  const flow = flows.find(x => x.name === name)
+  const found = flow ?? instructions.find(x => x.name === name)
+  if (!found && !BUILTINS.some(b => b.name === name)) return noItem(name)
+  if (!found || found.scope === 'built-in') return no(`${name} is built in, so there is nothing to trust.`)
+  await trust($, found.file, defOf(found))
+  const on = (await libraryNow($)).on.includes(name)
+  void after($)
+  const then = flow && on ? ` It adds itself ${ruleText(flow.when)}.` : ` It is ${on ? 'on' : `off: /sentinel on ${name} turns it on`}.`
+  return { ok: true, text: `Trusted ${shownDir(found.scope, flow ? 'flow' : 'instruction')}/${name}.json as it is now.${then}` }
+}
+
+// The dashboard's "Also make it this project's default" at the lock: the project's switches set so the Library
+// resolves to the plan's copy. Only the switches that differ from what the weight and the user's default give are kept.
+async function keepAsProject($: $, pl: PlanLibrary): Promise<string | undefined> {
+  const l = await libraryNow($)
+  const all = [...l.items, ...l.flows]
+  const base = libraryOn(all, { weight: pl.weight }, l.personal).on
+  const on = Object.fromEntries(all.filter(x => base.includes(x.name) !== pl.on.includes(x.name)).map(x => [x.name, pl.on.includes(x.name)]))
+  return saveSwitches($, 'project', { weight: pl.weight, ...(Object.keys(on).length ? { on } : {}) })
+}
+
+// A flow, or an instruction (text and at in place of states), the model drafted: held until the user saves or
+// discards it.
 async function draftFlow($: $, i: PlanInput, label: string): Promise<Result> {
-  const f = flowOf({ name: i.name, description: i.description, when: i.when, states: i.states })
+  const kind: Kind = !i.states?.length && (i.text !== undefined || i.at !== undefined) ? 'instruction' : 'flow'
+  const f = kind === 'instruction'
+    ? instructionOf({ name: i.name, description: i.description, at: i.at, files: i.files, text: i.text })
+    : flowOf({ name: i.name, description: i.description, when: i.when, states: i.states })
   if (typeof f === 'string') return record($, { deny: f }, { kind: 'plan', label, denied: true })
-  const taken = (await loadFlows($).catch(() => [])).find(x => x.name === f.name)
+  const lib = await loadLibrary($).catch(() => undefined)
+  const taken = ('states' in f ? lib?.flows : insItems(lib?.instructions ?? []))?.find(x => x.name === f.name)
   const asked = flowAsk
   flowAsk = undefined
   await change($, r => ({ ...r, flowDraft: { ...f, ...(asked ? { asked } : {}) } }))
-  $.ui.toast(`Sentinel: Claude drafted the flow "${f.name}". Save it from the band above the prompt`)
-  const bare = f.states.filter(s => !s.check && !s.wait).map(s => s.id)
+  $.ui.toast(`Sentinel: Claude drafted the ${kind} "${f.name}". Save it from the band above the prompt`)
+  const bare = 'states' in f ? f.states.filter(s => !s.check && !s.wait).map(s => s.id) : []
+  const dir = DIRS[kind]
   return record($, {
-    result: `Sentinel holds the flow "${f.name}" for the user. They save it from the band above the prompt or the dashboard, to the project (.sentinel/flows) or their personal flows (~/.sentinel/flows)${taken ? `, where it replaces the ${taken.scope} flow of that name` : ''}. Show it to them in your reply, then stop and wait.`
+    result: `Sentinel holds the ${kind} "${f.name}" for the user. They save it from the band above the prompt or the dashboard, to the project (.sentinel/${dir}) or their personal ${dir} (~/.sentinel/${dir})${taken ? `, where it replaces the ${taken.scope} ${kind} of that name` : ''}. Show it to them in your reply, then stop and wait.`
       + (bare.length ? ` ${bare.join(', ')} ${bare.length > 1 ? 'have' : 'has'} no check and no wait, so nothing would show ${bare.length > 1 ? 'they are' : 'it is'} done; say so.` : ''),
   }, { kind: 'plan', label })
 }
 
-async function flowList($: $): Promise<string> {
-  const flows = await loadFlows($)
-  const skipped = flowBad.length ? `\nNot read: ${flowBad.join('; ')}` : ''
-  if (!flows.length) return `No flows yet. Ask Claude for one, or write .sentinel/flows/<name>.json.${skipped}`
+// /sentinel library (or flows): the weight, then each instruction and flow with its switch.
+async function libraryList($: $): Promise<string> {
+  const v = await libraryView($)
+  const mark = (on?: boolean) => (on ? 'on ' : 'off')
+  const untrusted = (name: string) => ` Off until you trust it: Sentinel didn't save this file on this computer, or it changed since. Check it, then /sentinel trust ${name}.`
+  const short = (t: string) => (t.length > 120 ? `${t.slice(0, 119)}…` : t)
+  const from = v.project.weight ? 'set for this project' : v.personal.weight ? 'your default' : "Sentinel's default"
   return [
-    ...flows.map(f => `${f.name} (${f.scope}): ${f.description ? `${f.description} ` : ''}States: ${f.states.map(x => x.id).join(', ')}. Adds itself ${ruleText(f.when)}.`
-      + (f.when && !f.trusted ? ` That rule is off: Sentinel didn't save this file on this computer, or it changed since. Check it, then /sentinel flow trust ${f.name} turns the rule on.` : '')),
-    'Add one to a draft with /sentinel add <flow> start, end, before <state> or after <state>.',
-  ].join('\n') + skipped
+    `Weight: ${v.weight} (${from}).`,
+    'Instructions:',
+    ...v.instructions.map(x => `${mark(x.on)} ${x.name} (${x.scope}, ${x.at}): ${x.title ?? x.description ?? short(x.text)}${x.trusted ? '' : untrusted(x.name)}`),
+    'Flows:',
+    ...(flowsSeen ?? []).map(f => `${mark(v.flowsOn[f.name])} ${f.name} (${f.scope}): ${f.description ? `${f.description} ` : ''}States: ${f.states.map(x => x.id).join(', ')}. Adds itself ${ruleText(f.when)}.`
+      + (f.when && !f.trusted ? untrusted(f.name) : '')),
+    "Switch one with /sentinel on <name> or /sentinel off <name>, and pick a weight with /sentinel weight light, standard or thorough. Add personal to set your default instead of this project's. Add a flow to a draft with /sentinel add <flow> start, end, before <state> or after <state>.",
+  ].join('\n') + (flowBad.length ? `\nNot read: ${flowBad.join('; ')}` : '')
 }
 
 // /sentinel add <flow> <where>, and Add here on the dashboard.
@@ -845,18 +1109,10 @@ async function flowCommand($: $, arg: string): Promise<string> {
   if (arg === 'discard') {
     if (!f) return 'No flow draft to discard.'
     await change($, x => ({ ...x, flowDraft: undefined }))
-    return `Discarded the flow draft "${f.name}".`
+    return `Discarded the ${'states' in f ? 'flow' : 'instruction'} draft "${f.name}".`
   }
   const name = /^trust (\S+)$/.exec(arg)?.[1]
-  if (name) {
-    const found = (await loadFlows($)).find(x => x.name === name)
-    if (!found) return `There is no flow "${name}". /sentinel flows lists them.`
-    const { scope: _scope, file, trusted: _trusted, ...def } = found
-    await trust($, file, def)
-    await loadFlows($)
-    void after($)
-    return `Trusted ${shownDir(found.scope)}/${name}.json as it is now. It adds itself ${ruleText(found.when)}.`
-  }
+  if (name) return (await trustNow($, name)).text
   const scope = /^save (project|personal)$/.exec(arg)?.[1]
   if (!isScope(scope)) return 'Use /sentinel flow save project, /sentinel flow save personal, /sentinel flow trust <flow> or /sentinel flow discard.'
   return keepFlow($, scope)
@@ -866,7 +1122,7 @@ async function keepFlow($: $, scope: Scope): Promise<string> {
   const f = (await read($, run)).flowDraft
   if (!f) return 'No flow draft to save. Ask Claude for a flow first.'
   const { asked: _asked, ...flow } = f
-  const out = await saveFlow($, flow, scope)
+  const out = await saveItem($, flow, scope)
   if (out.ok) await change($, x => ({ ...x, flowDraft: undefined }))
   void after($)
   return out.text
@@ -906,24 +1162,76 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
   return record($, { result: `Started a member agent for ${st.id} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
 }
 
-// The project as it is now, untracked files included, checked out under .claude/worktrees/. The snapshot is a commit
-// object on no branch, made through a separate index, so HEAD, the branches and the user's index stay as they are.
-// ponytail: a fresh index hashes every file, and each member leaves its index file in .sentinel/; seed it from the real index if big repos get slow.
+// The project as it is now, untracked files included, checked out under .claude/worktrees/.
 async function worktree($: $, id: string): Promise<{ name: string; path: string } | { deny: string }> {
   const root = (await $.session.root()).replace(/\\/g, '/')
   const name = `sentinel-${id}-${Date.now().toString(36)}`
   const path = `${root}/.claude/worktrees/${name}`
-  const index = { GIT_INDEX_FILE: `${root}/.sentinel/${name}.index` }
-  const who = { GIT_AUTHOR_NAME: 'Sentinel', GIT_AUTHOR_EMAIL: 'sentinel@localhost', GIT_COMMITTER_NAME: 'Sentinel', GIT_COMMITTER_EMAIL: 'sentinel@localhost' }
   try {
-    await git($, root, ['read-tree', 'HEAD'], { env: index })
-    await git($, root, ['add', '-A', '--', '.', ':(exclude).claude/worktrees'], { env: index })
-    const tree = (await git($, root, ['write-tree'], { env: index })).trim()
-    const commit = (await git($, root, ['commit-tree', tree, '-p', 'HEAD', '-m', `Sentinel: the project when ${id} became ready`], { env: who })).trim()
+    const commit = await snapTree($, root, name, `Sentinel: the project when ${id} became ready`)
     await git($, root, ['worktree', 'add', '--detach', path, commit])
     return { name, path }
   } catch (err) {
     return { deny: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// The project as it is now, untracked files included, as a commit object on no branch. It is made through a separate
+// index, .sentinel/<name>.index, so HEAD, the branches and the user's index stay as they are.
+// ponytail: a fresh index hashes every file, and each member leaves its index file in .sentinel/; seed it from the real index if big repos get slow.
+async function snapTree($: $, root: string, name: string, message: string): Promise<string> {
+  const index = { GIT_INDEX_FILE: `${root}/.sentinel/${name}.index` }
+  const who = { GIT_AUTHOR_NAME: 'Sentinel', GIT_AUTHOR_EMAIL: 'sentinel@localhost', GIT_COMMITTER_NAME: 'Sentinel', GIT_COMMITTER_EMAIL: 'sentinel@localhost' }
+  await git($, root, ['read-tree', 'HEAD'], { env: index })
+  await git($, root, ['add', '-A', '--', '.', ':(exclude).claude/worktrees'], { env: index })
+  const tree = (await git($, root, ['write-tree'], { env: index })).trim()
+  return (await git($, root, ['commit-tree', tree, '-p', 'HEAD', '-m', message], { env: who })).trim()
+}
+
+// fails-without-change: the project as the active state's visit begins, before its first edit, for the rerun at
+// advance. A snapshot that fails is said once in the log, and that visit gets no rerun.
+async function snapStart($: $): Promise<void> {
+  const r = await read($, run)
+  if (!snapWanted(r)) return
+  const root = (await $.session.root()).replace(/\\/g, '/')
+  const sha = await snapTree($, root, 'snap', `Sentinel: the project when ${r.active} started`).catch((err: unknown) => new Error(err instanceof Error ? err.message : String(err)))
+  await change($, x => (x.active !== r.active || x.enteredAt !== r.enteredAt ? x
+    : typeof sha === 'string' ? withSnap(x, sha)
+    : withSnap({ ...x, log: [...x.log, { t: now(), icon: '!', tone: 'warn', text: `${r.active} · no snapshot for the rerun without the change: ${sha.message}` }] }, '')))
+}
+
+// fails-without-change: the state's check again, in a scratch worktree at the visit's snapshot with the visit's test
+// changes copied in and its code changes left out. A fail there may only mean the copy lacks what git doesn't track,
+// such as installed packages, so the check runs once more with the code changes copied in too: if it fails then as
+// well, the copy can't run it and the rerun is skipped. The worktree goes once the checks have run.
+// ponytail: files are copied as text; a binary fixture in a test folder would need git to carry it.
+async function rerun($: $, check: string, id: string, w: { sha: string; tests: string[]; code: string[] }, signal?: AbortSignal): Promise<Without> {
+  const root = (await $.session.root()).replace(/\\/g, '/')
+  const path = `${root}/.claude/worktrees/sentinel-wo-${id}-${Date.now().toString(36)}`
+  // The project's version of each file goes into the copy; a file deleted in the project goes from the copy too.
+  const copy = async (files: string[]) => {
+    for (const f of files) {
+      if (await $.fs.exists(`${root}/${f}`)) await $.fs.write(`${path}/${f}`, String(await $.fs.read(`${root}/${f}`)))
+      else await git($, path, ['rm', '-q', '--ignore-unmatch', '--', f])
+    }
+  }
+  const run = async () => {
+    const ran = await runCheck($, check, { dir: path, signal })
+    return 'deny' in ran ? `Sentinel couldn't run the check there: ${ran.deny}` : ran.ended ? ran.pass : "the check didn't finish there"
+  }
+  try {
+    await git($, root, ['worktree', 'add', '--detach', path, w.sha])
+    await copy(w.tests)
+    const without = await run()
+    if (without !== false) return typeof without === 'string' ? { skipped: without } : { pass: true, tests: w.tests, code: w.code }
+    await copy(w.code)
+    const withIt = await run()
+    if (withIt !== true) return { skipped: typeof withIt === 'string' ? withIt : "the check fails in the copy even with the change, so the copy can't run it (it may need files git doesn't track, such as installed packages)" }
+    return { pass: false, tests: w.tests, code: w.code }
+  } catch (err) {
+    return { skipped: `Sentinel couldn't make the copy: ${err instanceof Error ? err.message : String(err)}` }
+  } finally {
+    await $.process.run(['git', 'worktree', 'remove', '--force', path], { cwd: root }).catch(() => undefined)
   }
 }
 
@@ -970,6 +1278,7 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     const mine = async () => (await read($, run)).running?.[id]?.agent === m.agent
     const root = (await $.session.root()).replace(/\\/g, '/')
     const path = `${root}/.claude/worktrees/${m.name}`
+    // ponytail: fails-without-change doesn't rerun a member's check yet. Its worktree's base is the snapshot to start from.
     if (st.check) {
       const ran = await runCheck($, st.check, { dir: path })
       if (!(await mine())) return
@@ -1052,13 +1361,16 @@ function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string
     `Work in ${path}. It is a worktree of the project as it was when ${st.id} became ready, apart from the main checkout. Edit files there only, and only these: ${st.files.length ? st.files.join(', ') : 'none, this state edits nothing'}. Sentinel refuses other edits.`,
     st.check ? `${st.id} is done when \`${st.check}\` exits 0, run from ${path}.` : `${st.id} has no check: say what you found.`,
     st.ref ? `Details: ${st.ref}` : '',
+    toldHere(r, st),
     'Make no commits and leave the branches alone. You may start helper agents; they meet the same limits. When you are done, stop and say what you did. Sentinel checks your work and brings it back to the project.',
   ].filter(Boolean).join('\n\n')
 }
 
 // Before any work in a state its check should fail. One that passes already proves nothing about that state. The run
-// stops after START_CAP: one still going then tells nothing, so the state starts with no note.
+// stops after START_CAP: one still going then tells nothing, so the state starts with no note. The visit's snapshot for
+// fails-without-change is taken first.
 async function atStart($: $): Promise<string | undefined> {
+  await snapStart($)
   const was = await read($, run)
   const check = startCheck(was)
   if (!check) return undefined
@@ -1357,8 +1669,9 @@ function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: bo
     .then(() => after($)).catch(() => undefined)
 }
 
-// .sentinel/ holds Sentinel's run files, kept out of git, and the project's flows, committed with the code.
-const IGNORE = '*\n!flows/\n!flows/*.json\n'
+// .sentinel/ holds Sentinel's run files, kept out of git, and the project's Library (flows, instructions and switches),
+// committed with the code.
+const IGNORE = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\n!library.json\n'
 
 let writing: Promise<void> = Promise.resolve()
 let ignored = false
@@ -1392,6 +1705,9 @@ function after($: $): Promise<void> {
       const dir = `${await $.session.root()}/.sentinel`
       if (!ignored) await $.fs.write(`${dir}/.gitignore`, IGNORE)
       ignored = true
+      // ponytail: reads the Library's files on every write while the dashboard is up, so edits made outside Sentinel
+      // show; watch the folders if that shows.
+      if (serving) await libraryView($).catch(() => undefined)
       await $.fs.write(`${dir}/state.js`, snapshot(r, parallelSeen ?? (await parallelOn($))))
       // Only a plan is saved for /sentinel resume, so a draft never replaces an earlier session's plan.
       if (r.plan) await $.fs.write(`${dir}/run.json`, JSON.stringify({ ...r, sweep: undefined, checking: undefined, savedAt: Date.now() }))
@@ -1405,8 +1721,8 @@ function snapshot(r: Run, parallel: boolean): string {
   // answer come from memory. The page sends the draft's key back with Lock. The token never goes in.
   // Of each member, only what the page draws goes out: its kept answer can be long, and this file is written on every call.
   const members = Object.fromEntries(Object.entries(r.running ?? {}).map(([id, m]) => [id, { agent: m.agent, since: m.since }]))
-  const flows = (flowsSeen ?? []).map(({ file: _file, ...f }) => ({ ...f, file: `${shownDir(f.scope)}/${f.name}.json` }))
-  const extra = { savedAt: Date.now(), ask: asking, answered, draftKey: draftKey(r), parallel, members, flows, flowSaid }
+  const flows = (flowsSeen ?? []).map(({ file: _file, ...f }) => ({ ...f, ...(f.scope === 'built-in' ? {} : { file: `${shownDir(f.scope)}/${f.name}.json` }) }))
+  const extra = { savedAt: Date.now(), ask: asking, answered, draftKey: draftKey(r), parallel, members, flows, flowSaid, library: librarySeen, draftLibrary: r.draft?.library }
   return `window.__sentinel && window.__sentinel(${JSON.stringify({ ...summarize(r), ...extra })})\n`
 }
 
@@ -1427,7 +1743,7 @@ function statusText(r: Run): string | undefined {
 }
 
 async function openBrowser($: $): Promise<string> {
-  await loadFlows($).catch(() => undefined)
+  await libraryView($).catch(() => undefined)
   const dir = `${await $.session.root()}/.sentinel`
   await $.fs.write(`${dir}/.gitignore`, IGNORE)
   await $.fs.write(`${dir}/state.js`, snapshot(await read($, run), await parallelOn($)))
@@ -1522,7 +1838,23 @@ function parse(line: string): Record<string, unknown> | undefined {
 async function fromPage($: $, m: Record<string, unknown>) {
   const text = typeof m.text === 'string' ? m.text.trim().slice(0, 2000) : ''
   const r = await read($, run)
-  if (m.kind === 'lock' && r.draft && m.draft === draftKey(r)) return void (await lockNow($))
+  // The page has no other place for what goes wrong with the draft, so it shows in the terminal.
+  const toast = (t: string) => void $.ui.toast(`Sentinel: ${t}`)
+  if (m.kind === 'lock' && r.draft && m.draft === draftKey(r)) {
+    const pl = r.draft.library
+    const out = await lockNow($, Array.isArray(m.picked) ? m.picked.filter((x): x is string => typeof x === 'string') : [])
+    if (!out.startsWith('Locked')) return toast(out)
+    const why = m.keep === 'project' && pl ? await keepAsProject($, pl) : undefined
+    return why ? toast(why) : undefined
+  }
+  // The plan's copy of the Library, changed from the draft card. Only items that are trusted go on, and what Claude is
+  // told comes from the Library as it is now.
+  if (m.kind === 'libplan' && r.draft && m.draft === draftKey(r) && WEIGHTS.includes(m.weight as Weight) && Array.isArray(m.on)) {
+    const l = await libraryNow($)
+    const on = [...l.items, ...l.flows].filter(x => x.trusted && (m.on as unknown[]).includes(x.name)).map(x => x.name)
+    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items }) }), '')
+    return why ? toast(why) : undefined
+  }
   if (m.kind === 'draft' && r.draft && text) {
     return tell($, `${TAG} The user checked the draft in the dashboard and asks for changes: ${text}\nCall ${TOOL} with action "revise", then stop for their check.`)
   }
@@ -1536,24 +1868,32 @@ async function fromPage($: $, m: Record<string, unknown>) {
     if (!/^(Added|Taken)/.test(out)) flowReply({ ok: false, text: out })
     return
   }
+  // The Library's switches, weight and trust.
+  if (m.kind === 'libon' && typeof m.name === 'string' && isScope(m.scope) && (typeof m.on === 'boolean' || m.on === null)) return flowReply(await switchNow($, m.name, m.on, m.scope))
+  if (m.kind === 'libweight' && typeof m.weight === 'string' && isScope(m.scope)) return flowReply(await weightNow($, m.weight, m.scope))
+  if (m.kind === 'libtrust' && typeof m.name === 'string') return flowReply(await trustNow($, m.name))
+  // A flow or an instruction (saveItem tells them apart by shape).
   if (m.kind === 'saveflow' && isScope(m.scope)) {
-    const out = await saveFlow($, m.flow, m.scope)
+    const out = await saveItem($, m.flow, m.scope)
     const was = m.was as { name?: unknown; scope?: unknown } | undefined
-    const f = flowOf(m.flow)
+    const name = (m.flow as { name?: unknown } | undefined)?.name
     // A rename or a move: the old file goes once the new one is in.
-    if (out.ok && typeof f !== 'string' && typeof was?.name === 'string' && isScope(was.scope) && (was.name !== f.name || was.scope !== m.scope)) await deleteFlow($, was.name, was.scope)
+    if (out.ok && typeof was?.name === 'string' && isScope(was.scope) && (was.name !== name || was.scope !== m.scope)) await deleteItem($, was.name, was.scope)
     if (out.ok && m.fromDraft === true) await change($, x => ({ ...x, flowDraft: undefined }))
     return flowReply(out)
   }
-  if (m.kind === 'delflow' && typeof m.name === 'string' && isScope(m.scope)) return flowReply(await deleteFlow($, m.name, m.scope))
+  if (m.kind === 'delflow' && typeof m.name === 'string' && isScope(m.scope)) return flowReply(await deleteItem($, m.name, m.scope))
   if (m.kind === 'flowdiscard' && r.flowDraft) return flowReply({ ok: true, text: await flowCommand($, 'discard') })
   if (m.kind === 'askflow' && text) {
     flowAsk = text
-    return tell($, `${TAG} The user asks for a flow from the dashboard: ${text}\nDraft it with ${TOOL} action "flow": name, description, states, and "when" only if they want it added to new plans by itself. Then stop: they check it and save it.`)
+    return tell($, m.item === 'instruction'
+      ? `${TAG} The user asks for an instruction from the dashboard: ${text}\nDraft it with ${TOOL} action "flow": name, description, "at" (draft, start, close, final or always), "text", and "files" only for start or close. Then stop: they check it and save it.`
+      : `${TAG} The user asks for a flow from the dashboard: ${text}\nDraft it with ${TOOL} action "flow": name, description, states, and "when" only if they want it added to new plans by itself. Then stop: they check it and save it.`)
   }
   if (m.kind === 'flowchg' && r.flowDraft && text) {
     flowAsk = r.flowDraft.asked
-    return tell($, `${TAG} The user asks for changes to the flow "${r.flowDraft.name}" from the dashboard: ${text}\nSend the whole flow again with ${TOOL} action "flow", then stop.`)
+    const kind = 'states' in r.flowDraft ? 'flow' : 'instruction'
+    return tell($, `${TAG} The user asks for changes to the ${kind} "${r.flowDraft.name}" from the dashboard: ${text}\nSend the whole ${kind} again with ${TOOL} action "flow", then stop.`)
   }
   // Skip from any task's page.
   if (m.kind === 'skip' && isLive(r) && typeof m.state === 'string') return void (await skipNow($, `${m.state} ${text}`))

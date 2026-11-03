@@ -217,8 +217,10 @@ select.field { background-color: color-mix(in srgb, var(--ink) 12%, var(--panel)
 .brand { display: flex; align-items: center; gap: 10px; font-size: 14px; line-height: 1; letter-spacing: .1em; }
 .brand svg { width: 22px; height: 22px; color: var(--shell-ink); }
 .vsep { width: 1px; height: 22px; background: var(--shell-hair); flex: none; }
-.ptitle { font: 600 15px/1.2 var(--f-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.pmeta { color: var(--shell-ink-2); font: 500 13.5px/1 var(--f-disp); white-space: nowrap; }
+/* The title keeps its width up to a cap; the meta line, whose plan source can be a whole sentence, gives way first.
+   Both end in an ellipsis, with the full text in their tooltips. */
+.ptitle { flex: none; max-width: 38%; font: 600 15px/1.2 var(--f-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pmeta { min-width: 0; color: var(--shell-ink-2); font: 500 13.5px/1 var(--f-disp); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pmeta code { font-size: 12.5px; color: var(--shell-ink); }
 /* Page tabs: a bar floating at the foot of the window, in the shell's colour like the header and the notice. The page
    you are on is the notice's white tile. The bar is 10 and sits 4 from its tabs, so they are 6. */
@@ -837,6 +839,91 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 .lrow.picked, label.lrow.picked:hover { background: color-mix(in srgb, var(--ink) 11%, var(--panel)); }
 
 /* ============================================================
+   Library: instructions, weights and switches
+   ============================================================ */
+.lbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); margin: calc(-1 * var(--s2)) 0 var(--s5); }
+.lbar .sp { flex: 1; }
+.seg .n { margin-left: 6px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+#t-ins[hidden], #t-flows[hidden], .wsect[hidden] { display: none; }
+/* Weights: three ready sets of built-ins. Picking one sets their switches; your own items keep theirs. */
+.wsect { margin-bottom: var(--s5); }
+.weights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s3); }
+.wcard { display: grid; gap: 6px; align-content: start; padding: var(--s4) var(--s5); border: 1px solid var(--hair); border-radius: var(--r2); background: var(--panel); color: var(--ink); text-align: left; box-shadow: inset 0 1px 0 var(--hl), var(--sh-lift); transition: border-color .12s, box-shadow .12s; }
+.wcard:hover:not(:disabled) { border-color: var(--ink-4); }
+.wcard[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink), var(--sh-slant); }
+.wcard:disabled { cursor: default; }
+.wtop { display: flex; align-items: center; gap: var(--s3); }
+.wn { font: 800 15px/1 var(--f-caps); letter-spacing: .06em; text-transform: uppercase; }
+.wtop .sp { flex: 1; }
+.wcard p { font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+.wf { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--hair); font: 500 13px/1.2 var(--f-disp); color: var(--ink-3); }
+.wf b { display: block; font: 600 16px/1.2 var(--f-disp); color: var(--ink); font-variant-numeric: tabular-nums; }
+/* Extra time, as cells: none for Light, one for Standard, three for Thorough. */
+.slow-cells { display: inline-flex; gap: 2px; }
+.slow-cells i { width: 8px; height: 12px; background: color-mix(in srgb, var(--ink) 12%, transparent); box-shadow: inset 0 1px 2px rgb(0 0 0 / .22); }
+.slow-cells i.on { background: var(--amber-fill); box-shadow: none; }
+.wnote { margin-top: var(--s2); font-size: 13.5px; color: var(--ink-3); }
+.wnote b { color: var(--ink); font-weight: 600; }
+.ilist { padding: 0 6px 6px; }
+.mg-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); padding: 16px calc(var(--s5) - 6px) 6px; }
+.mg-h h3 { font: 600 11px/1 var(--f-disp); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); }
+.mg-h span { font-size: 13px; color: var(--ink-3); }
+.irow { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: var(--s3); min-height: 62px; margin-top: 2px; padding: 8px var(--s4) 8px calc(var(--s5) - 6px);
+  border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); cursor: pointer; }
+.irow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); }
+.irow[aria-selected="true"] { background: color-mix(in srgb, var(--ink) 11%, var(--panel)); }
+.im { min-width: 0; }
+.im b { font: 600 14.5px/1.3 var(--f-text); }
+.im .id { margin-left: 8px; font: 400 12px/1 var(--f-code); color: var(--ink-3); }
+.im p { margin-top: 2px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.im .files { font: 400 12px/1.4 var(--f-code); color: var(--ink-3); }
+.im .diff { margin-top: 3px; font: 500 12.5px/1.3 var(--f-disp); color: var(--amber); }
+.irow.off .im b, .irow.off .im p { color: var(--ink-3); }
+.meta { display: grid; grid-template-columns: 150px 108px 72px; align-items: center; gap: var(--s3); }
+.kb { display: inline-flex; align-items: center; gap: 6px; font: 500 13px/1 var(--f-disp); color: var(--ink-2); white-space: nowrap; }
+.kb .ic { width: 15px; height: 15px; }
+.kb.told .ic { color: var(--blue); }
+.kb.checks { color: var(--ink); font-weight: 600; }
+.cost { font: 600 13px/1.2 var(--f-disp); color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cost.slow { color: var(--amber); }
+.tot { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s8); padding: var(--s4) var(--s5); border-top: 1px solid var(--hair); background: var(--sunk); }
+.tot .fd b { font-size: 18px; }
+.tot .fd b.slow { color: var(--amber); }
+.empty-list { padding: var(--s6) var(--s5); color: var(--ink-3); }
+.idet .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s4); }
+.idet .ph h2 { font: 600 16px/22px var(--f-text); }
+.idet p.body { font-size: 14.5px; color: var(--ink); }
+.idet .callout { margin-bottom: var(--s4); }
+.prev { margin: 0; padding: var(--s3); border: 1px solid var(--hair); border-radius: var(--r2); background: var(--sunk); font: 400 12.5px/19px var(--f-code); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.prev b { color: var(--blue); font-weight: 500; }
+.ft td.swc, .ft th:first-child { width: 56px; }
+/* The instruction editor's moments, and the draft card's blocks. */
+.moments { display: grid; gap: 2px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.moments label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px var(--s3); align-items: start; padding: 10px var(--s3); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); cursor: pointer; }
+.moments label:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); }
+.moments input { margin-top: 3px; }
+.moments b { font: 600 14px/1.35 var(--f-text); }
+.moments span { grid-column: 2; font-size: 13.5px; color: var(--ink-3); }
+#iefilesBox { margin-top: var(--s4); }
+.deep { display: grid; gap: 2px; margin-top: var(--s3); }
+.deep label { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 4px var(--s3); align-items: start; padding: 10px var(--s3); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); cursor: pointer; }
+.deep label:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); }
+.deep input { margin-top: 3px; }
+.deep .k { display: block; font: 600 11.5px/16px var(--f-disp); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.deep b { display: block; font: 600 14.5px/1.35 var(--f-text); }
+.deep p { grid-column: 2; font-size: 13.5px; color: var(--ink-2); }
+.slip-b .wide { grid-column: 1 / -1; }
+.planins, .deep { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--s5); align-items: start; }
+.planins { display: grid; row-gap: var(--s3); margin-top: var(--s3); }
+.planins .pg { display: grid; gap: 2px; }
+.planins .pm { font: 600 11px/16px var(--f-disp); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); }
+.planins label { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: var(--s2); min-height: 38px; padding: 0 var(--s3) 0 var(--s2); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); cursor: pointer; font-size: 14px; }
+.planins label.off > span:nth-child(2) { color: var(--ink-3); }
+.planins .cost { font-size: 12.5px; color: var(--ink-3); }
+.planins .cost.slow { color: var(--amber); }
+.slip .lead { color: var(--ink-2); }
+
+/* ============================================================
    Hints and notices
    ============================================================ */
 /* One floating card for every hint, pale steel in both themes, so it carries its own light tokens. A state's card
@@ -900,7 +987,11 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
   /* Page heads and band titles stack; the Flows table keeps its four main columns. */
   .phead { flex-wrap: wrap; } .phead > div { flex-basis: 100%; } .phead .sp { display: none; }
   .slip-h { flex-wrap: wrap; row-gap: 2px; } .slip-h h2, .dfl .slip-h h2 { flex: 1 1 100%; }
-  .ft th:nth-child(3), .ft td:nth-child(3), .ft th:nth-child(5), .ft td:nth-child(5) { display: none; }
+  .ft th:nth-child(4), .ft td:nth-child(4), .ft th:nth-child(6), .ft td:nth-child(6) { display: none; }
+  .weights, .planins, .deep { grid-template-columns: minmax(0, 1fr); }
+  .irow { grid-template-columns: 40px minmax(0, 1fr); }
+  .irow .meta { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s3); }
+  .lbar .sp { display: none; }
   /* Who's working: short lane names, and the inside ticks dropped. */
   .wl { grid-template-columns: 104px minmax(0, 1fr); padding: var(--s4); }
   .wname span, .wtick:not(.now) { display: none; }
@@ -909,7 +1000,7 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 @media (max-width: 480px) {
   .brand { font-size: 0; gap: 0; }
   /* The table keeps the name and the rule; the panel below it has the rest. */
-  .ft th:nth-child(2), .ft td:nth-child(2), .ft th:nth-child(4), .ft td:nth-child(4) { display: none; }
+  .ft th:nth-child(3), .ft td:nth-child(3), .ft th:nth-child(5), .ft td:nth-child(5), .im .id { display: none; }
   .three { flex-wrap: wrap; } .three > #rfilesBox { flex-basis: 100%; }
   .tp-bar { padding: 8px var(--s3); gap: 6px; } .tp-bar .pg { display: none; }
 }
@@ -940,6 +1031,8 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></symbol>
+  <symbol id="i-told" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-checks" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8"/></symbol>
   <defs>
     <marker id="mk-idle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk done" d="M0,1L9,5L0,9z"/></marker>
@@ -963,7 +1056,7 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 
 <nav class="nav" aria-label="Pages">
   <button type="button" data-page="run" aria-current="page">Run<span class="badge" id="navBadge" hidden></span></button>
-  <button type="button" data-page="flows">Flows<span class="badge" id="navFlows" hidden></span></button>
+  <button type="button" data-page="flows">Library<span class="badge" id="navFlows" hidden></span></button>
 </nav>
 
 <div class="slim" id="slim" aria-hidden="true"><div class="slim-in"><span class="slim-w caps" id="slimW"></span><span class="slim-s" id="slimS"></span><span class="slim-c caps" id="slimC"></span><span id="slimA"></span></div></div>
@@ -1061,28 +1154,53 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 <div id="p-flows" hidden>
  <div id="flib">
   <div class="phead">
-    <div><h1 class="caps">Flows</h1><p>Saved sets of states. Add one to a plan by hand, or give it a rule and it adds itself.</p></div>
+    <div><h1 class="caps">Library</h1><p>Instructions tell Claude how to work at set moments of a run. Flows add states to plans. Switch any of them on or off for this project, or for every project you open.</p></div>
     <span class="sp"></span>
-    <button type="button" class="btn" data-act="askflow" aria-expanded="false" id="askBtn"><svg class="ic" aria-hidden="true"><use href="#i-chat"/></svg>Ask Claude for a flow</button>
-    <button type="button" class="btn pri" data-act="newflow"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New flow</button>
+    <button type="button" class="btn" data-act="askflow" aria-expanded="false" id="askBtn"><svg class="ic" aria-hidden="true"><use href="#i-chat"/></svg><span id="askLbl">Ask Claude for an instruction</span></button>
+    <button type="button" class="btn pri" data-act="newflow"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><span id="newLbl">New instruction</span></button>
   </div>
-  <p class="hint" id="fOff" hidden>This page was opened as a file, so it can't save or delete. Type <code>/sentinel browser</code> to open the dashboard through Sentinel, or ask Claude for a flow in the chat.</p>
+  <div class="lbar">
+    <span class="seg" id="libTabs"><button type="button" data-tab="ins">Instructions<span class="n" id="nIns"></span></button><button type="button" data-tab="flows">Flows<span class="n" id="nFl"></span></button></span>
+    <span class="sp"></span>
+    <span class="label">Switches for</span><span class="seg" id="swScope"><button type="button" data-sws="project">This project</button><button type="button" data-sws="personal">My default</button></span>
+  </div>
+  <p class="hint" id="fOff" hidden>This page was opened as a file, so it can't save, delete or switch anything. Type <code>/sentinel browser</code> to open the dashboard through Sentinel, or use <code>/sentinel library</code> in the chat.</p>
   <p class="hint err" id="fsaid" role="alert" hidden></p>
   <section class="panel askbox" id="askbox" hidden><div class="pb">
-    <label class="label" for="askf">Describe the flow</label>
-    <textarea class="field" id="askf" rows="3" maxlength="2000" placeholder="For example: before a state that edits the database, snapshot it and check the snapshot isn't empty."></textarea>
+    <label class="label" for="askf" id="askfl">Describe the instruction</label>
+    <textarea class="field" id="askf" rows="3" maxlength="2000"></textarea>
     <div class="row"><button type="button" class="btn pri" data-act="sendflow" disabled>Send to Claude</button><span class="hint" id="askHint">Claude drafts it, and it shows here for you to check before it's saved.</span></div>
   </div></section>
   <section class="panel slip dfl" id="dfl" aria-label="Claude's draft" hidden></section>
-  <div class="fgrid">
+  <div id="t-ins">
+    <p class="hint" id="noLib" hidden>This copy of Sentinel sent no instructions. Update the plugin, then open the dashboard again.</p>
+    <section class="wsect" id="wsect">
+      <div class="sh"><h2>How much testing</h2><span class="sp"></span><span class="quiet" id="wLabel"></span></div>
+      <div class="weights" id="weights"></div>
+      <p class="wnote">A weight sets the <b>built-in</b> instructions and flows in one go. Your own keep their switches. Flip any switch below and the weight shows the change.</p>
+    </section>
+    <div class="fgrid">
+      <section class="panel">
+        <div class="fbar">
+          <span class="seg" id="insScope"></span>
+          <span class="sp"></span>
+          <div class="sbox search"><input class="field" id="insq" placeholder="Find an instruction" aria-label="Find an instruction" autocomplete="off"><button type="button" class="sgo" data-act="findins" title="Find"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></button></div>
+        </div>
+        <div class="ilist" id="ilist"></div>
+        <div class="tot" id="tot"></div>
+      </section>
+      <aside class="panel fdet idet" id="idet"></aside>
+    </div>
+  </div>
+  <div class="fgrid" id="t-flows" hidden>
     <section class="panel">
       <div class="fbar">
-        <span class="seg" id="libScope"><button type="button" data-lib="All">All</button><button type="button" data-lib="Project">Project</button><button type="button" data-lib="Personal">Personal</button></span>
+        <span class="seg" id="libScope"></span>
         <span class="quiet" id="nflows"></span><span class="sp"></span>
         <div class="sbox search"><input class="field" id="libq" placeholder="Find a flow" aria-label="Find a flow" autocomplete="off"><button type="button" class="sgo" data-act="find" title="Find"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></button></div>
       </div>
       <div class="ftw"><table class="ft">
-        <thead><tr><th>Name</th><th>What it's for</th><th>Adds itself</th><th>States</th><th>Saved in</th><th>Rule</th></tr></thead>
+        <thead><tr><th>On</th><th>Name</th><th>What it's for</th><th>Adds itself</th><th>States</th><th>Saved in</th><th>Rule</th></tr></thead>
         <tbody id="ftBody"></tbody>
       </table></div>
     </section>
@@ -1090,6 +1208,7 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
   </div>
  </div>
  <div id="fed" hidden></div>
+ <div id="ied" hidden></div>
 </div>
 
 </main>
@@ -1337,7 +1456,7 @@ function stub(kind, n, done) {
     acts: [['Tell Claude what to try', 'chat', 'pri', 'try'], ['Pause the plan', 'pause', '', 'pause']] }
   if (kind === 'paused') return { k: 'Paused', h: `Paused at ${esc(a.id)}`, p: 'Resume to hold Claude to the plan again. Nothing is lost while it is paused.',
     acts: [['Resume', 'play', 'pri', 'resume']], fine: `Or type ${code('/sentinel resume')} in the chat.` }
-  if (n?.kind === 'flow') return { k: 'Claude drafted a flow', h: esc(vm.flowDraft.name), p: 'Check it on the Flows page, then save it or discard it.', acts: [['Open it', 'arrow', 'pri', 'openflows']] }
+  if (n?.kind === 'flow') return { k: `Claude drafted ${isIns(vm.flowDraft) ? 'an instruction' : 'a flow'}`, h: esc(vm.flowDraft.name), p: 'Check it in the Library, then save it or discard it.', acts: [['Open it', 'arrow', 'pri', 'openflows']] }
   if (kind === 'done') return { k: vm.endedAt ? `Finished at ${hm(vm.endedAt)}` : 'Finished', h: 'Nothing left to do', p: 'The plan is closed, so Claude works freely again.', fine: 'This page keeps the finished run until you sign off the next plan.' }
   if (kind === 'sweep') {
     const s = vm.sweep
@@ -1473,6 +1592,7 @@ const SLIP = {
       + `<div class="slip-b"><div><h3>What locking does</h3><p>Claude works through the ${ts.length} states${par() && vm.deps ? ', running some side by side in member agents once what they need is done' : ' in order'}. `
       + `A state with a check ends when the check exits 0. The others end when Claude moves on${waits.length ? `, and ${and(waits)} ${waits.length > 1 ? 'end' : 'ends'} on your OK` : ''}. Edits outside a state's listed files are refused while it runs.</p></div>`
       + `<div><h3>Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p></div>`
+      + depthBlock() + planInsBlock()
       + chgBox('draftchg', 'For example: split a state into the route and its tests.') + '</div>'
   },
   stuck() {
@@ -1485,6 +1605,34 @@ const SLIP = {
       + '<div class="chg"><label class="label" for="try">What should Claude try?</label><textarea class="field" id="try" maxlength="2000" placeholder="What Claude may be missing, or what to try next."></textarea>'
       + '<div class="row"><button type="button" class="btn pri" data-act="hint" disabled>Send to Claude</button><button type="button" class="btn" data-act="pause">Pause the plan</button></div></div></div>'
   },
+}
+
+// Claude's answers to "what would an expert do here", for the user to tick. One that names a state takes that state out
+// of the plan at the lock unless it is ticked. depthPicked: the ticked ids, kept while the draft changes.
+const ASK = { expert: 'What an expert would add', raw: 'The raw material to start from', methods: 'Methods and tools', proof: 'What shows it is right' }
+const depthPicked = new Set()
+const depthBlock = () => !vm.depth?.length ? '' : `<div class="wide"><h3>Deeper, not bigger</h3><p class="lead">Claude's suggestions beyond the brief. Tick the ones you want; the rest stay out of the plan.</p>
+  <div class="deep">${vm.depth.map(x => `<label><input type="checkbox" class="pick" data-deep="${esc(x.id)}"${depthPicked.has(x.id) ? ' checked' : ''}><span>${ASK[x.ask] ? `<span class="k">${ASK[x.ask]}</span>` : ''}<b>${esc(x.text)}</b></span>${x.state ? `<p>Keeps the state ${code(x.state)} in the plan.</p>` : ''}</label>`).join('')}</div></div>`
+// The instructions this plan locks with. Each switch changes the draft's copy; planKeep: also make them the project's
+// switches at the lock.
+let planKeep = false
+function planInsBlock() {
+  const pl = vm.draftLibrary, ins = (vm.library?.instructions ?? []).filter(i => i.trusted !== false)
+  if (!pl || !ins.length) return ''
+  const diff = ins.filter(i => i.weights && pl.on.includes(i.name) !== i.weights.includes(pl.weight)).length
+  return `<div class="wide"><h3>Instructions for this plan</h3>
+    <div class="row" style="margin: 0 0 var(--s3)"><span class="seg">${WEIGHTS.map(p => `<button type="button" data-act="planweight" data-pw="${p.id}" aria-pressed="${pl.weight === p.id}">${p.name}</button>`).join('')}</span>${diff ? `<span class="quiet">${wName({ weight: pl.weight, diff })}</span>` : ''}</div>
+    <div class="planins">${MOMENTS.map(m => {
+      const rows = ins.filter(i => i.at === m.id)
+      return rows.length ? `<div class="pg"><div class="pm">${m.name}</div>${rows.map(i => { const on = pl.on.includes(i.name); return `<label class="${on ? '' : 'off'}"><span class="ck sw"><input type="checkbox" data-plan="${esc(i.name)}"${on ? ' checked' : ''}></span><span>${esc(i.title ?? i.name)}${i.scope !== 'built-in' ? ` <span class="tag sm">${SCOPE[i.scope]}</span>` : ''}</span>${costCell(i)}</label>` }).join('')}</div>` : ''
+    }).join('')}</div>
+    <fieldset class="opts two" style="margin-top: 12px"><legend class="vh">Where these switches go</legend>
+      <label class="opt"><input type="radio" name="pkeep" value=""${planKeep ? '' : ' checked'}><span><b>This plan only</b></span></label>
+      <label class="opt"><input type="radio" name="pkeep" value="project"${planKeep ? ' checked' : ''}><span><b>Also make them this project's default</b><span class="d">Written to ${code('.sentinel/library.json')} when you lock.</span></span></label></fieldset></div>`
+}
+// A change to the plan's copy. The slip draws again once the changed draft comes back.
+function planSend(weight, on) {
+  post({ kind: 'libplan', draft: vm.draftKey, weight, on }).then(ok => { if (!ok) { sendErr = need()?.key ?? null; pass() } })
 }
 
 // Several questions get tabs, each marked once it has an answer. Send waits until all of them have one.
@@ -1536,7 +1684,7 @@ function onAct(e) {
   if (act === 'changes') { const x = $('slip').querySelector('.chg'); if (x) { x.hidden = false; reveal(x.querySelector('textarea')) } return }
   if (act === 'chgx') { b.closest('.chg').hidden = true; return }
   if (act === 'health') { $('healthHelp').open = true; return $('healthHelp').scrollIntoView({ block: 'start', behavior: smooth }) }
-  if (act === 'openflows') return go('#flows')
+  if (act === 'openflows') return go(isIns(vm.flowDraft) ? '#library' : '#flows')
   if (act === 'flowlist') {
     view = 'list'
     store.set('view', view)
@@ -1552,13 +1700,27 @@ function onAct(e) {
   if (act === 'approve') return send({ kind: 'approve', state: a }, { q: titleOf(a), ans: 'Approved', where: vm.waiting?.kind === 'before' ? `Claude starts on ${a}.` : `Claude goes on after ${a}.` })
   if (act === 'sendchg') return send({ kind: 'changes', state: a, text: text('chg') }, { q: titleOf(a), ans: 'Changes asked for', where: 'Claude asks you again once they are in.' })
   if (act === 'hint') return send({ kind: 'hint', state: a, trap: vm.trap.step, text: text('try') }, { q: `Claude is ${PATTERN[vm.trap.pattern]} on ${a}`, ans: 'Your note is with Claude', where: 'The run stays red until the check moves.' })
-  if (act === 'lock') return send({ kind: 'lock', draft: vm.draftKey }, { q: vm.title, ans: 'Locked', where: 'Claude starts on the first state.' })
+  if (act === 'lock') {
+    const picked = (vm.depth ?? []).filter(x => depthPicked.has(x.id)).map(x => x.id)
+    return send({ kind: 'lock', draft: vm.draftKey, ...(vm.depth?.length ? { picked } : {}), ...(planKeep ? { keep: 'project' } : {}) }, { q: vm.title, ans: 'Locked', where: 'Claude starts on the first state.' })
+  }
+  if (act === 'planweight') {
+    const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
+    return planSend(w, pl.on.filter(n => !ins.some(i => i.weights && i.name === n)).concat(ins.filter(i => i.weights?.includes(w) && i.trusted !== false).map(i => i.name)))
+  }
   if (act === 'draftchg') return send({ kind: 'draft', text: text('chg') }, { q: 'The draft', ans: 'Changes asked for', where: 'Check the draft again once it changes.' })
   if (act === 'pause' || act === 'resume') return send({ kind: act, state: a })
 }
 for (const id of ['pass', 'slip', 'slimA']) $(id).addEventListener('click', onAct)
 // A picked option clears the typed answer, and typing clears a picked option, on questions that take one answer.
 $('slip').addEventListener('change', e => {
+  const t = e.target
+  if (t.dataset.deep) return t.checked ? depthPicked.add(t.dataset.deep) : depthPicked.delete(t.dataset.deep)
+  if (t.name === 'pkeep') return (planKeep = !!t.value)
+  if (t.dataset.plan) {
+    const pl = vm.draftLibrary
+    return planSend(pl.weight, t.checked ? [...pl.on, t.dataset.plan] : pl.on.filter(n => n !== t.dataset.plan))
+  }
   if (e.target.matches('.opt input[type=radio]')) e.target.closest('[data-panel]').querySelector('[data-other]').value = ''
   if (vm.ask) askReady()
 })
@@ -1585,7 +1747,7 @@ function notifyNeed() {
   if (!n || n.key === told) { if (!n) told = ''; return }
   told = n.key
   if (!document.hidden || n.kind === 'paused' || !('Notification' in window) || Notification.permission !== 'granted') return
-  const body = { ask: () => vm.ask.questions[0].question, wait: () => vm.waiting.kind === 'before' ? `${vm.active.id} asks for your OK before it starts.` : `${vm.active.id} is ready for your review.`, stuck: () => `Claude is ${PATTERN[vm.trap.pattern]} on ${vm.active.id}.`, draft: () => 'The draft is ready for your check.', flow: () => `Claude drafted the flow ${vm.flowDraft.name}.` }[n.kind]()
+  const body = { ask: () => vm.ask.questions[0].question, wait: () => vm.waiting.kind === 'before' ? `${vm.active.id} asks for your OK before it starts.` : `${vm.active.id} is ready for your review.`, stuck: () => `Claude is ${PATTERN[vm.trap.pattern]} on ${vm.active.id}.`, draft: () => 'The draft is ready for your check.', flow: () => `Claude drafted the ${isIns(vm.flowDraft) ? 'instruction' : 'flow'} ${vm.flowDraft.name}.` }[n.kind]()
   const note = new Notification((vm.trap && n.kind === 'stuck' ? 'Stuck · ' : 'Needs you · ') + (vm.title || 'Sentinel'), { body, tag: 'sentinel' })
   note.onclick = () => { focus(); note.close() }
 }
@@ -2949,6 +3111,8 @@ const steps = f => `<span class="steps">${f.states.map(s => `<span class="st tod
 const ph = t => esc(t).replace(/\{\{[a-z.]+\}\}/g, m => `<span class="phd">${m}</span>`)
 const words = t => t.split(/\s+/).filter(Boolean)
 let fview = null, from = { place: '', at: 0, err: '' }, delAsk = null, libScope = 'All', dflKey = '', prefill = null
+// libTab: the Library's tab (ins or flows). swScope: whose switches it shows, this project's or your default's.
+let libTab = 'ins', swScope = 'project'
 const said = place => from.place === place ? (from.err ? { ok: false, text: from.err } : vm.flowSaid?.at >= from.at ? vm.flowSaid : null) : null
 function flowSend(place, body, done) {
   from = { place, at: Date.now(), err: '', done }
@@ -2982,9 +3146,12 @@ function fill(states, t, title) {
 // A flow's states as a short sheet: the id, what it does, and how it shows it is done.
 const sheet = states => `<ol class="sheet">${states.map((x, i) => `<li><span class="n">${i + 1}</span><b>${ph(x.id || 'new state')}</b><p>${ph(x.label)}</p><code>${x.check ? ph(x.check) : x.wait ? waitTx(x) : 'Nothing to run'}</code></li>`).join('')}</ol>`
 const ruleHtml = w => !w ? 'Only when you add it' : w.at === 'start' || w.at === 'end' ? `At the ${w.at} of every plan` : `${cap(w.at)} ${w.files?.length ? `states that edit ${w.files.map(code).join(' ')}` : 'every state'}`
-const scopeOpts = (group, name, on) => ['project', 'personal'].map(sc => `<label class="opt"><input type="radio" name="${group}" value="${sc}"${sc === on ? ' checked' : ''}><span><b>${cap(sc)}</b><span class="d"><code class="fpath" data-scope="${sc}">${esc(flowFile(sc, name || 'new-flow'))}</code>, ${sc === 'project' ? 'committed with the code' : 'in every project'}</span></span></label>`).join('')
-const renamed = (root, name) => root.querySelectorAll('.fpath').forEach(c => (c.textContent = flowFile(c.dataset.scope, name || 'new-flow')))
-const nameBad = n => /^[a-z0-9][a-z0-9-]*$/.test(n) ? '' : n ? 'Use lowercase letters, digits and dashes in the name.' : 'Give the flow a name.'
+const insFile = (scope, name) => `${scope === 'project' ? '.sentinel/instructions' : '~/.sentinel/instructions'}/${name}.json`
+// kind: flow or instruction, for the file a name saves to.
+const fileOf = (kind, scope, name) => (kind === 'instruction' ? insFile : flowFile)(scope, name || `new-${kind}`)
+const scopeOpts = (group, name, on, kind = 'flow') => ['project', 'personal'].map(sc => `<label class="opt"><input type="radio" name="${group}" value="${sc}"${sc === on ? ' checked' : ''}><span><b>${cap(sc)}</b><span class="d"><code class="fpath" data-scope="${sc}">${esc(fileOf(kind, sc, name))}</code>, ${sc === 'project' ? 'committed with the code' : 'in every project'}</span></span></label>`).join('')
+const renamed = (root, name, kind = 'flow') => root.querySelectorAll('.fpath').forEach(c => (c.textContent = fileOf(kind, c.dataset.scope, name)))
+const nameBad = (n, kind = 'flow') => /^[a-z0-9][a-z0-9-]*$/.test(n) ? '' : n ? 'Use lowercase letters, digits and dashes in the name.' : `Give the ${kind} a name.`
 
 // A card in the corner when something you did has taken, such as a flow saved. It goes by itself.
 let noticeT = 0
@@ -3007,8 +3174,10 @@ function go(hash) {
 }
 function route() {
   const was = fview, h = location.hash
-  fview = h === '#flows' ? 'lib' : /^#flow-./.test(h) ? 'edit' : null
+  fview = h === '#library' || h === '#flows' ? 'lib' : /^#flow-./.test(h) ? 'edit' : /^#ins-./.test(h) ? 'iedit' : null
+  if (fview === 'lib') libTab = h === '#flows' ? 'flows' : 'ins'
   if (fview !== 'edit' || ed?.hash !== h) { ed = null; $('fed').replaceChildren() }
+  if (fview !== 'iedit' || ie?.hash !== h) { ie = null; $('ied').replaceChildren() }
   if (fview && detailId) { detailId = lastTask = null; planBack() }
   flowsPage()
   if (fview !== was) scrollTo(0, 0)
@@ -3023,11 +3192,13 @@ function flowsPage() {
   if (!on) return
   $('flib').hidden = fview !== 'lib'
   $('fed').hidden = fview !== 'edit'
+  $('ied').hidden = fview !== 'iedit'
   if (fview === 'lib') renderLib()
-  else renderEd()
+  else if (fview === 'edit') renderEd()
+  else renderIe()
 }
 
-// The page tabs at the foot. Run carries a mark while the plan needs you, Flows while Claude's draft waits.
+// The page tabs at the foot. Run carries a mark while the plan needs you, Library while Claude's draft waits.
 function navTabs() {
   const needs = !!vm && (!!vm.ask || vm.phase === 'draft' || vm.phase === 'live' && !!(vm.trap || vm.waiting))
   document.querySelectorAll('.nav [data-page]').forEach(b => {
@@ -3043,40 +3214,207 @@ function navTabs() {
 }
 document.querySelector('.nav').addEventListener('click', e => {
   const b = e.target.closest('[data-page]')
-  if (b) go(b.dataset.page === 'flows' ? '#flows' : '')
+  if (b) go(b.dataset.page === 'flows' ? '#library' : '')
 })
 
-// ---- the Flows page ----
+// ---- the Library ----
 
-// The table lists the saved flows; the panel beside it shows the one picked. A project and a personal flow can share a
-// name, so a flow is picked by both.
-let libQ = '', flowSel = ''
-const flowKey = f => f.scope + '/' + f.name
+// When an instruction reaches Claude.
+const MOMENTS = [
+  { id: 'draft', name: 'While Claude drafts a plan', say: 'Once per plan, before you see the draft' },
+  { id: 'start', name: 'When a state starts', say: 'Each state that edits files, before its first edit' },
+  { id: 'close', name: 'Before a state closes', say: 'Each state that edits files, told as it starts' },
+  { id: 'final', name: 'Before the plan completes', say: 'Once per plan, with the last state' },
+  { id: 'always', name: 'Every turn', say: 'In every reply, with or without a plan' },
+]
+const MOM = Object.fromEntries(MOMENTS.map(m => [m.id, m]))
+// time: how many of the three cells of extra time it fills.
+const WEIGHTS = [
+  { id: 'light', name: 'Light', time: 0, say: 'For quick work and small fixes. Claude picks the fastest check that proves each state, and Sentinel runs nothing extra.' },
+  { id: 'standard', name: 'Standard', time: 1, say: 'Failure lists before code, tests seen to fail, and a check that must fail before the work starts.' },
+  { id: 'thorough', name: 'Thorough', time: 3, say: 'Adds end-to-end proof, a rerun without the change, and measured test deletion. Slow when a check runs a whole suite.' },
+]
+const SCOPE = { 'built-in': 'Built-in', project: 'Project', personal: 'Personal' }
+// As Sentinel words the told text (toldHere in hooks/core.ts, and the system prompt section).
+const HEAD = { draft: () => 'While you draft a plan:', start: id => `Your instructions for ${id}:`, close: id => `Before you advance ${id}:`, final: () => 'Before the plan completes:', always: () => 'Every turn:' }
+const RULES_WIN = "Where the project's own rules (such as CLAUDE.md) differ from these, the project's rules win."
+const toldPrev = (d, st) => `<b>${esc(HEAD[d.at](st.id))}</b>\n- ${esc(d.text || '…')}\n${RULES_WIN}`
+const whereText = (d, st) => ({
+  draft: "In Claude's system prompt while no plan is locked.", always: "In Claude's system prompt, every turn.",
+  start: `In Sentinel's reply as ${st.id} starts${d.files?.length ? `, when it edits ${d.files.join(' ')}` : ''}.`,
+  close: `In Sentinel's reply as ${st.id} starts${d.files?.length ? `, when it edits ${d.files.join(' ')}` : ''}, so Claude has it before the work.`,
+  final: 'In the reply that starts the last state left.',
+})[d.at]
+// What Claude reads when one of Sentinel's own checks catches something.
+const caught = (name, st) => name === 'fails-first'
+  ? `<b>[sentinel]</b> ${esc(`\`${st.check}\` already passes at the start of ${st.id}, before any work there, so it can't show that ${st.id} got done. Give ${st.id} a check that fails now and passes once the work is in.`)}`
+  : `<b>[sentinel]</b> ${esc(`\`${st.check}\` still passes in a scratch copy that has ${st.id}'s test changes but not its code changes, so the tests don't test the change. Tighten the check, or record why with "decide", then advance again.`)}`
+// A state to show the text against: the plan's first that edits files, or a made-up one.
+const exampleState = () => (vm.phase === 'none' ? [] : tasks()).find(s => s.files?.length && s.check) ?? { id: 'api', check: 'npm test' }
+const isIns = d => d?.text !== undefined
+const per = at => ['start', 'close'].includes(at) ? 'read with each state that edits files' : at === 'always' ? 'read every turn' : 'read once per plan'
+const costCell = i => i.kind === 'checks' ? `<span class="cost${i.slow ? ' slow' : ''}">+${plural(i.runs ?? 1, 'check run')}${i.slow ? ', slow' : ''}</span>` : `<span class="cost">${words(i.text).length} words</span>`
+const kindCell = i => i.kind === 'checks' ? `<span class="kb checks">${icon('checks')}Sentinel checks this</span>` : `<span class="kb told">${icon('told')}Claude is told</span>`
+
+// Every item with a switch, instructions and flows, keyed by name. Weighted items (the built-ins, and copies of them)
+// list the weights that turn them on.
+const libItems = () => [...(vm.library?.instructions ?? []), ...(vm.flows ?? []).map(f => ({ ...f, kind: 'flow' }))]
+const switches = () => ({ project: vm.library?.project ?? {}, personal: vm.library?.personal ?? {} })
+const shownIn = (i, scope) => scope === 'project' || i.scope !== 'project'
+// Which items are on, as libraryOn in hooks/core.ts works it out: for this project, or for your default alone.
+function onMap(scope, sw = switches()) {
+  const project = scope === 'project' ? sw.project : {}, personal = sw.personal, weight = project.weight ?? personal.weight ?? 'standard'
+  const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
+  const on = {}
+  for (const i of libItems()) on[i.name] = i.trusted !== false && (i.weights ? pick(project, i.name) ?? (project.weight ? undefined : pick(personal, i.name)) ?? i.weights.includes(weight) : pick(project, i.name) ?? pick(personal, i.name) ?? true)
+  return { weight, on }
+}
+// A switches file with a weight picked: the weighted items' switches go, so the weight sets them.
+const withWeight = (s, weight) => ({ weight, on: Object.fromEntries(Object.entries(s.on ?? {}).filter(([n]) => !libItems().some(i => i.weights && i.name === n))) })
+// The weight in force and how many weighted items its switches change.
+function weightOf(scope) {
+  const m = onMap(scope)
+  return { ...m, diff: libItems().filter(i => i.weights && i.trusted !== false && shownIn(i, scope) && m.on[i.name] !== i.weights.includes(m.weight)).length }
+}
+const wName = w => `${cap(w.weight)}${w.diff ? `, ${plural(w.diff, 'change')}` : ''}`
+// What the instructions that are on cost: words Claude reads with each state, once per plan and every turn, and the
+// check runs Sentinel adds to each state.
+function costOf(on, list) {
+  const live = list.filter(i => i.kind !== 'flow' && on[i.name]), n = ats => live.filter(i => i.kind === 'told' && ats.includes(i.at)).reduce((s, i) => s + words(i.text).length, 0)
+  return { count: live.length, perState: n(['start', 'close']), once: n(['draft', 'final']), turn: n(['always']), runs: live.reduce((s, i) => s + (i.runs ?? 0), 0), slow: live.filter(i => i.slow).length }
+}
+// Flip a switch, or put it back to what it would be without one (on: null). The switch keeps its new place until the
+// next snapshot; if Sentinel didn't get it, the page draws again from what Sentinel has.
+const libRedraw = ok => { if (!ok) for (const id of ['ilist', 'ftBody', 'idet', 'weights']) $(id)._h = null; renderLib() }
+const libSwitch = (name, on) => flowSend('lib', { kind: 'libon', name, scope: swScope, on }).then(libRedraw)
+
 function renderLib() {
-  const live = online(), all = vm.flows ?? [], s = heard()
+  const live = online(), s = heard(), ins = libTab === 'ins'
   $('askBtn').hidden = !live
   $('fOff').hidden = live
   $('fsaid').hidden = !s || s.ok
   $('fsaid').textContent = s && !s.ok ? s.text : ''
   renderDfl()
-  document.querySelectorAll('#libScope button').forEach(b => b.setAttribute('aria-pressed', b.dataset.lib === libScope))
+  document.querySelectorAll('#libTabs button').forEach(b => b.setAttribute('aria-pressed', (b.dataset.tab === 'ins') === ins))
+  document.querySelectorAll('#swScope button').forEach(b => b.setAttribute('aria-pressed', b.dataset.sws === swScope))
+  $('askLbl').textContent = `Ask Claude for ${ins ? 'an instruction' : 'a flow'}`
+  $('newLbl').textContent = ins ? 'New instruction' : 'New flow'
+  $('askfl').textContent = `Describe the ${ins ? 'instruction' : 'flow'}`
+  $('askf').placeholder = ins ? 'For example: keep each check under a minute, and run whole suites only at the final checks.' : 'For example: after any state that edits web/, check the page at three widths.'
+  $('t-ins').hidden = !ins
+  $('t-flows').hidden = ins
+  $('nIns').textContent = (vm.library?.instructions ?? []).filter(i => shownIn(i, swScope)).length
+  $('nFl').textContent = (vm.flows ?? []).filter(f => shownIn(f, swScope)).length
+  if (ins) renderIns()
+  else renderFlows()
+}
+
+// ---- instructions ----
+
+// insScope: which items the list shows. insSel: the one picked, by scope and name.
+let insScope = 'All', insQ = '', insSel = '', insDel = null
+const insKey = i => i.scope + '/' + i.name
+function renderIns() {
+  const L = vm.library, live = online()
+  $('noLib').hidden = !!L
+  $('wsect').hidden = !L
+  if (!L) { put($('ilist'), ''); put($('tot'), ''); put($('idet'), ''); return }
+  const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope))
+  $('wLabel').textContent = `${swScope === 'project' ? 'This project' : 'Your default'}: ${wName(w)}${swScope === 'project' && !sw.project.weight ? ', from your default' : ''}`
+  put($('weights'), WEIGHTS.map(p => {
+    const c = costOf(onMap(swScope, { ...sw, [swScope]: withWeight(sw[swScope], p.id) }).on, shown), nb = libItems().filter(i => i.scope === 'built-in' && i.weights?.includes(p.id)).length
+    return `<button type="button" class="wcard" data-weight="${p.id}" aria-pressed="${w.weight === p.id}"${live ? '' : ' disabled'}>
+      <span class="wtop"><span class="wn">${p.name}</span><span class="sp"></span><span class="slow-cells" title="Extra time">${[0, 1, 2].map(n => `<i${n < p.time ? ' class="on"' : ''}></i>`).join('')}</span></span>
+      <p>${p.say}</p>
+      <span class="wf"><span><b>${nb}</b>built-in${nb === 1 ? '' : 's'} on</span><span><b>${c.perState}</b>words a state</span><span><b>${c.runs}</b>extra runs a state</span></span>
+    </button>`
+  }).join(''))
+
+  const scopes = ['All', 'Built-in', 'Project', 'Personal'].filter(x => swScope === 'project' || x !== 'Project')
+  if (!scopes.includes(insScope)) insScope = 'All'
+  put($('insScope'), scopes.map(x => `<button type="button" data-ins-scope="${x}" aria-pressed="${x === insScope}">${x}</button>`).join(''))
+  const m = onMap(swScope), mine = swScope === 'project' ? onMap('personal') : null, q = insQ.trim().toLowerCase()
+  const list = all.filter(i => (insScope === 'All' || i.scope === insScope.toLowerCase()) && `${i.name} ${i.title ?? ''} ${i.description ?? ''} ${i.text}`.toLowerCase().includes(q))
+  if (!all.some(i => insKey(i) === insSel)) insSel = all[0] ? insKey(all[0]) : ''
+  const row = i => {
+    const k = insKey(i), on = !!m.on[i.name], differs = mine && i.scope !== 'project' && i.trusted !== false && on !== !!mine.on[i.name]
+    return `<div class="irow${on ? '' : ' off'}" data-ins="${esc(k)}" tabindex="0" aria-selected="${k === insSel}">
+      <label class="ck sw" data-stop><input type="checkbox" data-sw="${esc(i.name)}"${on ? ' checked' : ''}${i.trusted === false || !live ? ' disabled' : ''} aria-label="${esc(i.title ?? i.name)} on"></label>
+      <div class="im"><b>${esc(i.title ?? i.name)}</b>${i.title ? `<span class="id">${esc(i.name)}</span>` : ''}<p>${esc(i.description ?? i.text)}</p>
+        ${i.files?.length ? `<p class="files">Only states that edit ${esc(i.files.join(' '))}</p>` : ''}
+        ${differs ? `<p class="diff">${mine.on[i.name] ? 'On' : 'Off'} in your default, ${on ? 'on' : 'off'} here</p>` : ''}</div>
+      <div class="meta">${kindCell(i)}${i.trusted === false ? '<span class="tag off">Not trusted</span>' : costCell(i)}<span class="tag sm">${SCOPE[i.scope]}</span></div>
+    </div>`
+  }
+  put($('ilist'), MOMENTS.map(mo => {
+    const rows = list.filter(i => i.at === mo.id)
+    return rows.length ? `<div class="mg-h"><h3>${mo.name}</h3><span>${mo.say}</span></div>${rows.map(row).join('')}` : ''
+  }).join('') || `<p class="empty-list">${all.length ? 'No instruction matches.' : 'No instructions yet. Ask Claude for one, or make one with New instruction.'}</p>`)
+  const c = costOf(m.on, all)
+  put($('tot'), `<div class="fd"><span class="label">On</span><b>${c.count} of ${all.length}</b></div>
+    <div class="fd"><span class="label">Claude reads with each state</span><b>${c.perState} words</b></div>
+    <div class="fd"><span class="label">Once per plan</span><b>${c.once} words</b></div>
+    ${c.turn ? `<div class="fd"><span class="label">Every turn</span><b>${c.turn} words</b></div>` : ''}
+    <div class="fd"><span class="label">Sentinel adds per state</span><b class="${c.slow ? 'slow' : ''}">${c.runs ? `+${plural(c.runs, 'check run')}${c.slow ? `, ${c.slow} slow` : ''}` : 'No check runs'}</b></div>`)
+  renderIdet(all.find(i => insKey(i) === insSel), m.on, sw)
+}
+
+function renderIdet(i, on, sw) {
+  if (!i) return put($('idet'), '<div class="pb"><p class="quiet">Pick an instruction to see what it does.</p></div>')
+  const live = online(), told = i.kind === 'told', st = exampleState(), mo = MOM[i.at], name = esc(i.name)
+  // The switch this scope holds for it, which "use the default" clears.
+  const held = Object.hasOwn(sw[swScope].on ?? {}, i.name) && (swScope === 'project' || i.weights)
+  const reset = !held ? '' : swScope === 'personal' || sw.project.weight ? 'Use the weight here' : 'Use my default here'
+  put($('idet'), `<div class="ph"><h2>${esc(i.title ?? i.name)}</h2><span class="sp"></span><label class="ck sw"><input type="checkbox" data-sw="${name}"${on[i.name] ? ' checked' : ''}${i.trusted === false || !live ? ' disabled' : ''} aria-label="On"></label></div>
+    <div class="pb">
+      ${i.trusted === false ? `<div class="callout">${icon('warn')}<div><p><b>Off until you trust it.</b> Sentinel didn't save this file on this computer, or it changed since. Read what it tells Claude, then trust it.</p>${live ? '<button type="button" class="btn sm" data-act="libtrust" style="margin-top: 8px">Trust it</button>' : ''}</div></div>` : ''}
+      <div class="tags"><span class="tag sm">${SCOPE[i.scope]}</span><span class="tag sm">${mo.name}</span>${i.files?.length ? `<span class="tag sm">${esc(i.files.join(' '))}</span>` : ''}${i.weights?.length ? `<span class="tag sm">In ${and(i.weights.map(cap))}</span>` : ''}</div>
+      ${i.description && i.title === undefined ? `<p style="color: var(--ink-2)">${esc(i.description)}</p>` : ''}
+      <p class="ph-k">${told ? 'What Claude is told' : 'What Sentinel does'}</p><p class="body">${esc(i.text)}</p>
+      ${i.needs ? `<p class="hint" style="margin-top: 6px">Needs ${esc(i.needs.replace(/^./, c => c.toLowerCase()))}</p>` : ''}
+      <p class="ph-k">${told ? 'How it arrives' : 'What Claude reads when it catches something'}</p>
+      <pre class="prev">${told ? toldPrev(i, st) : caught(i.name, st)}</pre>
+      ${told ? `<p class="hint" style="margin-top: 6px">${esc(whereText(i, st))}</p>` : ''}
+      <p class="ph-k">What it costs</p><p class="hint">${told ? `${plural(words(i.text).length, 'word')}, ${per(i.at)}. Claude is told it; Sentinel doesn't check it.`
+        : `${(i.runs ?? 1) > 1 ? `Up to ${i.runs} more runs` : 'One more run'} of the state's check${i.slow ? ', in a scratch copy of the project. Slow when the check runs a whole suite.' : ', for states that edit files.'}`}</p>
+      ${i.file ? `<p class="ph-k">Saved in</p><p>${code(i.file)}</p>` : ''}
+      <div class="acts0">${insDel === insKey(i) ? `<p>Delete ${code(i.file)}?</p><button type="button" class="btn sm" data-act="insdelyes">Delete</button><button type="button" class="btn sm ghost" data-act="insdelno">Keep it</button>`
+        : i.scope === 'built-in' ? (told ? '<button type="button" class="btn sm" data-act="inscopy">Copy and edit</button>' : '')
+        : `<button type="button" class="btn sm" data-act="insedit">Edit</button><button type="button" class="btn sm" data-act="insdup">Copy</button>${live ? '<button type="button" class="btn sm ghost" data-act="insdel">Delete</button>' : ''}`}
+        ${reset && live ? `<button type="button" class="btn sm ghost" data-act="libreset">${reset}</button>` : ''}</div>
+    </div>`)
+}
+
+// ---- flows ----
+
+// The table lists the flows; the panel beside it shows the one picked. A project and a personal flow can share a
+// name, so a flow is picked by both.
+let libQ = '', flowSel = ''
+const flowKey = f => f.scope + '/' + f.name
+function renderFlows() {
+  const live = online(), all = (vm.flows ?? []).filter(f => shownIn(f, swScope)), m = onMap(swScope)
+  const scopes = ['All', 'Built-in', 'Project', 'Personal'].filter(x => swScope === 'project' || x !== 'Project')
+  if (!scopes.includes(libScope)) libScope = 'All'
+  put($('libScope'), scopes.map(x => `<button type="button" data-lib="${x}" aria-pressed="${x === libScope}">${x}</button>`).join(''))
   const q = libQ.trim().toLowerCase(), fl = all.filter(f => (libScope === 'All' || f.scope === libScope.toLowerCase()) && `${f.name} ${f.description ?? ''}`.toLowerCase().includes(q))
   $('nflows').textContent = plural(fl.length, 'flow')
   if (!all.some(f => flowKey(f) === flowSel)) flowSel = all[0] ? flowKey(all[0]) : ''
-  put($('ftBody'), fl.map(f => `<tr data-flow="${esc(flowKey(f))}" tabindex="0" aria-selected="${flowKey(f) === flowSel}"><td class="nm">${esc(f.name)}</td><td class="what">${esc(f.description ?? '')}</td><td class="adds">${ruleHtml(f.when)}</td><td class="n">${f.states.length}</td><td>${cap(f.scope)}</td>`
-    + `<td>${!f.when ? '<span class="quiet">None</span>' : f.trusted === false ? '<span class="tag off">Off until you check it</span>' : '<span class="tag on">On</span>'}</td></tr>`).join('')
-    || `<tr><td colspan="6" class="quiet">${all.length ? 'No flow matches.' : 'No flows yet. Ask Claude for one, or make one with New flow.'}</td></tr>`)
-  const f = all.find(x => flowKey(x) === flowSel)
+  const rule = f => !f.when ? '<span class="quiet">None</span>' : f.trusted === false ? '<span class="tag off">Off until you check it</span>' : m.on[f.name] ? '<span class="tag on">On</span>' : '<span class="tag off">Off</span>'
+  put($('ftBody'), fl.map(f => `<tr data-flow="${esc(flowKey(f))}" tabindex="0" aria-selected="${flowKey(f) === flowSel}"><td class="swc"><label class="ck sw" data-stop><input type="checkbox" data-sw="${esc(f.name)}"${m.on[f.name] ? ' checked' : ''}${f.trusted === false || !live ? ' disabled' : ''} aria-label="${esc(f.name)} on"></label></td>`
+    + `<td class="nm">${esc(f.name)}</td><td class="what">${esc(f.description ?? '')}</td><td class="adds">${ruleHtml(f.when)}</td><td class="n">${f.states.length}</td><td>${SCOPE[f.scope]}</td><td>${rule(f)}</td></tr>`).join('')
+    || `<tr><td colspan="7" class="quiet">${all.length ? 'No flow matches.' : 'No flows yet. Ask Claude for one, or make one with New flow.'}</td></tr>`)
+  const f = all.find(x => flowKey(x) === flowSel), own = f && f.scope !== 'built-in'
   put($('fdet'), !f ? '<div class="pb"><p class="quiet">Pick a flow to see its states.</p></div>'
-    : `<div class="ph"><h2>${esc(f.name)}</h2><span class="tag">${cap(f.scope)}</span><span class="sp"></span><button type="button" class="btn sm" data-act="edit">Edit</button></div>
+    : `<div class="ph"><h2>${esc(f.name)}</h2><span class="tag">${SCOPE[f.scope]}</span><span class="sp"></span><button type="button" class="btn sm" data-act="${own ? 'edit' : 'dup'}">${own ? 'Edit' : 'Copy and edit'}</button></div>
     <div class="pb">
       ${f.description ? `<p style="color: var(--ink-2)">${esc(f.description)}</p>` : ''}
-      ${f.when && f.trusted === false ? `<div class="callout" style="margin-top: 14px">${icon('warn')}<div><p><b>Its rule is off.</b> Sentinel didn't save this file on this computer, or it changed since, so the rule won't add it to plans until you read the checks below and save it with Edit.</p></div></div>` : ''}
-      <p class="ph-k">Adds itself</p><p>${ruleHtml(f.when)}</p>
-      <p class="ph-k">Saved in</p><p>${code(f.file)}</p>
+      ${f.when && f.trusted === false ? `<div class="callout" style="margin-top: 14px">${icon('warn')}<div><p><b>Its rule is off.</b> Sentinel didn't save this file on this computer, or it changed since, so the rule won't add it to plans until you read the checks below and trust it.</p>${live ? '<button type="button" class="btn sm" data-act="libtrust" style="margin-top: 8px">Trust it</button>' : ''}</div></div>` : ''}
+      <p class="ph-k">Adds itself</p><p>${ruleHtml(f.when)}${f.when && !m.on[f.name] && f.trusted !== false ? '. Switched off, so only when you add it.' : ''}</p>
+      ${f.weights?.length ? `<p class="ph-k">On in</p><p>${and(f.weights.map(cap))}</p>` : ''}
+      ${f.file ? `<p class="ph-k">Saved in</p><p>${code(f.file)}</p>` : ''}
       <p class="ph-k">States</p>${sheet(f.states)}
-      <div class="acts0">${delAsk === flowSel ? `<p>Delete ${code(f.file)}?</p><button type="button" class="btn sm" data-act="delyes">Delete</button><button type="button" class="btn sm ghost" data-act="delno">Keep it</button>`
-        : `<button type="button" class="btn sm" data-act="dup">Duplicate</button>${live ? '<button type="button" class="btn sm ghost" data-act="del">Delete</button>' : ''}`}</div>
+      ${own ? `<div class="acts0">${delAsk === flowSel ? `<p>Delete ${code(f.file)}?</p><button type="button" class="btn sm" data-act="delyes">Delete</button><button type="button" class="btn sm ghost" data-act="delno">Keep it</button>`
+        : `<button type="button" class="btn sm" data-act="dup">Duplicate</button>${live ? '<button type="button" class="btn sm ghost" data-act="del">Delete</button>' : ''}`}</div>` : ''}
     </div>`)
 }
 
@@ -3087,13 +3425,13 @@ function renderDfl() {
   if (key === dflKey) return
   dflKey = key
   if (!d) return el.replaceChildren()
+  if (isIns(d)) return (el.innerHTML = insDraft(d, live))
   const checks = d.states.map(x => x.check ? `<li>${icon('check')}<span>${esc(x.id)} has a check.</span></li>`
     : x.wait ? `<li>${icon('check')}<span>${esc(x.id)} waits for ${x.wait === 'after' ? 'your review' : 'your OK'}.</span></li>`
     : `<li>${icon('warn', 'ic bad')}<span><span class="warn">${esc(x.id)} has no check</span> and doesn't wait for you, so nothing shows it is done.</span></li>`).join('')
   el.innerHTML = `<div class="slip-h"><h2>Claude drafted a flow. Check it, then save it.</h2>${d.asked ? `<span class="quiet">You asked for "${esc(d.asked)}"</span>` : ''}</div>
     <div class="slip-b"><div>
-      <div class="two"><div class="fld"><label class="label" for="dn">Name</label><input class="field mono" id="dn" value="${esc(d.name)}" autocomplete="off"><p class="hint" id="dnhint">Lowercase, no spaces. It's the file name too.</p></div>
-        <div class="fld"><label class="label" for="dd">What it's for</label><input class="field" id="dd" maxlength="300" value="${esc(d.description ?? '')}"></div></div>
+      ${nameFields(d)}
       <h3>States</h3>${sheet(d.states)}
       ${/\{\{/.test(JSON.stringify(d.states)) ? '<p class="hint" style="margin-top: 8px">Tags such as <span class="phd">{{state.id}}</span> fill in from the state the flow goes beside.</p>' : ''}
       ${live ? '<div class="chg" hidden><label class="label" for="fchg">What should change?</label><textarea class="field" id="fchg" maxlength="2000" placeholder="For example: run the visual tests on mobile width too."></textarea><div class="row"><button type="button" class="btn pri" data-act="sendfchg" disabled>Send to Claude</button><button type="button" class="btn ghost" data-act="chgx">Cancel</button></div></div>' : ''}
@@ -3105,15 +3443,44 @@ function renderDfl() {
         : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${code('/sentinel flow save personal')} or ${code('/sentinel flow discard')}.</p>`}</div>
     </div></div>`
 }
+// An instruction Claude drafted: the same card, with what Claude would be told in place of the states.
+const nameFields = d => `<div class="two"><div class="fld"><label class="label" for="dn">Name</label><input class="field mono" id="dn" value="${esc(d.name)}" autocomplete="off"><p class="hint" id="dnhint">Lowercase, no spaces. It's the file name too.</p></div>
+  <div class="fld"><label class="label" for="dd">What it's for</label><input class="field" id="dd" maxlength="300" value="${esc(d.description ?? '')}"></div></div>`
+function insDraft(d, live) {
+  const mo = MOM[d.at], st = exampleState()
+  return `<div class="slip-h"><h2>Claude drafted an instruction. Check it, then save it.</h2>${d.asked ? `<span class="quiet">You asked for "${esc(d.asked)}"</span>` : ''}</div>
+    <div class="slip-b"><div>
+      ${nameFields(d)}
+      <h3>${esc(mo?.name ?? d.at)}${d.files?.length ? `, for states that edit ${d.files.map(code).join(' ')}` : ''}</h3><pre class="prev">${toldPrev(d, st)}</pre>
+      <p class="hint" style="margin-top: 6px">${esc(whereText(d, st))}</p>
+      ${live ? '<div class="chg" hidden><label class="label" for="fchg">What should change?</label><textarea class="field" id="fchg" maxlength="2000" placeholder="For example: only for states that edit web/."></textarea><div class="row"><button type="button" class="btn pri" data-act="sendfchg" disabled>Send to Claude</button><button type="button" class="btn ghost" data-act="chgx">Cancel</button></div></div>' : ''}
+    </div><div>
+      <h3>Sentinel's checks</h3><ul class="vlist"><li>${icon('check')}<span>The name and the moment are valid${d.files?.length ? ', and files go with a state moment' : ''}.</span></li><li>${icon('check')}<span>${plural(words(d.text).length, 'word')}, ${per(d.at)}.</span></li></ul>
+      <h3>Save to</h3><fieldset class="opts"><legend class="vh">Save to</legend>${scopeOpts('dscope', d.name, 'project', 'instruction')}</fieldset>
+      <p class="hint" style="margin-top: 6px">It is on once saved. Switch it off in the Library.</p>
+      <div class="acts0">${live ? '<button type="button" class="btn pri" data-act="savedraft">Save instruction</button><button type="button" class="btn" data-act="dchg" aria-expanded="false">Ask for changes</button><button type="button" class="btn" data-act="drafted">Open in the editor</button><button type="button" class="btn ghost" data-act="discard">Discard</button>'
+        : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${code('/sentinel flow save personal')} or ${code('/sentinel flow discard')}.</p>`}</div>
+    </div></div>`
+}
 // The draft as it would be saved: with the name, the line and the rule as the user left them.
 function draftOut() {
-  const { asked: _asked, ...f } = vm.flowDraft
-  return { ...f, name: $('dn').value.trim(), description: $('dd').value.trim() || undefined, when: $('dattach')?.checked === false ? undefined : f.when }
+  const { asked: _asked, ...f } = vm.flowDraft, o = { ...f, name: $('dn').value.trim(), description: $('dd').value.trim() || undefined }
+  return isIns(f) ? o : { ...o, when: $('dattach')?.checked === false ? undefined : f.when }
 }
 
 $('flib').addEventListener('click', e => {
+  // A switch takes its own change; the row under it stays as it is.
+  if (e.target.closest('[data-stop]')) return
+  const tab = e.target.closest('#libTabs [data-tab]')
+  if (tab) { history.replaceState(null, '', tab.dataset.tab === 'flows' ? '#flows' : '#library'); return route() }
+  const sws = e.target.closest('#swScope [data-sws]')
+  if (sws) { swScope = sws.dataset.sws; return renderLib() }
   const sc = e.target.closest('#libScope [data-lib]')
   if (sc) { libScope = sc.dataset.lib; return renderLib() }
+  const isc = e.target.closest('#insScope [data-ins-scope]')
+  if (isc) { insScope = isc.dataset.insScope; return renderLib() }
+  const wc = e.target.closest('[data-weight]')
+  if (wc && !wc.disabled) return flowSend('lib', { kind: 'libweight', scope: swScope, weight: wc.dataset.weight }).then(renderLib)
   const row = e.target.closest('tr[data-flow]')
   if (row) {
     flowSel = row.dataset.flow
@@ -3121,10 +3488,31 @@ $('flib').addEventListener('click', e => {
     renderLib()
     return $('ftBody').querySelector(`[data-flow="${CSS.escape(flowSel)}"]`)?.focus({ preventScroll: true })
   }
+  const irow = e.target.closest('.irow[data-ins]')
+  if (irow) {
+    insSel = irow.dataset.ins
+    insDel = null
+    renderLib()
+    return $('ilist').querySelector(`[data-ins="${CSS.escape(insSel)}"]`)?.focus({ preventScroll: true })
+  }
   const b = e.target.closest('[data-act]')
   if (!b || b.disabled) return
-  const act = b.dataset.act, f = (vm.flows ?? []).find(x => flowKey(x) === flowSel)
+  const act = b.dataset.act, f = (vm.flows ?? []).find(x => flowKey(x) === flowSel), ins = libTab === 'ins'
+  const i = (vm.library?.instructions ?? []).find(x => insKey(x) === insSel), it = ins ? i : f
   if (act === 'find') $('libq').focus()
+  if (act === 'findins') $('insq').focus()
+  if (act === 'libtrust' && it) flowSend('lib', { kind: 'libtrust', name: it.name, scope: it.scope, item: ins ? 'instruction' : 'flow' }, ['Trusted', `${it.name} is on unless you switch it off.`]).then(renderLib)
+  if (act === 'libreset' && i) libSwitch(i.name, null)
+  if (act === 'inscopy' && i) { prefill = { name: i.name, description: i.description, at: i.at, files: i.files, text: i.text }; go('#ins-new') }
+  if (act === 'insedit' && i) go('#ins-' + i.name)
+  if (act === 'insdup' && i) {
+    let n = `${i.name}-copy`, k = 2
+    while (libItems().some(x => x.name === n)) n = `${i.name}-copy-${k++}`
+    prefill = { ...i, name: n, scope: undefined }
+    go('#ins-new')
+  }
+  if (act === 'insdel' || act === 'insdelno') { insDel = act === 'insdel' ? insSel : null; renderLib() }
+  if (act === 'insdelyes' && i) { insDel = null; flowSend('lib', { kind: 'delflow', name: i.name, scope: i.scope, item: 'instruction' }, ['Instruction deleted', i.file]).then(renderLib) }
   if (act === 'askflow') {
     const x = $('askbox')
     x.hidden = !x.hidden
@@ -3134,7 +3522,7 @@ $('flib').addEventListener('click', e => {
   if (act === 'sendflow') {
     const text = $('askf').value.trim()
     b.disabled = true
-    flowSend('lib', { kind: 'askflow', text }).then(ok => {
+    flowSend('lib', { kind: 'askflow', text, ...(libTab === 'ins' ? { item: 'instruction' } : {}) }).then(ok => {
       b.disabled = ok
       $('askHint').textContent = ok ? `Sent at ${hm(Date.now())}. Claude's draft shows here when it arrives.` : LOST
       if (ok) $('askf').value = ''
@@ -3151,36 +3539,40 @@ $('flib').addEventListener('click', e => {
       $('dfl').querySelector('.chg').innerHTML = `<p class="hint">${ok ? `Sent at ${hm(Date.now())}. Claude's new draft takes this one's place when it arrives.` : LOST}</p>`
     })
   }
-  if (act === 'newflow') { prefill = null; go('#flow-new') }
+  if (act === 'newflow') { prefill = null; go(ins ? '#ins-new' : '#flow-new') }
   if (act === 'edit' && f) go('#flow-' + f.name)
+  // A copy of a built-in keeps its name, so it takes the built-in's place.
   if (act === 'dup' && f) {
-    let n = `${f.name}-copy`, k = 2
-    while ((vm.flows ?? []).some(x => x.name === n)) n = `${f.name}-copy-${k++}`
-    prefill = { ...f, name: n }
+    let n = f.scope === 'built-in' ? f.name : `${f.name}-copy`, k = 2
+    while (f.scope !== 'built-in' && libItems().some(x => x.name === n)) n = `${f.name}-copy-${k++}`
+    prefill = { ...f, name: n, scope: undefined }
     go('#flow-new')
   }
   if (act === 'del' || act === 'delno') { delAsk = act === 'del' ? flowSel : null; renderLib() }
   if (act === 'delyes' && f) { delAsk = null; flowSend('lib', { kind: 'delflow', name: f.name, scope: f.scope }, ['Flow deleted', f.file]).then(renderLib) }
   if (act === 'savedraft') {
-    const o = draftOut(), bad = nameBad(o.name), scope = $('dfl').querySelector('input[name=dscope]:checked').value
+    const o = draftOut(), kind = isIns(o) ? 'instruction' : 'flow', bad = nameBad(o.name, kind), scope = $('dfl').querySelector('input[name=dscope]:checked').value
     if (bad) { $('dnhint').innerHTML = `<span class="warn">${bad}</span>`; return $('dn').focus() }
-    flowSend('lib', { kind: 'saveflow', scope, fromDraft: true, flow: o }, ['Flow saved', flowFile(scope, o.name)]).then(renderLib)
+    flowSend('lib', { kind: 'saveflow', scope, fromDraft: true, flow: o, ...(kind === 'instruction' ? { item: kind } : {}) }, [`${cap(kind)} saved`, fileOf(kind, scope, o.name)]).then(renderLib)
   }
-  if (act === 'drafted') { prefill = { ...draftOut(), fromDraft: true }; go('#flow-new') }
+  if (act === 'drafted') { const o = draftOut(); prefill = { ...o, fromDraft: true }; go(isIns(o) ? '#ins-new' : '#flow-new') }
   if (act === 'discard') flowSend('lib', { kind: 'flowdiscard' }, ['Draft discarded', 'Ask Claude again when you want another.']).then(renderLib)
 })
 // A row is picked with Enter or Space too.
 $('flib').addEventListener('keydown', e => {
-  const row = e.target.closest?.('tr[data-flow]')
-  if (row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); row.click() }
+  const row = e.target.closest?.('tr[data-flow], .irow[data-ins]')
+  if (row && e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); row.click() }
 })
+$('flib').addEventListener('change', e => { if (e.target.dataset.sw) libSwitch(e.target.dataset.sw, e.target.checked) })
 $('flib').addEventListener('input', e => {
   const el = e.target
   if (el.id === 'askf') $('flib').querySelector('[data-act=sendflow]').disabled = !el.value.trim()
   if (el.id === 'fchg') $('dfl').querySelector('[data-act=sendfchg]').disabled = !el.value.trim()
+  if (el.id === 'insq') { insQ = el.value; renderLib() }
   if (el.id === 'dn') {
-    renamed($('dfl'), el.value.trim())
-    const bad = nameBad(el.value.trim())
+    const kind = isIns(vm.flowDraft) ? 'instruction' : 'flow'
+    renamed($('dfl'), el.value.trim(), kind)
+    const bad = nameBad(el.value.trim(), kind)
     $('dnhint').innerHTML = bad ? `<span class="warn">${bad}</span>` : "Lowercase, no spaces. It's the file name too."
   }
   if (el.id === 'libq') { libQ = el.value; renderLib() }
@@ -3217,6 +3609,7 @@ function edFlow() {
 // What Sentinel would refuse, as flowOf checks a flow.
 function edProblem(f) {
   if (nameBad(f.name)) return nameBad(f.name)
+  if ((vm.library?.instructions ?? []).some(x => x.name === f.name)) return `An instruction is named ${f.name}.`
   if (!f.states.length) return 'Add a state.'
   for (const [i, s] of f.states.entries()) {
     if (!/^[A-Za-z0-9][\w-]*$/.test(s.id) || s.id === 'done') return s.id ? `State ${i + 1}: use letters, digits, - and _ in the id.` : `State ${i + 1} needs an id.`
@@ -3280,7 +3673,10 @@ function renderEd() {
   $('edsaved').innerHTML = !live ? warn("Opened as a file, so it can't save. Copy the file below into place.") : e.sent ? 'Saving…'
     : e.msg ? (e.msg.startsWith('Saved') ? `<span class="saved">${icon('check')}${esc(e.msg)}</span>` : warn(e.msg)) : bad ? warn(bad) : ''
   const clash = (vm.flows ?? []).find(x => x.name === f.name && !(e.was && x.name === e.was.name && x.scope === e.was.scope))
+  const insClash = (vm.library?.instructions ?? []).find(x => x.name === f.name)
   $('enhint').innerHTML = f.name && nameBad(f.name) ? warn('Use lowercase letters, digits and dashes.')
+    : insClash ? warn(`An instruction is named ${f.name}, and the two would share one switch. Pick another name.`)
+    : clash?.scope === 'built-in' ? `${warn(`Sentinel has a built-in flow named ${f.name}.`)} Yours takes its place, switched on by the same weights.`
     : clash ? `${warn(`${cap(clash.scope)} has a flow named ${f.name}.`)} Saving to ${clash.scope === 'project' ? 'the project replaces it' : 'the project hides it, as project flows win'}${clash.scope === 'personal' ? '' : '; saving it as personal leaves the project one in use'}.`
     : "Lowercase, no spaces. It's the file name too."
   renamed($('edform'), f.name)
@@ -3339,6 +3735,107 @@ $('fed').addEventListener('click', e => {
     flowSend('ed', { kind: 'saveflow', scope: ed.scope, flow: f, ...(ed.was ? { was: ed.was } : {}), ...(ed.fromDraft ? { fromDraft: true } : {}) }).then(ok => { if (!ok && ed) { ed.sent = null; ed.msg = LOST } if (fview === 'edit') renderEd() })
   }
   if (ed) renderEd()
+})
+
+// ---- the instruction editor ----
+
+// Like the flow editor: a copy of the instruction, the saved one it opened as `was`, and what Claude would read.
+let ie = null
+function openIe() {
+  const h = location.hash, name = unhash(h.slice(5))
+  const src = h === '#ins-new' ? prefill ?? { name: '', at: 'start', text: '' } : (vm.library?.instructions ?? []).find(i => i.name === name && i.scope !== 'built-in')
+  if (!src) return null
+  prefill = null
+  return {
+    hash: h, was: h === '#ins-new' ? null : { name: src.name, scope: src.scope }, fromDraft: !!src.fromDraft, sent: null,
+    msg: src.trusted === false ? "It stays off until you save it here. Read it first." : '',
+    name: src.name, description: src.description ?? '', at: src.at, files: (src.files ?? []).join(' '), text: src.text ?? '', scope: src.scope === 'personal' ? 'personal' : 'project',
+  }
+}
+function ieDef() {
+  const e = ie, files = ['start', 'close'].includes(e.at) ? words(e.files) : []
+  return { name: e.name.trim(), ...(e.description.trim() ? { description: e.description.trim() } : {}), at: e.at, ...(files.length ? { files } : {}), text: e.text.trim() }
+}
+// What Sentinel would refuse, as instructionOf checks it, and a name a flow already has.
+const ieProblem = d => nameBad(d.name, 'instruction') || ((vm.flows ?? []).some(f => f.name === d.name) ? `A flow is named ${d.name}.` : '') || (d.text ? '' : 'Write what Claude is told.')
+function ieForm() {
+  const e = ie
+  return `<div class="phead"><div><h1 class="caps" id="iet">${e.was ? 'Edit instruction' : 'New instruction'}</h1><p id="iefile"></p></div><span class="sp"></span><span class="hint" id="iesaved" role="status"></span>
+      <button type="button" class="btn" data-act="ieback">${icon('back')}Back to the library</button><button type="button" class="btn pri" data-act="iesave">Save instruction</button></div>
+    <div class="edgrid"><form class="panel" id="ieform" autocomplete="off">
+      <div class="edsec"><div class="two"><div class="fld"><label class="label" for="ien">Name</label><input class="field mono" id="ien" data-i="name" value="${esc(e.name)}" placeholder="for example: quick-checks"><p class="hint" id="ienhint"></p></div>
+        <div class="fld"><label class="label" for="iedesc">What it's for</label><input class="field" id="iedesc" data-i="description" maxlength="300" value="${esc(e.description)}" placeholder="One line on why you keep it"></div></div></div>
+      <div class="edsec"><h2>When Claude reads it</h2><fieldset class="moments"><legend class="vh">When Claude reads it</legend>${MOMENTS.map(m => `<label><input type="radio" class="pick" name="iem" value="${m.id}"${m.id === e.at ? ' checked' : ''}><b>${m.name}</b><span>${m.say}</span></label>`).join('')}</fieldset>
+        <div class="fld" id="iefilesBox"><label class="label" for="iefiles">Only states that edit <span class="quiet">(optional)</span></label><input class="field mono" id="iefiles" data-i="files" value="${esc(e.files)}" placeholder="Leave empty for every state that edits files"></div></div>
+      <div class="edsec"><h2><label for="ietext">What Claude is told</label></h2><textarea class="field" id="ietext" data-i="text" rows="5" maxlength="2000">${esc(e.text)}</textarea><p class="hint" id="iecount"></p></div>
+      <div class="edsec"><h2>Saved in</h2><fieldset class="opts two"><legend class="vh">Saved in</legend>${scopeOpts('iescope', e.name, e.scope, 'instruction')}</fieldset></div>
+    </form>
+    <aside class="panel ed-prev"><div class="pb"><h2>How it arrives</h2><p class="hint" id="iewhere"></p><pre class="prev" id="ieprev"></pre>
+      <details><summary>The file it saves</summary><pre id="iejson"></pre></details></div></aside></div>`
+}
+function renderIe() {
+  if (!ie && !(ie = openIe())) {
+    $('ied').innerHTML = `<div class="phead"><div><h1 class="caps">No such instruction</h1><p>There is no instruction of yours named ${code(unhash(location.hash.slice(5)))}.</p></div><span class="sp"></span><button type="button" class="btn" data-act="ieback">${icon('back')}Back to the library</button></div>`
+    return
+  }
+  if (!$('ieform')) $('ied').innerHTML = ieForm()
+  const e = ie, d = ieDef(), bad = ieProblem(d), live = online(), warn = t => `<span class="warn">${esc(t)}</span>`
+  const s = e.sent && said('ie')
+  if (s) {
+    if (s.ok) {
+      e.was = { ...e.sent }
+      e.fromDraft = false
+      e.hash = '#ins-' + e.sent.name
+      history.replaceState(null, '', e.hash)
+      $('iet').textContent = 'Edit instruction'
+      notice('Instruction saved', insFile(e.sent.scope, e.sent.name))
+    }
+    e.msg = s.ok ? `Saved at ${hm(Date.now())}` : s.text
+    e.sent = null
+  }
+  $('iefile').innerHTML = `${e.was ? 'Saved in' : 'Saves to'} ${code(insFile(e.scope, d.name || 'new-instruction'))}`
+  $('iesaved').innerHTML = !live ? warn("Opened as a file, so it can't save. Copy the file below into place.") : e.sent ? 'Saving…'
+    : e.msg ? (e.msg.startsWith('Saved') ? `<span class="saved">${icon('check')}${esc(e.msg)}</span>` : warn(e.msg)) : bad ? warn(bad) : ''
+  const clash = (vm.library?.instructions ?? []).find(x => x.name === d.name && !(e.was && x.name === e.was.name && x.scope === e.was.scope))
+  $('ienhint').innerHTML = d.name && nameBad(d.name) ? warn('Use lowercase letters, digits and dashes.')
+    : (vm.flows ?? []).some(f => f.name === d.name) ? warn(`A flow is named ${d.name}, and the two would share one switch. Pick another name.`)
+    : clash?.scope === 'built-in' ? `${warn(`Sentinel has a built-in named ${d.name}.`)} Yours takes its place, switched on by the same weights.`
+    : clash ? `${warn(`${cap(clash.scope)} has an instruction named ${d.name}.`)} Saving to ${clash.scope === 'project' ? 'the project replaces it' : 'the project hides it, as project items win'}.`
+    : "Lowercase, no spaces. It's the file name too."
+  renamed($('ieform'), d.name, 'instruction')
+  const save = $('ied').querySelector('[data-act=iesave]')
+  save.disabled = !!bad || !live || !!e.sent
+  save.title = bad || ''
+  $('iefilesBox').hidden = !['start', 'close'].includes(e.at)
+  $('iecount').textContent = `${plural(words(d.text).length, 'word')}, ${per(d.at)}.`
+  const st = exampleState()
+  $('iewhere').textContent = whereText(d, st)
+  put($('ieprev'), toldPrev(d, st))
+  $('iejson').textContent = JSON.stringify(d, null, 2)
+}
+
+$('ied').addEventListener('input', e => {
+  if (e.target.dataset.i) ie[e.target.dataset.i] = e.target.value
+  if (ie && !ie.sent) ie.msg = ''
+  if (ie) renderIe()
+})
+$('ied').addEventListener('submit', e => e.preventDefault())
+$('ied').addEventListener('change', e => {
+  if (e.target.name === 'iem') ie.at = e.target.value
+  if (e.target.name === 'iescope') ie.scope = e.target.value
+  if (ie) renderIe()
+})
+$('ied').addEventListener('click', e => {
+  const b = e.target.closest('button')
+  if (!b || b.disabled) return
+  if (b.dataset.act === 'ieback') return go('#library')
+  if (b.dataset.act === 'iesave') {
+    const d = ieDef()
+    ie.sent = { name: d.name, scope: ie.scope }
+    ie.msg = ''
+    flowSend('ie', { kind: 'saveflow', item: 'instruction', scope: ie.scope, flow: d, ...(ie.was ? { was: ie.was } : {}), ...(ie.fromDraft ? { fromDraft: true } : {}) }).then(ok => { if (!ok && ie) { ie.sent = null; ie.msg = LOST } if (fview === 'iedit') renderIe() })
+    renderIe()
+  }
 })
 
 route()

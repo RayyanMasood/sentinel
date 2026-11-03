@@ -1,6 +1,6 @@
 // The pane's three views. Each draws from summarize(run), the same model the browser page reads.
 import { K, SYM, VIEWS, healthTone, healthWord, ruleText, shortCount, tokenSplit, tokensOf, type Status, type VM } from './core'
-import type { Tone, View } from '../types'
+import type { InstructionAt, Tone, View } from '../types'
 
 // The surface's element table, from $.ui.resolve(e).
 type Els = { Box: any; Text: any; Button: any }
@@ -20,8 +20,8 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   if (!live && !f) return undefined
   const hl = vm.health
   type Band = [string, Tone, [string, string, () => void][]]
-  // A flow Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
-  const flow: Band | undefined = f && [`Sentinel: Claude drafted the flow "${f.name}" (${count(f.states.length, 'state')}). Save it?`, 'ask',
+  // A flow or an instruction Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
+  const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
     [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save personal', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
   const [text, tone, buttons]: Band = !a || !live ? flow!
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
@@ -58,6 +58,10 @@ const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const COLOR: Record<Exclude<Tone, 'dim'>, string> = { ok: 'success', err: 'error', warn: 'warning', acc: 'claude', ask: 'suggestion' }
 const NAMES: Record<View, string> = { focus: 'Focus', map: 'Map', ledger: 'Ledger' }
+const MOMENT: Record<InstructionAt, string> = {
+  draft: 'while Claude drafts a plan', start: 'as a state that edits its files starts', close: 'before such a state advances, told at its start',
+  final: 'before the plan completes', always: 'every turn',
+}
 const STATUS_TONE: Record<Status, Tone> = { done: 'ok', active: 'acc', trap: 'warn', running: 'acc', todo: 'dim' }
 const AUDIT_ICON: Record<string, [string, Tone]> = {
   refused: ['×', 'err'], blocked: ['⊘', 'warn'], decided: ['◆', 'acc'], amended: ['+', 'warn'],
@@ -219,6 +223,10 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
         ...(s.flow ? [field('flow', `${s.flow.as}. ${s.flow.why}`, 'dim')] : []),
       )
     }
+    if (vm.depth?.length) {
+      rows.push(gap(), line(['Deeper, not bigger', undefined, true]), para('Tick the answers you want as you lock it: /sentinel lock <id> <id>. A state named by one you leave unticked comes out.', 'dim'))
+      for (const d of vm.depth) rows.push(<Box flexDirection="row"><Box flexShrink={0}>{line([`${d.id}  `, 'acc', true])}</Box><Box flexShrink={1}>{para(d.state ? `${d.text} (keeps ${d.state})` : d.text)}</Box></Box>)
+    }
     if (vm.loops.length) rows.push(gap(), line(['Loops', undefined, true]), para(vm.loops.map(l => `${l.from} → ${l.to}`).join(', ')))
     const decided = vm.audit.filter(a => a.kind === 'decided')
     if (decided.length) {
@@ -370,10 +378,22 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
     return rows
   }
 
-  // A flow Claude drafted, shown above any view until the user saves or discards it.
+  // A flow or an instruction Claude drafted, shown above any view until the user saves or discards it.
   const flowRows = () => {
     const f = vm.flowDraft
     if (!f) return []
+    const save = para('Save it with the buttons above the prompt, or /sentinel flow save project, /sentinel flow save personal or /sentinel flow discard.', 'dim')
+    if (!('states' in f)) {
+      return [
+        line(['INSTRUCTION DRAFT', 'ask', true], [`  ${f.name}`, undefined, true], ['  not saved yet', 'dim']),
+        ...(f.description ? [para(f.description, 'dim')] : []),
+        field('told', MOMENT[f.at]),
+        ...(f.files?.length ? [field('files', f.files.join(', '))] : []),
+        para(f.text),
+        save,
+        gap(),
+      ]
+    }
     return [
       line(['FLOW DRAFT', 'ask', true], [`  ${f.name}`, undefined, true], ['  not saved yet', 'dim']),
       ...(f.description ? [para(f.description, 'dim')] : []),
@@ -383,7 +403,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
         ...(s.files?.length ? [field('files', s.files.join(', '))] : []),
       ]),
       field('adds', ruleText(f.when)),
-      para('Save it with the buttons above the prompt, or /sentinel flow save project, /sentinel flow save personal or /sentinel flow discard.', 'dim'),
+      save,
       gap(),
     ]
   }

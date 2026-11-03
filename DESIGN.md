@@ -246,7 +246,7 @@ The run is a ticket. The pass, a white card at the top of the Run page, says whe
 
 Colour is meaning. Blue means Claude is here. Amber means you are needed. Red means stuck or failing. Green means passed. Grey means not yet, or paused. Controls carry no meaning, so they are ink and steel. The page is lit from the top in the run's colour, a soft glow that fades out before the plan, so the state reads before any word does. When the run is fine, the stub is a quiet grey and only small blue marks show where Claude is.
 
-The frame around it is a dark shell: a 56px header bar with the logo, the plan's title and how fresh the data is, and a floating tab bar at the foot of the window for the two pages, Run and Flows. Depth follows a game-store client's habit: fields and tracks sit into the surface, panels and chips stand on it, and the things you can open tip toward you when pointed at.
+The frame around it is a dark shell: a 56px header bar with the logo, the plan's title and how fresh the data is, and a floating tab bar at the foot of the window for the two pages, Run and Library. Depth follows a game-store client's habit: fields and tracks sit into the surface, panels and chips stand on it, and the things you can open tip toward you when pointed at.
 
 **Key Characteristics:**
 - A dark shell, a cool grey ground and white panels; the dark theme swaps the ground and panels to blue-black and keeps the shell darker still.
@@ -299,7 +299,7 @@ A cool neutral sheet with five meanings, each used for one thing. Dark values li
 ### Hierarchy
 - **Word** (Libre Franklin 800, 54px, line height 1, capitals; 34px at 860px wide and under): the status word and the count in the pass. The slim bar repeats both at 16px.
 - **Section** (Libre Franklin 800, 12.5px, 0.07em, capitals): section titles on the page, such as Plan and Where the time went, over a dashed rule that fades out to the right.
-- **Nav** (Libre Franklin 800, 13px, 0.05em, capitals): the Run and Flows tabs, and the product name in the header at 14px with 0.1em spacing.
+- **Nav** (Libre Franklin 800, 13px, 0.05em, capitals): the Run and Library tabs, and the product name in the header at 14px with 0.1em spacing.
 - **Stub title** (Saira 700, 25px, line height 1.15): the question or task the stub asks about; 21px while the run is working.
 - **Say** (Saira 400, 17.5px, line height 1.45, up to 64 characters wide): the sentence under the status word.
 - **Panel title** (Saira 700, 17px): titles inside a panel, and 16px in the slip's header band.
@@ -378,7 +378,7 @@ The header is a 56px shell bar: logo, a hairline, the plan's title and meta, the
 - **Disabled:** a fainter wash with `ink-4` text.
 
 ### Tabs and switches
-Joined tabs on a base line, 32px tall, in condensed capitals. The picked one is lit from the line up and the line under it turns to ink. Map, One line and List use this; so do the question tabs and the Flows scope filter.
+Joined tabs on a base line, 32px tall, in condensed capitals. The picked one is lit from the line up and the line under it turns to ink. Map, One line and List use this; so do the question tabs, and the Library's tabs, scope filters and "Switches for" choice.
 
 ### Tags and chips
 - **Tag:** 22px, r1, a 9% ink wash. Green when a rule is on, amber when it waits on you, filled with the run's colour for the one that matters now (Now, You, Running).
@@ -407,8 +407,14 @@ Now (the current state's mark, id, title, a link to its task page, done-when, fi
 ### Task page
 Opens in place of the plan for one state. A sticky bar with Back and the pager, then a row of stat boxes (Status, Runs in, Took, Started), a bar showing where the state sat in the run, and two columns: why, approach, what was done, where it stands, what it needs, along the way and ways back on the left; done-when, files it may change and the flow that added it on the right. A live run offers Skip with a reason.
 
-### Flows page
-A table of saved flows with a search box and a scope filter, and a detail panel for the picked one (Edit, Duplicate, Delete). Claude's drafted flow shows above the table in a slip, outlined and banded in the run's colour. The editor puts the form on the left and a sticky preview of the flow, as the plan would show it, on the right.
+### Library page
+Two tabs, Instructions and Flows, and a "Switches for" choice between this project and your default. Claude's draft of either kind shows above them in a slip, outlined and banded in the run's colour.
+- **Weights:** three cards in a row (one column under 860px), each with its name in Libre Franklin capitals, a line on what it is for, and a footer of figures: words per state, words once per plan, extra check runs. Slow extra time shows as amber cells. The picked card stands with an ink edge.
+- **Instruction rows:** bars 62px tall with a switch, the title and text, then the moment, a "Claude is told" or "Sentinel checks this" tag and the cost. A row that is off greys its words. A sunk strip under the list adds up what is on.
+- **Detail panel:** the picked instruction's tags, its text, what it needs in a callout, and Copy to edit for a built-in, Trust for a file Sentinel didn't save, Edit and Delete for your own.
+- **Flows:** a table with an On switch per row, a search box and a scope filter, and a detail panel (Edit, Duplicate, Delete).
+- **Editors:** one per kind. The form is on the left; the flow editor has a sticky preview of the flow on the right, as the plan would show it.
+- **On a draft:** the "Before you lock it" card adds "Deeper, not bigger" (the depth answers as tick rows, each with its question in small capitals) and "Instructions for this plan" (switches and a weight choice over the plan's own copy, with This plan only or Also make them this project's default).
 
 ### Hint card and notice
 - **Hint card:** one floating card for every hint in place of the browser's tooltip, pale steel in both themes (r2, max 280px). A state's card names it, its title, its check and where it stands.

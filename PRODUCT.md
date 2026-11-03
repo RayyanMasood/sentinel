@@ -12,6 +12,8 @@ The person who signed off a plan and let Claude Code run it. The owner directs A
 ## Product Purpose
 Sentinel is a Claude Code plugin that holds a signed-off plan as a state machine and keeps the model to it. The browser dashboard shows where the run is, what Sentinel decided without asking, what it asked, and why it thinks the run is stuck when it does. Success: the owner knows from one glance whether to step in, and can read why in plain words when they do.
 
+The goal is one tool for any task. New kinds of work get covered by items in the Library (instructions Sentinel hands Claude at set moments, and flows that add states) before the engine changes. The Library ships built-ins, and a weight (Light, Standard or Thorough) trades slow testing for fast checks per project.
+
 ## Positioning
 Sentinel enforces the plan. Each state has a check command that must pass before the model moves on and a list of files it may edit; edits outside that list are refused. A detector scores the last 8 tool calls and calls the run stuck when health drops to 0.25 or below. Non-breaking choices are decided and logged instead of asked.
 

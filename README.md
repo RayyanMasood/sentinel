@@ -12,7 +12,7 @@ You approve a plan in plan mode, or agree on one in the chat and type `/sentinel
 
 - **Edits stay in scope.** An edit to a file outside the active state's files is refused. Claude can widen the scope with `amend` and a reason, and every amendment is logged.
 - **Moving on takes proof.** `advance` runs the state's check from the project root, through the Bash tool and your permission rules, and moves on only when it exits 0. A refusal carries the end of the check's output, so Claude can fix the failure without running the check again to read it. A state without a check needs evidence and at least one read.
-- **A check has to be able to fail.** When a state starts, Sentinel runs its check once before any edit. A check that already passes can't show the work got done, so Claude is told to make it stricter.
+- **A check has to be able to fail.** When a state starts, Sentinel runs its check once before any edit. A check that already passes can't show the work got done, so Claude is told to make it stricter. This is the `fails-first` built-in, on at the Standard and Thorough weights (see [Library](#library)).
 - **Done means everything still passes.** Before the plan completes, Sentinel runs the checks of the done states again, two at a time, on the project as it is then. A check that fails twice reopens its state, and the plan goes back there.
 - **Stopping halfway is caught.** When a turn ends with the plan unfinished and nothing waiting on you or on background work, Sentinel tells Claude to continue, at most twice per state.
 
@@ -34,7 +34,63 @@ Sentinel labels each tool call by whether it moved the work forward. Over the la
 
 At `H ≤ 0.25` the run is stuck. Claude gets a note that names the pattern (cycle, drift or static), the file version it went back to and the failure that keeps coming back, with what to try next. The dashboard turns red and offers a field for your own hint, which reaches Claude with its next tool result, and a Pause button.
 
-## Flows
+## Library
+
+The Library holds what Sentinel adds to every plan: instructions, which are short texts Sentinel hands Claude at set moments, and flows, which are states that go into the plan itself. Sentinel ships built-ins of both. You switch any item on or off, write your own, and pick a weight that decides how much testing the built-ins ask for.
+
+### Weights
+
+| Weight | For | What the built-ins ask |
+| --- | --- | --- |
+| Light | quick work where speed matters more than proof | the fastest check that proves each state |
+| Standard (default) | most work | a failure list before the code, a check that fails before the work, every new test made to fail once |
+| Thorough | work that has to be right | Standard, plus a rerun of each check without the code change, an end-to-end run at the end, and no test deleted without a mutation run |
+
+Thorough is slower: `fails-without-change` runs a state's check up to twice more, in a scratch copy of the project.
+
+### Built-ins
+
+| Name | When | Kind | On at |
+| --- | --- | --- | --- |
+| `depth-before-size` | while Claude drafts a plan | told | Standard, Thorough |
+| `fast-checks` | as a state starts | told | Light |
+| `failure-list` | as a state starts | told | Standard, Thorough |
+| `fails-first` | as a state starts | Sentinel checks | Standard, Thorough |
+| `break-it-once` | before a state closes | told | Standard, Thorough |
+| `fails-without-change` | before a state closes | Sentinel checks | Thorough |
+| `prove-end-to-end` | before the plan completes | told | Thorough |
+| `measure-before-delete` | every turn | told | Thorough (needs a mutation-testing tool) |
+| `sources-first` | while Claude drafts a plan | told | off; switch it on for projects with a spec and designs |
+| `close-phase` (a flow) | at the end of a plan | flow | off |
+
+"Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
+
+`depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. You tick the ones you want as you lock it, on the dashboard or with `/sentinel lock <id> <id>`. A state that only an unticked answer names comes out.
+
+### Your own instructions
+
+An instruction is a JSON file named after it, in `.sentinel/instructions/` (project, committed) or `~/.sentinel/instructions/` (personal):
+
+```json
+{
+  "description": "Dashboard changes hold at every width.",
+  "at": "start",
+  "files": ["web/**"],
+  "text": "Check dashboard changes at 390, 860 and 1440 px, in light and dark."
+}
+```
+
+`at` is `draft`, `start`, `close`, `final` or `always`. `files` limits a `start` or `close` instruction to the states that edit them. Ask Claude for one in the chat or from the dashboard, write one in the dashboard's editor, or copy a built-in and change it; a file with a built-in's name takes its place.
+
+### Switches
+
+`.sentinel/library.json` holds the project's weight and switches and is committed, so a team shares them. `~/.sentinel/library.json` holds your default for every project. For each item the project's switch counts first, then yours, then the weight. Picking a weight clears that file's switches for the built-ins; your own items keep theirs, and they are on unless you switch them off. A flow that is off doesn't add itself by its rule, but you can still add it by hand.
+
+A plan keeps the set it was locked with. While you check a draft, the dashboard's "Instructions for this plan" changes that plan's copy, and "Also make it this project's default" writes it to the project's switches when you lock.
+
+A file Sentinel didn't save on this computer, such as one from a clone, stays off until you read it and type `/sentinel trust <name>` or press Trust on the dashboard.
+
+### Flows
 
 ![Claude drafts a flow, the user saves it, then adds it to a draft plan from the list view](docs/media/flows.webp)
 
@@ -53,11 +109,11 @@ A flow is a set of states you define once and add to plans: a review before a pu
 
 States take the same fields as a plan's. Tags fill in from the state the flow goes beside: `{{state.id}}`, `{{state.label}}`, `{{state.files}}` (as quoted globs in a check) and `{{plan.title}}`.
 
-**Getting one.** Ask Claude for a flow in the chat, or press Ask Claude for a flow on the dashboard's Flows page. Sentinel checks it the way it checks a plan and holds it until you choose: Save to project, Save personal or Discard, from the band above the prompt, the Flows page or `/sentinel flow save project|personal` and `/sentinel flow discard`. You can also write the file by hand, use the dashboard's editor (New flow), or tick tasks of any plan in the List view and press Make a flow of them.
+**Getting one.** Ask Claude for a flow in the chat, or press Ask Claude for a flow on the Flows tab of the dashboard's Library page. Sentinel checks it the way it checks a plan and holds it until you choose: Save to project, Save personal or Discard, from the band above the prompt, the Library page or `/sentinel flow save project|personal` and `/sentinel flow discard`. Instructions Claude drafts are kept the same way. You can also write the file by hand, use the dashboard's editor (New flow), or tick tasks of any plan in the List view and press Make a flow of them.
 
 **Adding one.** While you check a draft, `/sentinel add review after api` puts the flow in after the state `api` (`start`, `end` and `before <state>` work too). In the dashboard's List view, press the dashed square where it should go, pick a flow and press Add here. Its states go in as a group named after the flow, with ids of their own (`review-tests`). `/sentinel drop review`, or Remove on the group, takes it out. Only you add and remove flows, and they stay put when Claude revises the draft.
 
-**Rules.** A flow with `when` adds itself to each new plan Claude sends after a sign-off: after or before each state that edits the listed `files`, after or before every state when there are none, or once at the `start` or `end`. A rule adds a flow once per plan, and leaves drafts being revised and locked plans alone. A rule puts shell commands into plans nobody reads first, so it runs only from a flow file Sentinel saved on this computer that hasn't changed since. A flow that came with a clone, or that you or Claude wrote, can be added by hand, but its rule stays off until you read it and type `/sentinel flow trust <flow>` (or save it from Edit on the Flows page).
+**Rules.** A flow with `when` adds itself to each new plan Claude sends after a sign-off: after or before each state that edits the listed `files`, after or before every state when there are none, or once at the `start` or `end`. A rule adds a flow once per plan, and leaves drafts being revised and locked plans alone. A rule puts shell commands into plans nobody reads first, so it runs only from a flow file Sentinel saved on this computer that hasn't changed since. A flow that came with a clone, or that you or Claude wrote, can be added by hand, but its rule stays off until you read it and type `/sentinel trust <flow>` (or save it from Edit on the Library page).
 
 ## Install
 
@@ -85,18 +141,21 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel focus`, `map`, `ledger` | open the pane on that view |
 | `/sentinel browser` | open the dashboard in your browser |
 | `/sentinel lock` | sign off a plan agreed in chat or already under way; again to lock the draft |
+| `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked |
 | `/sentinel hands-free`, `hands-free off` | let Claude make the calls that would wait for you, or take them back |
 | `/sentinel pause`, `resume` | stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan |
 | `/sentinel skip <state> [reason]` | skip a state: Claude leaves it, and its check no longer runs before the plan completes |
 | `/sentinel reset` | drop the current plan |
 | `/sentinel parallel`, `parallel on`, `off` | say whether parallel states are on, or turn them on or off |
-| `/sentinel flows` | list your saved flows |
+| `/sentinel library` (or `flows`) | list the instructions and flows with their switches, and the weight |
+| `/sentinel on <name>`, `off <name>` | switch an item on or off for this project; add `personal` for your default |
+| `/sentinel weight light`, `standard`, `thorough` | pick the weight for this project; add `personal` for your default |
+| `/sentinel trust <name>` | turn on an instruction or flow file Sentinel didn't save (`flow trust` works too) |
 | `/sentinel add <flow> start`, `end`, `before <state>`, `after <state>` | add a flow to the draft |
 | `/sentinel drop <flow>` | take a flow out of the draft |
-| `/sentinel flow save project`, `save personal`, `discard` | keep or drop the flow Claude drafted |
-| `/sentinel flow trust <flow>` | turn on the rule of a flow file Sentinel didn't save |
+| `/sentinel flow save project`, `save personal`, `discard` | keep or drop the flow or instruction Claude drafted |
 
-Commands that change the plan or your flows run only when you type them, send them through Remote Control, or run them headless with `claude -p`. Run by Claude or another plugin, they are refused.
+Commands that change the plan or your Library run only when you type them, send them through Remote Control, or run them headless with `claude -p`. Run by Claude or another plugin, they are refused.
 
 Only you skip a state, with the command, by asking Claude, or with Skip on the state's task page. The one exception is hands-free, as above. A skipped state counts as done for the states that need it.
 
@@ -115,7 +174,7 @@ The plan is saved to `.sentinel/run.json` on every change. A new session starts 
 - **Where the time went** draws every tool call as a bar on its state's row, with health below and stuck stretches shaded.
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
-- **Flows** lists your saved flows, holds a flow Claude drafted, and has the editor.
+- **Library** has two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
 
 The pane in the terminal has three views, switched with `f`, `m` and `l`: Focus (the active state and its check runs), Map (the whole machine, health and log) and Ledger (every call with the arithmetic). `b` opens the dashboard.
 

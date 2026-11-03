@@ -26,6 +26,30 @@ export type FlowWhen = { at: 'start' | 'end' | 'before' | 'after'; files?: strin
 export type FlowState = { id: string; label: string; check?: string; files?: string[]; wait?: boolean | Wait; title?: string; problem?: string; approach?: string }
 export type FlowDef = { name: string; description?: string; when?: FlowWhen; states: FlowState[] }
 
+// An instruction: text Sentinel hands Claude at one moment. Saved as .sentinel/instructions/<name>.json (project) or
+// ~/.sentinel/instructions/<name>.json (personal). at: draft (while Claude drafts a plan), start (when a state that
+// edits files starts), close (before such a state closes; told at its start), final (before the plan completes),
+// always (every turn). files: for start and close, only the states that edit them.
+export type InstructionAt = 'draft' | 'start' | 'close' | 'final' | 'always'
+export type InstructionDef = { name: string; description?: string; at: InstructionAt; files?: string[]; text: string }
+// How much testing the built-ins carry. Each built-in says which weights turn it on.
+export type Weight = 'light' | 'standard' | 'thorough'
+// A switches file: .sentinel/library.json (the project's, committed) or ~/.sentinel/library.json (the user's default).
+// on: an item's switch by name, where it differs from its default.
+export type Switches = { weight?: Weight; on?: Record<string, boolean> }
+// What a plan was locked with: the weight, every item on by name, and the instructions Claude is told.
+export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[] }
+export type LibraryScope = 'built-in' | 'project' | 'personal'
+// One instruction as the dashboard shows it. kind: told (Claude reads the text) or checks (Sentinel acts itself).
+// runs: the check runs it adds per state; slow: they can take as long as the check. needs: what it depends on.
+export type LibraryItem = InstructionDef & {
+  scope: LibraryScope; title?: string; kind: 'told' | 'checks'; runs?: number; slow?: boolean; needs?: string
+  weights?: Weight[]; on: boolean; trusted: boolean; file?: string
+}
+// The Library as the dashboard reads it: the weight in force, both switches files as saved, the instructions, and
+// which flows are on (the flows themselves are in `flows`).
+export type LibraryView = { weight: Weight; project: Switches; personal: Switches; instructions: LibraryItem[]; flowsOn: Record<string, boolean> }
+
 export type Plan = {
   title: string
   states: StateDef[]
@@ -144,7 +168,17 @@ export type PlanInput = {
   topic?: string
   choice?: string
   kind?: string
+  // define: what the plan is locked with. Sentinel sets it; anything the model sends here is dropped.
+  library?: PlanLibrary
+  // define: the model's answers to "what would an expert do here", for the user to tick before the lock.
+  depth?: Depth[]
+  // flow: an instruction's text and moment, in place of states.
+  text?: string
+  at?: string
 }
+// An answer the user may tick. ask: the question it answers. state: a state of the draft that is there for it, taken
+// out at the lock unless the user ticks it.
+export type Depth = { id: string; text: string; ask?: 'expert' | 'raw' | 'methods' | 'proof'; state?: string }
 
 export type Run = {
   signedOff: boolean
@@ -188,6 +222,12 @@ export type Run = {
   review?: boolean
   // States whose check Sentinel ran once as they started, to see it fail before the work.
   startChecked?: string[]
+  // The instructions and switches the plan was locked with. A run saved before it existed behaves as Standard did:
+  // fails-first on, nothing told.
+  library?: PlanLibrary
+  // fails-without-change: the project as the active state's visit began, as a commit. state and enteredAt name the
+  // visit. An empty sha: the snapshot failed, and the log said so.
+  snap?: { state: string; enteredAt: number; sha: string }
   // The define behind a plan that isn't locked yet: one sent before any sign-off, which /sentinel lock drafts as it
   // is, or the one that made the draft, which revise changes.
   held?: PlanInput
@@ -216,8 +256,9 @@ export type Run = {
   // The helper agents that called tools while the plan ran, one lane each.
   lanes?: Lane[]
   draft?: Run
-  // A flow the model drafted for the user to save, and what they asked for, if they asked from the dashboard.
-  flowDraft?: FlowDef & { asked?: string }
+  // A flow or an instruction (it has text, not states) the model drafted for the user to save, and what they asked
+  // for, if they asked from the dashboard.
+  flowDraft?: (FlowDef | InstructionDef) & { asked?: string }
 }
 
 declare module 'claude-code' {

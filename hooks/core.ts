@@ -1,6 +1,6 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, FlowDef, FlowState, FlowWhen, Kind, Lane, LogLine, Member, Plan, PlanInput, Run, Spend, StateDef, Task, Tone, Trap, Trip, View, Wait } from '../types'
+import type { Audit, AuditKind, Call, Depth, FlowDef, FlowState, FlowWhen, InstructionAt, InstructionDef, Kind, Lane, LogLine, Member, Plan, PlanInput, Run, Spend, StateDef, Switches, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
 export type { PlanInput }
 
 export const K = 8 // window of recent calls the detector looks at
@@ -571,8 +571,9 @@ export type Proofs = Record<string, { pass: boolean; sigText: string }>
 const refuse = (r: Run, text: string): Acted => ({ run: r, text, ok: false })
 
 // now: the wall clock in ms, for the times on the task pages. typed: the user typed a prompt in this turn, or typed
-// /sentinel skip, or pressed Skip on the dashboard; only then may a state be skipped.
-export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = Date.now(), typed = false): Acted {
+// /sentinel skip, or pressed Skip on the dashboard; only then may a state be skipped. without: the rerun of the
+// active state's check without its code changes, for an advance.
+export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = Date.now(), typed = false, without?: Without): Acted {
   if (i.action === 'define') return define(r, i, t, proofs, now)
   if (i.action === 'revise') {
     const whole = revised(r, i)
@@ -586,7 +587,7 @@ export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = 
     if (r.paused) return refuse(r, 'The user paused Sentinel. Work as they ask; they resume the plan with /sentinel resume.')
     return refuse(r, r.active === 'done' ? 'The plan is complete. A new plan needs a new sign-off.' : 'No plan is locked.')
   }
-  if (i.action === 'advance') return advance(r, i, t, now, proofs)
+  if (i.action === 'advance') return advance(r, i, t, now, proofs, false, without)
   if (i.action === 'propose') return propose(r, i, t, now)
   if (i.action === 'skip') return skip(r, i, t, now, proofs, typed)
   if (i.action === 'amend') return amend(r, i, t)
@@ -657,7 +658,7 @@ function freeSkip(r: Run, id: string): string | undefined {
 const builtOn = (r: Run, id: string) => r.plan!.states.filter(s => s.needs?.includes(id) && !doneOf(r).includes(s.id)).map(s => s.id)
 
 // The draft's define with a revise applied: states in the new order, each the one sent or else the draft's own.
-// Loops, title, source, start and decisions stay unless sent. A string says why it can't be done.
+// Loops, title, source, start, decisions and depth stay unless sent. A string says why it can't be done.
 export function revised(r: Run, i: PlanInput): PlanInput | string {
   const base = r.draft && r.held
   if (!base) return 'There is no draft to revise. Send the whole plan with define.'
@@ -681,10 +682,12 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
   return {
     ...base, action: 'define', states: order.map(id => sent.get(id) ?? had.get(id)!), loops,
     title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions,
+    ...(i.depth ? { depth: i.depth } : {}),
   }
 }
 
-function here(r: Run): string {
+// final: say what the plan's instructions ask before it completes even when the active state isn't the last.
+function here(r: Run, final = false): string {
   const skipped = Object.keys(r.skipped ?? {})
   if (r.active === 'done') return `Plan complete.${skipped.length ? ` The user skipped ${skipped.join(', ')}.` : ''} Questions are open again.`
   const st = stateOf(r)
@@ -696,6 +699,8 @@ function here(r: Run): string {
       : waitOf(st) === 'after' ? 'The user reviews it when it is done: advance tells them, then stop your turn until they answer.' : '',
     `Files you may edit: ${st.files.length ? st.files.join(', ') : 'none in this state'}.`,
     st.ref ? `Details: ${st.ref}` : '',
+    // The final instructions come at the lock, and again once this is the last state left.
+    toldHere(r, st, final || r.plan!.states.every(s => s.id === st.id || doneOf(r).includes(s.id))),
   ].filter(Boolean).join('\n')
 }
 
@@ -765,6 +770,9 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
     if (!s.check && !given) return refuse(r, `${s.id} is listed as done but has no check, so it needs evidence: a commit, a test run, or what the user confirmed.`)
     states[k] = { ...s, evidence: [given, s.check && `\`${s.check}\` passed at the lock`].filter(Boolean).join('; ') }
   }
+  // The user ticks depth items only on a draft they lock themselves; a plan-mode sign-off locks at once.
+  const depth = r.review ? depthOf(i.depth, states) : []
+  if (typeof depth === 'string') return refuse(r, depth)
   const audit: Audit[] = []
   for (const d of i.decisions ?? []) {
     const topic = d.topic?.trim()
@@ -777,14 +785,33 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   const prior = states.slice(0, at).map(s => s.id)
   const log: LogLine[] = [{ t, icon: '●', tone: 'acc', text: `${r.review ? 'Drafted' : 'Plan locked'} · ${states.length} states, ${loops.length} loop${loops.length === 1 ? '' : 's'}` }]
   if (prior.length) log.push({ t, icon: '✓', tone: 'ok', text: `Done before the lock · ${prior.join(', ')}` })
-  const run: Run = { ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...keepCount(r), ...(r.flowDraft && !r.review ? { flowDraft: r.flowDraft } : {}) }
+  const run: Run = { ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...(i.library ? { library: i.library } : {}), ...keepCount(r), ...(r.flowDraft && !r.review ? { flowDraft: r.flowDraft } : {}) }
   const rail = `${states.map(s => s.id).join(' → ')} → done`
   const before = prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : ''
   if (r.review) {
-    const text = `Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes). Stop here and wait for them.`
-    return { run: { ...r, draft: run, held: i, quiet: true }, ok: true, event: 'drafted', text }
+    const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
+    const text = `Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
+    return { run: { ...r, draft: run, held: { ...i, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
-  return { run, ok: true, event: 'locked', text: `Locked "${plan.title}": ${rail}.${before}\n${here(run)}` }
+  return { run, ok: true, event: 'locked', text: `Locked "${plan.title}": ${rail}.${before}\n${here(run, true)}` }
+}
+
+// A draft's depth answers as the model sent them, checked. A string says what is wrong.
+const ASKS = ['expert', 'raw', 'methods', 'proof']
+function depthOf(raw: PlanInput['depth'], states: StateDef[]): Depth[] | string {
+  const out: Depth[] = []
+  for (const d of raw ?? []) {
+    const id = typeof d?.id === 'string' ? d.id.trim() : ''
+    if (!/^[A-Za-z0-9][\w-]*$/.test(id)) return `Bad depth id "${id}": use letters, digits, - and _, so the user can tick it with /sentinel lock <id>.`
+    if (out.some(x => x.id.toLowerCase() === id.toLowerCase())) return `Depth id "${id}" is used twice.`
+    const text = clip(d.text, 300)
+    if (!text) return `Depth item ${id} needs text: the answer the user ticks.`
+    if (d.ask !== undefined && !ASKS.includes(d.ask)) return `ask on depth item ${id} is expert, raw, methods or proof.`
+    const state = typeof d.state === 'string' ? d.state.trim() : ''
+    if (state && !states.some(s => s.id === state)) return `Depth item ${id} names "${state}", which is not one of the states. Send "depth" again as it should be.`
+    out.push({ id, text, ...(d.ask ? { ask: d.ask } : {}), ...(state ? { state } : {}) })
+  }
+  return out
 }
 
 // The checks of the states before `start`; define needs their results.
@@ -893,10 +920,15 @@ export function addFlow(held: PlanInput, f: FlowDef, where: Where, why: string):
 // The draft's define without one flow the user added: `as`, as its group shows it (review, review-2). States that
 // needed it need what it needed.
 export function dropFlow(held: PlanInput, as: string): PlanInput | string {
+  const gone = (held.states ?? []).filter(s => s.flow?.as === as).map(idOf)
+  return gone.length ? dropStates(held, gone) : `No flow "${as}" in the draft.`
+}
+
+// The draft's define without the states `gone`: states that needed them need what they needed, loops through them
+// go, and a start among them moves to the next state kept.
+export function dropStates(held: PlanInput, gone: string[]): PlanInput {
   const states = held.states ?? []
   const ids = states.map(idOf)
-  const gone = states.filter(s => s.flow?.as === as).map(idOf)
-  if (!gone.length) return `No flow "${as}" in the draft.`
   const defs = states.map(s => ({ ...s, id: idOf(s), files: s.files ?? [] })) as StateDef[]
   const outside = [...new Set(gone.flatMap(id => needsOf(defs, id)).filter(m => !gone.includes(m)))]
   const kept = states.filter(s => !gone.includes(idOf(s)))
@@ -929,6 +961,75 @@ export function withRules(i: PlanInput, flows: FlowDef[]): { input: PlanInput; a
     }
   }
   return { input, added, many }
+}
+
+// ---- the library ----
+
+const MOMENTS: readonly InstructionAt[] = ['draft', 'start', 'close', 'final', 'always']
+export const DEFAULT_WEIGHT: Weight = 'standard'
+
+// An instruction as the user saved it or the model sent it. A string says what is wrong.
+export function instructionOf(raw: unknown): InstructionDef | string {
+  const f = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const name = typeof f.name === 'string' ? f.name.trim() : ''
+  if (!FLOW_NAME.test(name)) return `Bad instruction name "${name}": use lowercase letters, digits and -.`
+  const at = f.at as InstructionAt
+  if (!MOMENTS.includes(at)) return `at in ${name} is draft, start, close, final or always.`
+  const text = clip(f.text, 2000)
+  if (!text) return `${name} needs text: what Sentinel tells Claude.`
+  const files = strings(f.files)
+  if (files.length && at !== 'start' && at !== 'close') return `files in ${name} apply only when at is start or close.`
+  const description = clip(f.description, 300)
+  return { name, ...(description ? { description } : {}), at, ...(files.length ? { files } : {}), text }
+}
+
+// Which items are on. A built-in lists the weights that turn it on; the user's own items list none and are on unless
+// switched off. A project that picks a weight takes the built-ins over: its switches and that weight decide them.
+// Otherwise the project's switch counts first, then the user's, then the user's weight (Standard when neither picked
+// one). An item that isn't trusted is off.
+export function libraryOn(items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[], project: Switches = {}, personal: Switches = {}): { weight: Weight; on: string[] } {
+  const weight = project.weight ?? personal.weight ?? DEFAULT_WEIGHT
+  const sw = (s: Switches, name: string) => (s.on && Object.hasOwn(s.on, name) ? s.on[name] : undefined)
+  const on = items.filter(it => it.trusted !== false && (it.weights
+    ? sw(project, it.name) ?? (project.weight ? undefined : sw(personal, it.name)) ?? it.weights.includes(weight)
+    : sw(project, it.name) ?? sw(personal, it.name) ?? true))
+  return { weight, on: on.map(it => it.name) }
+}
+
+// A switches file with a weight picked: the built-ins' switches go, so the weight sets them; the user's items keep theirs.
+export function withWeight(s: Switches, weight: Weight, builtins: readonly string[]): Switches {
+  const on = Object.fromEntries(Object.entries(s.on ?? {}).filter(([name]) => !builtins.includes(name)))
+  return { weight, ...(Object.keys(on).length ? { on } : {}) }
+}
+
+// The plan's told instructions for one moment. Start and close are for states that edit files: the instructions
+// without files, and those whose files meet the state's.
+export function toldFor(r: Run, at: InstructionAt, st?: StateDef): InstructionDef[] {
+  const told = (r.library?.told ?? []).filter(x => x.at === at)
+  if (at !== 'start' && at !== 'close') return told
+  if (!st?.files.length) return []
+  return told.filter(x => !x.files?.length || st.files.some(f => x.files!.some(g => globsMeet(f.trim(), g))))
+}
+
+const RULES_WIN = "Where the project's own rules (such as CLAUDE.md) differ from these, the project's rules win."
+const block = (head: string, xs: InstructionDef[]) => (xs.length ? [head, ...xs.map(x => `- ${x.text}`)].join('\n') : '')
+
+// What the plan's instructions say for `st` as it starts and before it closes, and with `final`, what they say before
+// the plan completes. A member hears it for its state too.
+export function toldHere(r: Run, st: StateDef, final = false): string {
+  const parts = [
+    block(`Your instructions for ${st.id}:`, toldFor(r, 'start', st)),
+    block(`Before you advance ${st.id}:`, toldFor(r, 'close', st)),
+    final ? block('Before the plan completes:', toldFor(r, 'final')) : '',
+  ].filter(Boolean)
+  return parts.length ? [...parts, RULES_WIN].join('\n') : ''
+}
+
+// The system prompt's Library section: the always instructions, and the draft ones while no plan is locked. The
+// dashboard previews this text. Empty when neither has any.
+export function librarySection(always: InstructionDef[], draft: InstructionDef[]): string {
+  const parts = [block('Every turn:', always), block('While you draft a plan:', draft)].filter(Boolean)
+  return parts.length ? [...parts, RULES_WIN].join('\n') : ''
 }
 
 export function lockDraft(r: Run, t: string, now = Date.now()): Run {
@@ -967,6 +1068,7 @@ export const knownPass = (r: Run, c: Call | undefined, check: string) =>
 export function startCheck(r: Run): string | undefined {
   const st = isLive(r) ? stateOf(r) : undefined
   if (!st?.check || !st.files.length || r.startChecked?.includes(st.id)) return undefined
+  if (r.library && !r.library.on.includes('fails-first')) return undefined
   return visitOf(r).some(c => c.kind === 'edit' && !c.denied) ? undefined : st.check
 }
 
@@ -984,9 +1086,45 @@ export function recordStart(r: Run, check: string, pass: boolean, t: string): { 
   }
 }
 
+// ---- fails-without-change ----
+
+// Test files by the usual names. The rerun without the change copies these in and leaves the rest out.
+export const TEST_GLOBS = ['**/*.test.*', '**/*.spec.*', '**/*_test.*', '**/test_*.*', '**/tests/**', '**/test/**', '**/__tests__/**']
+export const isTestFile = (rel: string) => TEST_GLOBS.some(g => globMatch(g, rel))
+
+// The visit's snapshot (Run.snap), if it is this visit's.
+const snapOf = (r: Run) => (r.snap?.state === r.active && r.snap.enteredAt === r.enteredAt ? r.snap : undefined)
+export const withSnap = (r: Run, sha: string): Run => ({ ...r, snap: { state: r.active!, enteredAt: r.enteredAt, sha } })
+
+// The active state needs its snapshot now: fails-without-change is on, the state has a check and files, and this visit
+// has no snapshot and no edit yet. A new visit, such as a return along a loop, takes a new one.
+export function snapWanted(r: Run): boolean {
+  const st = isLive(r) ? stateOf(r) : undefined
+  if (!st?.check || !st.files.length || !r.library?.on.includes('fails-without-change') || snapOf(r)) return false
+  return !visitOf(r).some(c => c.kind === 'edit' && !c.denied)
+}
+
+// What the rerun at a forward advance needs: the visit's snapshot, and the files edited in the visit as tests and code.
+// None without a snapshot, or once a decide in this visit says why the check can't fail without the change. A string
+// says why it is skipped.
+export function rerunOf(r: Run): { sha: string; tests: string[]; code: string[] } | string | undefined {
+  const st = stateOf(r)
+  const snap = snapOf(r)
+  if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.state === st.id && a.step > r.enteredAt)) return undefined
+  const files = [...new Set(visitOf(r).flatMap(c => (c.kind === 'edit' && !c.denied && c.file ? [c.file] : [])))]
+  const tests = files.filter(isTestFile)
+  const code = files.filter(f => !isTestFile(f))
+  if (!tests.length || !code.length) return `no ${tests.length ? 'code' : 'test'} files changed`
+  return { sha: snap.sha, tests, code }
+}
+
+// The rerun's answer: the check's result in the copy, with the files it kept and left out, or why it didn't run.
+export type Without = { pass: boolean; tests: string[]; code: string[] } | { skipped: string }
+
 // proofs: the results of the checks Sentinel ran first: of the done states fixed in this visit, and the final sweep's
-// when `to` is done. skipping: the user skipped the state, so nothing it asks for holds it.
-function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = {}, skipping = false): Acted {
+// when `to` is done. skipping: the user skipped the state, so nothing it asks for holds it. without: the rerun of the
+// check without the visit's code changes.
+function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = {}, skipping = false, without?: Without): Acted {
   const plan = r.plan!
   const st = stateOf(r)!
   const next = nextOf(r, st)
@@ -1022,6 +1160,13 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
       const why = [...new Set(broke.map(s => s.check!))].map(c => `\`${c}\` (${broke.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`)
       return refuse(r, `You changed files of done states, and their checks fail now:\n${why.join('\n')}\nFix that before moving on.`)
     }
+    if (without && 'pass' in without && without.pass) {
+      return {
+        run: { ...r, log: [...r.log, { t, icon: '!', tone: 'warn', text: `${st.id} · check passes without the change` }] }, ok: false,
+        text: `\`${st.check}\` passes in a copy of the project that has ${st.id}'s test changes (${without.tests.join(', ')}) but not its code changes (${without.code.join(', ')}), so it doesn't show the change works. `
+          + `Tighten the test so it fails without the change, then advance again. If it can't, such as a refactor that has to keep passing, record why with "decide", then advance again.`,
+      }
+    }
     // Finished work goes to the user once, and again if it changed after they saw it. Hands-free, it passes and is
     // listed for them to check later.
     const said = clip(outcome ?? evidence, 1500)
@@ -1040,6 +1185,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
         return { run, ok: false, text: `${st.id} is done, and the user reviews it before it moves on. They see your outcome above the prompt and on the dashboard. Say in your reply what was done and what they should check, then stop your turn and wait. Call advance again once they answer.` }
       }
     }
+    if (without && 'skipped' in without) r = { ...r, log: [...r.log, { t, icon: '–', tone: 'dim', text: `${st.id} · rerun without the change skipped: ${without.skipped}` }] }
   } else if (to !== next && !evidence) return refuse(r, `Going back along ${st.id} → ${to} needs a reason in evidence.`)
   // A loop to a state listed further on skips the states between, as the listed order did before needs. It can't
   // skip or land on a state a member is still doing.
@@ -1177,7 +1323,7 @@ function status(r: Run): string {
   if (!r.plan) return wait ?? (r.signedOff ? 'Signed off, but no plan is defined yet. Call define.' : 'No plan is locked.')
   const vm = summarize(r)
   const rail = vm.states.map(s => `${SYM[s.status]}${s.id}`).join(' ')
-  const lines = [`Plan "${r.plan.title}": ${rail}`, here(r)]
+  const lines = [`Plan "${r.plan.title}": ${rail}`, here(r, true)]
   if (r.paused) lines.push('Paused by the user: nothing is enforced until /sentinel resume.')
   if (r.plan.source) lines.push(`The plan is written in ${r.plan.source}.`)
   const decided = r.audit.filter(a => a.kind === 'decided')
@@ -1297,6 +1443,8 @@ export type VM = {
   // The checks Sentinel runs now.
   checking?: Run['checking']
   flowDraft?: Run['flowDraft']
+  // A draft's depth answers, which the user ticks as they lock it.
+  depth?: Depth[]
 }
 
 const base = (f: string) => f.split('/').pop() ?? f
@@ -1465,5 +1613,6 @@ export function summarize(top: Run): VM {
     ...(r.sweep && { sweep: r.sweep }),
     ...(phase === 'live' && r.checking?.length && { checking: r.checking }),
     ...(top.flowDraft && { flowDraft: top.flowDraft }),
+    ...(top.draft && top.held?.depth && { depth: top.held.depth }),
   }
 }
