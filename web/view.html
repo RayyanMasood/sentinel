@@ -952,6 +952,48 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 @keyframes spin { to { transform: rotate(1turn); } }
 
 /* Narrow screens */
+/* Where a state came from: its quotes, what Claude added, and the saved copy they were compared with. */
+.mini.need { background: var(--amber-soft); color: var(--amber); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber-fill) 55%, transparent); }
+ul.lst li { display: flex; gap: var(--s2); padding: 3px 0; color: var(--ink-2); font-size: 14px; line-height: 20px; }
+ul.lst li .ic { margin-top: 2px; flex: none; }
+ul.lst b { color: var(--ink); font-weight: 600; }
+ul.lst .lnk { font: inherit; color: var(--ink); }
+.m-ok .ic { color: var(--green); stroke-width: 2.4; } .m-warn .ic { color: var(--amber); }
+.quote { margin: 6px 0 0; padding: 8px 12px; border-radius: var(--r2); background: var(--sunk); color: var(--ink); font-size: 14.5px; line-height: 21px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.tp-main .quote { max-width: 66ch; font-size: 15.5px; line-height: 1.55; padding: 10px 14px; }
+.qsrc, .tp-main p.qsrc { margin-top: 6px; max-width: none; font: 500 13.5px/20px var(--f-disp); color: var(--ink-3); }
+.qsrc .lnk { font: inherit; color: var(--ink-2); }
+.qok .ic { width: 13px; height: 13px; margin-right: 5px; vertical-align: -2px; stroke-width: 2.4; }
+.askn { margin-top: var(--s3); padding: var(--s3) var(--s4); border-radius: var(--r2); background: var(--sunk); }
+.askn.open { background: var(--amber-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber-fill) 55%, transparent); }
+.askn-t { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--s2); }
+.askn-t b { font: 600 15px/20px var(--f-text); }
+.askn p { margin-top: 4px; color: var(--ink-2); font-size: 14.5px; line-height: 21px; overflow-wrap: anywhere; }
+.slip-b .askn .row { margin-top: var(--s3); }
+.askl { padding: 0 var(--s4) var(--s2); }
+.askl li { display: grid; grid-template-columns: minmax(64px, 120px) minmax(0, 170px) minmax(0, 1fr) minmax(0, 150px); gap: 2px var(--s4); align-items: baseline; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 14px; line-height: 20px; }
+.askl li:first-child { border-top: 0; }
+.askl code { overflow-wrap: anywhere; }
+.askl .al { font-weight: 600; color: var(--ink); }
+.askl .aq { color: var(--ink-2); overflow-wrap: anywhere; }
+.askl .lnk { justify-self: start; font: 500 13.5px/20px var(--f-disp); color: var(--ink-2); text-align: left; }
+#srcp > .panel + .panel { margin-top: var(--s4); }
+.doc { padding: var(--s5) var(--s6) var(--s6); }
+.doc-src { display: flex; flex-wrap: wrap; gap: var(--s3) 40px; padding-bottom: var(--s4); margin-bottom: var(--s4); border-bottom: 1px solid var(--hair); }
+.doc-src .fd b { font: 600 15.5px/22px var(--f-disp); white-space: normal; overflow-wrap: anywhere; }
+.doc h2 { font: 700 21px/1.25 var(--f-text); text-wrap: balance; overflow-wrap: anywhere; }
+.doc h3 { margin-top: var(--s5); font: 700 15.5px/22px var(--f-text); overflow-wrap: anywhere; }
+.doc h3:first-child { margin-top: 0; }
+.doc-p { display: grid; grid-template-columns: minmax(0, 66ch) minmax(0, 1fr); gap: var(--s2) var(--s6); align-items: start; margin-top: var(--s2); }
+.doc-p p { font-size: 15.5px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.doc-n { display: flex; flex-wrap: wrap; gap: 6px; }
+.doc-n:not(:empty) { margin-top: 6px; }
+.doc-p .doc-n:not(:empty) { margin-top: 0; }
+.doc-none { margin-top: 4px; font: 500 13.5px/20px var(--f-disp); color: var(--ink-3); overflow-wrap: anywhere; }
+mark.q { padding: 2px 3px; border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 9%, transparent); color: inherit; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+mark.q.on { background: color-mix(in srgb, var(--ink) 20%, transparent); box-shadow: 0 0 0 1px var(--ink-3); }
+.addl { display: grid; gap: var(--s2); font-size: 14.5px; line-height: 21px; color: var(--ink-2); overflow-wrap: anywhere; }
+
 @media (max-width: 1180px) {
   .grid, .fgrid { grid-template-columns: minmax(0, 1fr); }
   .grid > .side { position: static; max-height: none; overflow: visible; }
@@ -978,6 +1020,10 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
   .pl { padding: var(--s5); }
   .word, .count b { font-size: 34px; }
   .slip-b { grid-template-columns: minmax(0, 1fr); }
+  .askl li { grid-template-columns: minmax(64px, 120px) minmax(0, 1fr); }
+  .askl .aq, .askl .lnk { grid-column: 1 / -1; }
+  .doc { padding: var(--s4); }
+  .doc-p { grid-template-columns: minmax(0, 1fr); }
   .shell-in { padding: 0 var(--s4); gap: var(--s3); } .ptitle, .vsep, .fresh span { display: none; }
   .hscale { grid-template-columns: 1fr; }
   .hscale > div { border-left: 0; border-top: 1px solid var(--hair); }
@@ -1209,6 +1255,7 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
  </div>
  <div id="fed" hidden></div>
  <div id="ied" hidden></div>
+ <div id="srcp" hidden></div>
 </div>
 
 </main>
@@ -1450,6 +1497,12 @@ function stub(kind, n, done) {
       acts: [[first ? 'Approve and start' : 'Approve and go on', 'check', 'pri', 'approve'], ['Ask for changes', null, '', 'changes'], ['Approve and go hands-free', null, '', 'approveall']],
       fine: 'Hands-free, Claude makes the later calls that would wait for you, and lists them for you to check. Or reply in the chat; the first answer counts.' }
   }
+  const owed = kind === 'draft' ? unanswered() : []
+  if (owed.length) {
+    const many = owed.length > 1
+    return { k: 'Your sign-off', h: many ? `${owed.length} states need your answer` : 'One state needs your answer', p: `Keep or take out ${many ? 'the states' : 'the state'} Claude added, then lock the plan.`,
+      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which keeps ${many ? 'them' : 'it'}.` }
+  }
   if (kind === 'draft') return { k: 'Your sign-off', h: 'Check the draft, then lock it', p: 'Locking holds Claude to these states. Edits outside the running state\'s files are refused.',
     acts: [['Lock the plan', 'lock', 'pri', 'lock'], ['Ask for changes', null, '', 'changes'], ['Add a flow', 'plus', '', 'flowlist']], fine: `Or type ${code('/sentinel lock')} in the chat.` }
   if (kind === 'stuck') return { k: 'Needs you', h: `Claude is ${PATTERN[vm.trap.pattern]}`, p: 'Tell Claude what it may be missing, or pause the plan and take over.',
@@ -1501,11 +1554,11 @@ function pass() {
   $('count').textContent = $('slimC').textContent = count
   put($('fields'), fields(kind))
   put($('stub'), `<span class="stub-k">${s.k}</span><h2>${s.h}</h2>${s.p ? `<p>${s.p}</p>` : ''}`
-    + (s.acts?.length ? `<div class="acts">${s.acts.map(([l, ic, c, act]) => `<button type="button" class="btn ${c}" data-act="${act}">${ic ? icon(ic) : ''}${l}</button>`).join('')}</div>` : '')
+    + (s.acts?.length ? `<div class="acts">${s.acts.map(([l, ic, c, act, off]) => `<button type="button" class="btn ${c}" data-act="${act}"${off ? ' disabled' : ''}>${ic ? icon(ic) : ''}${l}</button>`).join('')}</div>` : '')
     + (s.fine ? `<p class="fine">${s.fine}</p>` : '')
     + (n && sendErr === n.key ? '<p class="fine err" role="alert">Sentinel didn\'t get that. The session may have ended, so answer in the chat.</p>' : ''))
   const pri = s.acts?.find(x => x[2] === 'pri')
-  put($('slimA'), pri ? `<button type="button" class="btn sm pri" data-act="${pri[3]}">${pri[0]}</button>` : '')
+  put($('slimA'), pri ? `<button type="button" class="btn sm pri" data-act="${pri[3]}"${pri[4] ? ' disabled' : ''}>${pri[0]}</button>` : '')
   $('ptitle').textContent = $('ptitle').title = vm.title
   // The plan file shows its name; the tooltip has the whole path.
   const signed = vm.phase === 'draft' ? 'Draft' : `Signed off at ${vm.lockedAt}`
@@ -1587,12 +1640,13 @@ const SLIP = {
       + chgBox('sendchg', 'Say what to change, and why.') + '</div>'
   },
   draft() {
-    const ts = tasks(), waits = ts.filter(s => s.wait).map(s => code(s.id)), fl = [...new Set(ts.filter(s => s.flow).map(s => s.flow.as))]
-    return `<div class="slip-h"><h2>Before you lock it</h2>${vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
-      + `<div class="slip-b"><div><h3>What locking does</h3><p>Claude works through the ${ts.length} states${par() && vm.deps ? ', running some side by side in member agents once what they need is done' : ' in order'}. `
-      + `A state with a check ends when the check exits 0. The others end when Claude moves on${waits.length ? `, and ${and(waits)} ${waits.length > 1 ? 'end' : 'ends'} on your OK` : ''}. Edits outside a state's listed files are refused while it runs.</p></div>`
-      + `<div><h3>Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p></div>`
-      + depthBlock() + planInsBlock()
+    const ts = tasks(), waits = ts.filter(s => s.wait).map(s => code(s.id)), fl = [...new Set(ts.filter(s => s.flow).map(s => s.flow.as))], where = whereFrom(), from = vm.proof?.of ? vm.proof.sources[0] : undefined
+    const locking = `<h3>What locking does</h3><p>Claude works through the ${ts.length} states${par() && vm.deps ? ', running some side by side in member agents once what they need is done' : ' in order'}. `
+      + `A state with a check ends when the check exits 0. The others end when Claude moves on${waits.length ? `, and ${and(waits)} ${waits.length > 1 ? 'end' : 'ends'} on your OK` : ''}. Edits outside a state's listed files are refused while it runs.</p>`
+    const flows = `Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p>`
+    return `<div class="slip-h"><h2>Before you lock it</h2>${from ? `<span class="quiet">From ${esc(srcName(from))}. ${esc(from.origin)}.</span>` : vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
+      + `<div class="slip-b">${where ? `${where}<div>${locking}<h3 class="gap">${flows}</div>` : `<div>${locking}</div><div><h3>${flows}</div>`}`
+      + quotesBlock() + depthBlock() + planInsBlock()
       + chgBox('draftchg', 'For example: split a state into the route and its tests.') + '</div>'
   },
   stuck() {
@@ -1605,6 +1659,36 @@ const SLIP = {
       + '<div class="chg"><label class="label" for="try">What should Claude try?</label><textarea class="field" id="try" maxlength="2000" placeholder="What Claude may be missing, or what to try next."></textarea>'
       + '<div class="row"><button type="button" class="btn pri" data-act="hint" disabled>Send to Claude</button><button type="button" class="btn" data-act="pause">Pause the plan</button></div></div></div>'
   },
+}
+
+// Where the draft's states came from: the count, the sections nothing quotes, and each state Claude added, to keep or take out.
+const unanswered = () => tasks().filter(s => s.added && !s.okAt)
+function addedRow(s) {
+  const st = esc(s.id), kept = s.okAt
+  return `<div class="askn${kept ? '' : ' open'}"><div class="askn-t">${code(s.id)}<b>${esc(s.title || s.label)}</b><span class="mini${kept ? '' : ' need'}">Claude added</span></div>`
+    + `<p>${kept ? `You kept it at ${esc(kept)}.` : 'Nothing asked for this.'} Claude's reason: “${esc(s.added)}”</p>`
+    + `<div class="row">${kept ? '' : `<button type="button" class="btn sm pri" data-act="keepadded" data-st="${st}">Keep it</button>`}<button type="button" class="btn sm${kept ? ' ghost' : ''}" data-act="dropadded" data-st="${st}">Take it out</button></div></div>`
+}
+function whereFrom() {
+  const p = vm.proof
+  if (!p?.of) return ''
+  const notes = p.sources.filter(s => s.unquoted.length).map(s => {
+    const many = s.unquoted.length > 1
+    return `<li class="m-warn">${icon('warn')}<span><b>${esc(and(s.unquoted))}</b> ${many ? 'are' : 'is'} in ${esc(srcName(s))}, but no state quotes ${many ? 'them' : 'it'}. <button type="button" class="lnk" data-src="@gap">Show me</button></span></li>`
+  })
+  return `<div><h3>Where the states came from</h3><ul class="lst">`
+    + `<li class="${p.quoted ? 'm-ok' : 'm-warn'}">${icon(p.quoted ? 'check' : 'warn')}<span><b>${p.quoted} of ${p.of} states</b> quote what you approved or typed, word for word. Sentinel compared them, with no model involved.${p.sources.length ? ' <button type="button" class="lnk" data-src="">See the saved copy</button>' : ''}</span></li>`
+    + `${notes.join('')}</ul>${tasks().filter(s => s.added).map(addedRow).join('')}</div>`
+}
+// The quotes stay folded until opened, and stay open while the draft changes under them.
+let quotesOpen = false
+function quotesBlock() {
+  const ss = tasks().filter(s => s.asks?.length), n = ss.reduce((a, s) => a + s.asks.length, 0)
+  if (!vm.proof || !n) return ''
+  return `<div class="wide"><details class="help" id="askRows"${quotesOpen ? ' open' : ''}><summary>See ${n > 1 ? `the ${n} quotes` : 'the quote'}</summary><ul class="askl">${ss.map(s => {
+    const q = s.asks.find(x => x.source !== undefined)
+    return `<li>${code(s.id)}<span class="al">${esc(s.title || s.label)}</span><span class="aq">${s.asks.map(x => esc(x.quote)).join(' ')}</span>${q ? `<button type="button" class="lnk" data-src="${esc(s.id)}">${esc(q.where || 'The saved copy')}</button>` : ''}</li>`
+  }).join('')}</ul></details></div>`
 }
 
 // Claude's answers to "what would an expert do here", for the user to tick. One that names a state takes that state out
@@ -1655,7 +1739,7 @@ function askReady() {
 }
 
 async function send(body, done) {
-  const n = need(), btns = [...document.querySelectorAll('#stub button, #slip button, #slimA button')]
+  const n = need(), btns = [...document.querySelectorAll('#stub button, #slip button, #slimA button')].filter(b => !b.disabled)
   btns.forEach(b => (b.disabled = true))
   const ok = await post(body)
   btns.forEach(b => (b.disabled = false))
@@ -1708,10 +1792,12 @@ function onAct(e) {
     const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
     return planSend(w, pl.on.filter(n => !ins.some(i => i.weights && i.name === n)).concat(ins.filter(i => i.weights?.includes(w) && i.trusted !== false).map(i => i.name)))
   }
+  if (act === 'keepadded' || act === 'dropadded') return send({ kind: act, draft: vm.draftKey, state: b.dataset.st })
   if (act === 'draftchg') return send({ kind: 'draft', text: text('chg') }, { q: 'The draft', ans: 'Changes asked for', where: 'Check the draft again once it changes.' })
   if (act === 'pause' || act === 'resume') return send({ kind: act, state: a })
 }
 for (const id of ['pass', 'slip', 'slimA']) $(id).addEventListener('click', onAct)
+$('slip').addEventListener('toggle', e => { if (e.target.id === 'askRows') quotesOpen = e.target.open }, true)
 // A picked option clears the typed answer, and typing clears a picked option, on questions that take one answer.
 $('slip').addEventListener('change', e => {
   const t = e.target
@@ -2714,10 +2800,15 @@ function modelsSec() {
 }
 const logSec = () => sec('Log', vm.log.length ? `<div class="log">${vm.log.map(l => `<div${l.tone === 'err' ? ' class="bad"' : ''}><span>${esc(l.t)} </span>${esc(l.text)}</div>`).join('')}</div>` : '<p class="quiet none">Nothing yet.</p>')
 
+// At the finish, what no one asked for, and your answer if you gave one.
+const addedSec = () => {
+  const ss = vm.phase === 'complete' ? tasks().filter(s => s.added) : []
+  return ss.length ? sec('Claude added along the way', `<ul class="addl">${ss.map(s => `<li><button type="button" class="idl" data-task="${esc(s.id)}">${code(s.id)}</button> ${esc(s.added)}${s.okAt ? ` You kept it at ${esc(s.okAt)}.` : ''}</li>`).join('')}</ul>`) : ''
+}
 // The log keeps to its newest line unless you scrolled up in it.
 function side() {
   const el = $('side'), lg = el.querySelector('.log'), end = !lg || lg.scrollTop >= lg.scrollHeight - lg.clientHeight - 4, at = lg?.scrollTop
-  put(el, nowSec() + membersSec() + helpersSec() + upNextSec()
+  put(el, nowSec() + addedSec() + membersSec() + helpersSec() + upNextSec()
     + sec('Decided without asking you', feed('audit', vm.audit, 'Nothing yet. Choices the model makes alone show up here.', a => ['decided', 'refused', 'blocked'].includes(a.kind) ? '' : (KIND[a.kind] ?? [cap(a.kind)])[0]))
     + sec('Asked you', feed('asked', vm.asked, 'Nothing yet. Sentinel holds questions unless a change would break something.', a => a.kind === 'escalated' ? 'Flagged' : ''))
     + modelsSec() + logSec())
@@ -2925,7 +3016,12 @@ addEventListener('popstate', () => {
   m ? showTask(unhash(m[1])) : hideTask(true)
 })
 addEventListener('keydown', e => { if (e.key === 'Escape' && detailId) $('tpBack')?.click() })
-$('p-run').addEventListener('click', e => { const b = e.target.closest('[data-task]'); if (b && b.dataset.task) openTask(b.dataset.task) })
+$('p-run').addEventListener('click', e => {
+  const src = e.target.closest('[data-src]')
+  if (src) return openSource(src.dataset.src)
+  const b = e.target.closest('[data-task]')
+  if (b && b.dataset.task) openTask(b.dataset.task)
+})
 
 function renderDetail() {
   const T = tasks(), i = T.findIndex(s => s.id === detailId), s = T[i]
@@ -2946,6 +3042,22 @@ function renderDetail() {
     $('skipSaid').textContent = ok ? 'Sent. Sentinel skips it and tells Claude.' : "Sentinel didn't get that. The session may have ended, so ask in the chat."
     sk.disabled = ok
   }
+}
+
+// What asked for this state, in its source's own words, or why Claude added it. The rest of the page is Claude's description.
+function askedFor(s) {
+  const p = vm.proof, asks = s.asks ?? []
+  if (!p || (!asks.length && !s.added)) return ''
+  const owed = vm.phase === 'draft' && s.added && !s.okAt
+  return '<h3>Asked for</h3>'
+    + (s.added ? `<p><span class="mini${owed ? ' need' : ''}">Claude added</span> Nothing asked for this. Claude's reason: “${esc(s.added)}”</p>`
+      + (s.okAt ? `<p class="qsrc">You kept it on the draft at ${esc(s.okAt)}.</p>` : owed ? '<p class="qsrc">Keep it or take it out on the draft card.</p>' : '')
+      + (s.look ? `<p class="qsrc">It asks you first, because it could involve ${esc(s.look)}.</p>` : '') : '')
+    + asks.map(q => {
+      const from = p.sources[q.source]
+      return `<blockquote class="quote">${esc(q.quote)}</blockquote>` + (from ? `<p class="qsrc">${[from.kind === 'message' ? '' : q.where, from.origin].filter(Boolean).map(esc).join('. ')}.</p>` : '')
+    }).join('')
+    + (asks.some(q => q.source !== undefined) ? `<p class="qsrc qok">${icon('check')}Sentinel found these exact words in its saved copy. <button type="button" class="lnk" data-src="${esc(s.id)}">Open the saved copy</button></p>` : '')
 }
 
 function taskPage(s, i, T) {
@@ -2983,12 +3095,13 @@ function taskPage(s, i, T) {
     + (into.length ? `<p>The plan allows a way back here from ${and(into.map(l => code(l.from) + used(l)))}.</p>` : '')
     + (outof.length ? `<p>From here the plan allows a way back to ${and(outof.map(l => code(l.to) + used(l)))}.</p>` : '')
   const along = [...vm.audit, ...vm.asked].filter(a => a.state === s.id).sort((a, b) => a.step - b.step)
+  const tried = (vm.proof?.refused ?? []).filter(x => x.state === s.id)
   // Only you skip a state: Claude leaves it, and its check no longer runs before the plan completes.
   const skip = vm.phase === 'live' && online() && !s.skipped && s.status !== 'running'
     ? `<div class="skip"><label class="label" for="skipWhy">${s.status === 'done' ? 'Skip its check' : 'Skip this state'}. Why? (optional)</label><div class="row"><input class="field" id="skipWhy" maxlength="500" placeholder="Claude sees this reason"><button type="button" class="btn" data-skip>${s.status === 'done' ? 'Skip its check' : 'Skip it'}</button></div>
       <p class="fine" id="skipSaid">${s.status === 'done' ? 'Its work stays. Its check no longer runs before the plan completes.' : 'Claude leaves it. It counts as done for the states that need it.'}</p></div>` : ''
   const done = s.check ? `<code class="blk">${esc(s.check)}</code><p class="fine">Sentinel runs this when Claude says the state is done. Exit code 0 means it passed.</p>` : s.wait === 'after' ? '' : '<p>Claude says so. There is no check to run.</p>'
-  const files = s.files || [], kick = [s.group && s.group.split('/').join(' / '), s.ref && 'Plan: ' + s.ref].filter(Boolean).join(' · ')
+  const files = s.files || [], kick = [s.group && s.group.split('/').join(' / '), !vm.proof && s.ref && 'Plan: ' + s.ref].filter(Boolean).join(' · ')
   return `<div class="tp-bar"><button type="button" class="btn sm" id="tpBack">${icon('back')}Back to the plan</button><span class="sp"></span>
       <span class="pg">${i + 1} of ${T.length}</span><button type="button" class="btn sm" data-task="${esc(T[i - 1]?.id ?? '')}"${i ? '' : ' disabled'}>Previous</button><button type="button" class="btn sm" data-task="${esc(T[i + 1]?.id ?? '')}"${T[i + 1] ? '' : ' disabled'}>Next</button></div>
     <article class="tp">
@@ -2999,12 +3112,13 @@ function taskPage(s, i, T) {
       ${runbar}
       <div class="tp-cols">
         <div class="tp-main">
+          ${askedFor(s)}
           <h3>Why it's needed</h3>${s.problem ? `<p>${ticks(s.problem)}</p>` : `<p class="quiet">No description was written for this state. Its label is “${esc(s.label)}”.</p>`}
           ${s.approach ? `<h3>The approach</h3><p>${ticks(s.approach)}</p>` : ''}
           ${s.outcome ? `<h3>What was done</h3><p>${ticks(s.outcome)}</p>` : s.status === 'done' ? `<h3>What was done</h3>${s.evidence ? `<p>Already done when the plan was locked. Evidence: ${ticks(s.evidence)}</p>` : '<p class="quiet">No summary was written when this state finished.</p>'}` : ''}
           <h3>Where it stands</h3><p>${stand}</p>${skip}
           ${vm.deps && s.needs?.length ? `<h3>What it needs</h3><p>${and(s.needs.map(code))}. ${s.waits?.length ? `Still waiting for ${and(s.waits.map(code))}.` : s.needs.length === 1 ? 'It is done.' : 'All of them are done.'}</p>` : ''}
-          <h3>Along the way</h3>${along.length ? `<ul class="tlist">${along.map(a => `<li><time>${esc(a.t ?? '')}</time><span><b class="k-${esc(a.kind)}">${esc((KIND[a.kind] ?? [cap(a.kind)])[0])}</b> <span class="quiet">at call ${a.step}</span><br>${ticks(a.text)}</span></li>`).join('')}</ul>` : '<p class="quiet">Nothing was decided, asked or refused here.</p>'}
+          <h3>Along the way</h3>${along.length || tried.length ? `<ul class="tlist">${tried.map(x => `<li><time>${esc(x.t)}</time><span><b class="k-refused">Refused</b><br>${x.quote ? `“${esc(x.quote)}” ` : ''}${esc(x.says)}.</span></li>`).join('')}${along.map(a => `<li><time>${esc(a.t ?? '')}</time><span><b class="k-${esc(a.kind)}">${esc((KIND[a.kind] ?? [cap(a.kind)])[0])}</b> <span class="quiet">at call ${a.step}</span><br>${ticks(a.text)}</span></li>`).join('')}</ul>` : '<p class="quiet">Nothing was decided, asked or refused here.</p>'}
           <h3>Ways back</h3>${ways}
         </div>
         <aside class="tp-side">
@@ -3171,19 +3285,86 @@ function heard() {
   return s
 }
 
+// ---- the source: Sentinel's saved copy, with each quoted passage marked ----
+
+const srcName = s => s.name ?? (s.kind === 'message' ? 'your message' : 'the approved plan')
+let srcAt = ''
+function openSource(focus) {
+  history.pushState({ pushed: true }, '', '#source' + (focus ? '-' + focus : ''))
+  route()
+}
+// The words between two offsets, as written, with the quoted parts marked. Quotes can overlap, so each run of characters
+// is marked once, and picked out if the state being looked at quotes it.
+function marked(s, from, to, focus) {
+  const ms = s.marks.filter(m => m.from < to && m.to > from)
+  const cuts = [...new Set([from, to, ...ms.flatMap(m => [m.from, m.to]).filter(x => x > from && x < to)])].sort((a, b) => a - b)
+  const runs = []
+  cuts.slice(0, -1).forEach((c, i) => {
+    const bit = esc(s.text.slice(c, cuts[i + 1])), by = ms.filter(m => m.from <= c && m.to > c), cls = by.length ? `q${by.some(m => m.state === focus) ? ' on' : ''}` : ''
+    if (runs.at(-1)?.cls === cls) runs.at(-1).bit += bit
+    else runs.push({ cls, bit })
+  })
+  return runs.map(r => r.cls ? `<mark class="${r.cls}">${r.bit}</mark>` : r.bit).join('')
+}
+const chipsFor = (s, from, to) => [...new Set(s.marks.filter(m => m.from < to && m.to > from).map(m => m.state))].map(id => {
+  const st = byId(id), k = st ? stOf(st) : 'ahead'
+  return `<button type="button" class="tc ${k}" data-task="${esc(id)}" aria-label="Open ${esc(id)}"><span class="box ${k}"></span>${esc(id)}</button>`
+}).join('')
+function srcDoc(s, focus) {
+  let at = 0, fence = false, html = ''
+  for (const raw of s.text.split('\n')) {
+    const from = at, to = at + raw.trimEnd().length
+    at += raw.length + 1
+    if (from === to) continue
+    const h = !fence && /^(#{1,6})[ \t]+(.+?)[ \t]*#*$/.exec(raw.trimEnd())
+    if (/^\s*(```|~~~)/.test(raw)) fence = !fence
+    if (h) {
+      const start = from + raw.indexOf(h[2]), tag = h[1].length < 2 ? 'h2' : 'h3'
+      html += `<${tag}>${marked(s, start, start + h[2].length, focus)}</${tag}>` + (s.gaps.includes(from) ? '<p class="doc-none" data-gap>No state quotes this section.</p>' : '')
+    } else html += `<div class="doc-p"><p>${marked(s, from, to, focus)}</p><div class="doc-n">${chipsFor(s, from, to)}</div></div>`
+  }
+  return html
+}
+function renderSrc() {
+  const el = $('srcp'), p = vm.proof, focus = unhash(location.hash.slice(8))
+  const head = `<div class="phead"><div><h1 class="caps">The source</h1><p>Sentinel's saved copy. Later edits to the file change nothing here.</p></div><span class="sp"></span><button type="button" class="btn" id="srcBack">${icon('back')}Back</button></div>`
+  if (!p?.sources.length) return put(el, head + '<section class="panel doc"><p>This plan has no saved source.</p></section>')
+  const f = (lab, v) => `<div class="fd"><span class="label">${lab}</span><b>${v}</b></div>`
+  const msgs = p.sources.filter(s => s.kind === 'message'), adds = tasks().filter(s => s.added)
+  put(el, head
+    + p.sources.filter(s => s.kind !== 'message').map(s => `<article class="panel doc"><div class="doc-src">${f('Source', esc(s.name ?? cap(srcName(s))))}${f('Where it came from', esc(s.origin))}${f('Quoted by', `${s.quotedBy} of ${p.of} states`)}${s.unquoted.length ? f('Sections no state quotes', s.unquoted.length) : ''}</div>${srcDoc(s, focus)}</article>`).join('')
+    + (msgs.length ? `<section class="panel doc" id="srcMsgs"><h3>Your messages, as typed</h3>${msgs.map(s => `<blockquote class="quote">${marked(s, 0, s.text.length, focus)}</blockquote><p class="qsrc">${esc(s.origin)}.</p><div class="doc-n">${chipsFor(s, 0, s.text.length)}</div>`).join('')}</section>` : '')
+    + (adds.length ? `<section class="panel doc" id="srcAdded"><h3>Claude added</h3>${adds.map(s => `<p class="doc-none">${code(s.id)} has no quote. Claude added it because: ${esc(s.added)}${s.okAt ? ` You kept it at ${esc(s.okAt)}.` : ''}</p>`).join('')}</section>` : ''))
+  // Arriving at a state or a gap brings it into view, once.
+  if (srcAt !== location.hash) {
+    srcAt = location.hash
+    if (focus) el.querySelector(focus === '@gap' ? '[data-gap]' : 'mark.on')?.scrollIntoView({ block: 'center' })
+  }
+}
+$('srcp').addEventListener('click', e => {
+  const t = e.target.closest('[data-task]')
+  if (t) {
+    history.pushState({ task: t.dataset.task, pushed: true }, '', '#task-' + t.dataset.task)
+    route()
+    return showTask(t.dataset.task)
+  }
+  if (e.target.closest('#srcBack')) return history.state?.pushed ? history.back() : go('')
+})
+
 function go(hash) {
   if (location.hash !== hash) history.pushState(null, '', hash || location.pathname + location.search)
   route()
 }
 function route() {
   const was = fview, h = location.hash
-  fview = h === '#library' || h === '#flows' ? 'lib' : /^#flow-./.test(h) ? 'edit' : /^#ins-./.test(h) ? 'iedit' : null
+  fview = h === '#library' || h === '#flows' ? 'lib' : /^#flow-./.test(h) ? 'edit' : /^#ins-./.test(h) ? 'iedit' : /^#source(-.+)?$/.test(h) ? 'source' : null
   if (fview === 'lib') libTab = h === '#flows' ? 'flows' : 'ins'
   if (fview !== 'edit' || ed?.hash !== h) { ed = null; $('fed').replaceChildren() }
   if (fview !== 'iedit' || ie?.hash !== h) { ie = null; $('ied').replaceChildren() }
   if (fview && detailId) { detailId = lastTask = null; planBack() }
-  flowsPage()
   if (fview !== was) scrollTo(0, 0)
+  if (fview !== 'source') srcAt = ''
+  flowsPage()
 }
 
 function flowsPage() {
@@ -3196,8 +3377,10 @@ function flowsPage() {
   $('flib').hidden = fview !== 'lib'
   $('fed').hidden = fview !== 'edit'
   $('ied').hidden = fview !== 'iedit'
+  $('srcp').hidden = fview !== 'source'
   if (fview === 'lib') renderLib()
   else if (fview === 'edit') renderEd()
+  else if (fview === 'source') renderSrc()
   else renderIe()
 }
 
@@ -3205,7 +3388,7 @@ function flowsPage() {
 function navTabs() {
   const needs = !!vm && (!!vm.ask || vm.phase === 'draft' || vm.phase === 'live' && !!(vm.trap || vm.waiting))
   document.querySelectorAll('.nav [data-page]').forEach(b => {
-    const cur = (b.dataset.page === 'flows') === !!fview
+    const cur = (b.dataset.page === 'flows') === (!!fview && fview !== 'source')
     if (cur) b.setAttribute('aria-current', 'page')
     else b.removeAttribute('aria-current')
   })

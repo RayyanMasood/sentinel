@@ -16,6 +16,18 @@ You approve a plan in plan mode, or agree on one in the chat and type `/sentinel
 - **Done means everything still passes.** Before the plan completes, Sentinel runs the checks of the done states again, two at a time, on the project as it is then. A check that fails twice reopens its state, and the plan goes back there.
 - **Stopping halfway is caught.** When a turn ends with the plan unfinished and nothing waiting on you or on background work, Sentinel tells Claude to continue, at most twice per state.
 
+## Proof each state was asked for
+
+A plan can drift from what you asked for, or pick up work nobody requested. So each state quotes the words that asked for it, and Sentinel compares them itself, with code and no model. The words must match exactly; only spacing and formatting marks are ignored.
+
+- **What counts as a source.** The plan you approved in plan mode, files from before this session, and the messages you typed. A file Claude wrote in this session doesn't count until you approve it in plan mode. `/sentinel lock` doesn't count as approving it, because you see the draft there and not the file's text.
+- **A quote that isn't there goes back to Claude.** So does one under 5 words (unless it is your whole message), one over 60, or one from a part of the plan marked out of scope. Claude gets the nearest passage and sends the plan again. You have nothing to do, and the refusal stays on that state's record.
+- **A state with nothing to quote shows as Claude's addition, with its reason.** On a draft it waits for you: Keep it or Take it out in the terminal or on the dashboard, and Lock opens once all are answered. `/sentinel lock` keeps any you haven't answered, and a plan-mode sign-off with an addition in it waits as a draft.
+- **A state added during the run goes in and finishes.** It stays marked as Claude's addition, and it stops for your OK only if it could involve a dependency change, CI or deploy config, a migration, or auth code.
+- **A section nothing quotes gets a note.** A section can be background, so this doesn't stop the plan. Sections named as context, overview, risks and similar get no note.
+
+Sentinel keeps its own copy of each source, so later edits to a file change nothing. Only the messages a quote uses are written to disk or shown on the page. `/sentinel source` prints the saved copy with each quote marked. This is the `quote-the-source` built-in, on at every weight.
+
 ## Your OK, or hands-free
 
 ![A state waits for approval; the user goes hands-free and Claude makes those calls, each listed for later](docs/media/free.webp)
@@ -55,6 +67,7 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 | Name | When | Kind | On at |
 | --- | --- | --- | --- |
 | `depth-before-size` | while Claude drafts a plan | told | Standard, Thorough |
+| `quote-the-source` | while Claude drafts a plan | Sentinel checks | Light, Standard, Thorough |
 | `fast-checks` | as a state starts | told | Light |
 | `failure-list` | as a state starts | told | Standard, Thorough |
 | `fails-first` | as a state starts | Sentinel checks | Standard, Thorough |
@@ -65,7 +78,7 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 | `sources-first` | while Claude drafts a plan | told | off; switch it on for projects with a spec and designs |
 | `close-phase` (a flow) | at the end of a plan | flow | off |
 
-"Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
+"Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `quote-the-source` compares each state's quote with its sources (see [Proof each state was asked for](#proof-each-state-was-asked-for)). `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
 
 `depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. You tick the ones you want as you lock it, on the dashboard or with `/sentinel lock <id> <id>`. A state that only an unticked answer names comes out.
 
@@ -144,6 +157,7 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel browser` | open the dashboard in your browser |
 | `/sentinel lock` | sign off a plan agreed in chat or already under way; again to lock the draft |
 | `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked |
+| `/sentinel source` | print the saved copy of what the plan quotes, with each quote marked |
 | `/sentinel hands-free`, `hands-free off` | let Claude make the calls that would wait for you, or take them back |
 | `/sentinel pause`, `resume` | stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan |
 | `/sentinel skip <state> [reason]` | skip a state: Claude leaves it, and its check no longer runs before the plan completes |
@@ -172,11 +186,13 @@ The plan is saved to `.sentinel/run.json` on every change. A new session starts 
 - **The header** says what the run is doing and how many states are done, in a colour you can read from across the room, such as red while stuck and green when done.
 - **What needs you** sits under it whenever something waits on you, and answers it from the page: a question's options as cards, Approve and Ask for changes for a state, a hint and Pause for a stuck run, Resume, or Lock for a draft. The first answer counts, from the page or the chat. The tab's title and icon change while something waits, and notifications can tell you when the tab is in the background.
 - **Plan** draws the machine three ways: a Map that wraps and folds groups to fit, One line, and a List you can copy from, where flows are added.
-- **Task pages** open from any state: why it is needed, the approach, what was done, where it stands and what happened along the way. Claude writes that text in plain words with each state (`title`, `problem`, `approach`, and an `outcome` when it moves on); it is never sent back to Claude.
+- **Task pages** open from any state. Asked for comes first: the state's quotes in full and where they came from, or Claude's reason if it added the state. Then why it is needed, the approach, what was done, where it stands and what happened along the way, including any quote Sentinel refused. Claude writes that text in plain words with each state (`title`, `problem`, `approach`, and an `outcome` when it moves on); it is never sent back to Claude.
+- **The source page** shows Sentinel's saved copy with each quote marked and the state that quotes it beside it, a note on each section nothing quotes, the messages a quote uses, and what Claude added. Task pages and the draft card link to it.
 - **Where the time went** draws every tool call as a bar on its state's row, with health below and stuck stretches shaded.
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
 - **Library** has two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
+- **The draft card** also says how many states quote their source, notes the sections nothing quotes, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
 
 The pane in the terminal has three views, switched with `f`, `m` and `l`: Focus (the active state and its check runs), Map (the whole machine, health and log) and Ledger (every call with the arithmetic). `b` opens the dashboard.
 
@@ -209,6 +225,11 @@ States that run side by side each pass their own check, but nothing tests them t
 - Plan mode sign-off locks straight away, so a flow goes into such a plan only by its rule. To place one by hand, use `/sentinel lock`.
 - Flow rules and `define` compare file globs as text, so two globs that could cover the same file without matching each other, such as `src/*.ts` and `src/a*`, don't count as overlapping.
 - Parallel states need a git repository with at least one commit, and snapshotting a large one is slow. Member agents end with the session that started them.
+- The quote comparison only shows the words are in the source. It can't tell whether the state does what they say. A five-word quote that leaves out an earlier "not" still passes.
+- The stop for a state added during the run reads its file patterns. A broad one such as `src/**` that later reaches a sign-in file doesn't stop. A public API change or deleted data still relies on Claude flagging it with `escalate`.
+- A state Claude marks as part of a flow in a `define` skips the comparison. States added during a run can't use that mark.
+- A new plan-mode sign-off while a plan runs replaces that plan's saved sources until the new draft locks.
+- In `claude -p`, a prompt doesn't count as a typed message, so quotes need a file from before the session or a plan-mode approval. Checks run through the Bash tool as `(cd <root> && <check>); echo ...`, so a narrow allow rule such as `Bash(node:*)` doesn't cover them and `advance` is refused.
 - Claude Code only for now. The state machine and detector in `hooks/core.ts` have no engine dependency, so other agents could reuse them.
 
 ## Develop

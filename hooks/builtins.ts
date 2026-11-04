@@ -26,6 +26,10 @@ export const BUILTINS: readonly Builtin[] = [
       + 'Tests written after the code to raise coverage end up restating it.',
   },
   {
+    name: 'quote-the-source', title: 'Each state quotes what asked for it', at: 'draft', kind: 'checks', weights: ['light', 'standard', 'thorough'],
+    text: "Sentinel compares each state's quote with the plan you approved and the messages you typed, word for word and with no model. A quote that isn't there is refused, and a state nothing asked for shows as Claude's addition.",
+  },
+  {
     name: 'fails-first', title: 'Check fails before the work', at: 'start', kind: 'checks', runs: 1, weights: ['standard', 'thorough'],
     text: "Sentinel runs the state's check once before any edit. If it already passes, Claude is told the check proves nothing yet and tightens it.",
   },

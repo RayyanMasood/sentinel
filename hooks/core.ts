@@ -1,6 +1,7 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, FlowDef, FlowState, FlowWhen, InstructionAt, InstructionDef, Kind, Lane, LogLine, Member, Plan, PlanInput, Run, Spend, StateDef, Switches, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import type { Audit, AuditKind, Call, Depth, FlowDef, FlowState, FlowWhen, InstructionAt, InstructionDef, Kind, Lane, LogLine, Member, Plan, PlanInput, Refused, Run, Source, Spend, StateDef, Switches, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import { checkQuote, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 export type { PlanInput }
 
 export const K = 8 // window of recent calls the detector looks at
@@ -208,8 +209,8 @@ export const memberByAgent = (r: Run, agent?: string) => (agent ? members(r).fin
 // Counted from the sign-off until the plan is complete, whether it runs or is paused.
 export const counting = (r: Run) => r.signedOff || !!r.draft || isUnfinished(r)
 
-// A sign-off with nothing under way starts a new count.
-export const freshCount = (r: Run, at: string): Partial<Run> => (counting(r) ? {} : { spend: [], spendFrom: at })
+// A sign-off with nothing under way starts a new count, and the finished plan's sources end with it.
+export const freshCount = (r: Run, at: string): Partial<Run> => (counting(r) ? {} : { spend: [], spendFrom: at, sources: undefined, refused: undefined })
 
 // A run rebuilt at the lock keeps the count it had.
 const keepCount = (r: Run): Partial<Run> => (r.spend ? { spend: r.spend, spendFrom: r.spendFrom } : {})
@@ -328,6 +329,20 @@ export function relPath(root: string, file: string): string | undefined {
   if (wt) return wt[1]
   if (!/^([a-z]:)?\//i.test(f)) return f.replace(/^\.\//, '')
   return f.toLowerCase().startsWith(r.toLowerCase() + '/') ? f.slice(r.length + 1) : undefined
+}
+
+// A path as the session's list of written files keeps it: absolute, forward slashes, no . or .. parts, lower-cased on
+// Windows (a drive letter shows it). A file in a member's worktree counts as the project's, where its work comes back.
+export function pathKey(root: string, file: string): string {
+  const rel = relPath(root, file)
+  const abs = rel === undefined ? file.replace(/\\/g, '/') : `${root.replace(/\\/g, '/').replace(/\/$/, '')}/${rel}`
+  const parts: string[] = []
+  for (const p of abs.split('/')) {
+    if (p === '..') parts.pop()
+    else if (p !== '.' && (p || !parts.length)) parts.push(p)
+  }
+  const key = parts.join('/')
+  return /^[a-z]:\//i.test(key) ? key.toLowerCase() : key
 }
 
 // The model often writes absolute paths. Scope matches project-relative ones, and the views read better with them.
@@ -576,6 +591,7 @@ const refuse = (r: Run, text: string): Acted => ({ run: r, text, ok: false })
 export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = Date.now(), typed = false, without?: Without): Acted {
   if (i.action === 'define') return define(r, i, t, proofs, now)
   if (i.action === 'revise') {
+    if (addsMidRun(r)) return addStates(r, i, t)
     const whole = revised(r, i)
     if (typeof whole === 'string') return refuse(r, whole)
     const a = define(r, whole, t, proofs, now)
@@ -681,7 +697,7 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
   if (cut) return `The loop ${cut.join(' → ')} ends at a state the new order leaves out. Send "loops" as they should be.`
   return {
     ...base, action: 'define', states: order.map(id => sent.get(id) ?? had.get(id)!), loops,
-    title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions,
+    title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions, named: i.named, messages: i.messages,
     ...(i.depth ? { depth: i.depth } : {}),
   }
 }
@@ -699,9 +715,196 @@ function here(r: Run, final = false): string {
       : waitOf(st) === 'after' ? 'The user reviews it when it is done: advance tells them, then stop your turn until they answer.' : '',
     `Files you may edit: ${st.files.length ? st.files.join(', ') : 'none in this state'}.`,
     st.ref ? `Details: ${st.ref}` : '',
+    askedLine(st),
     // The final instructions come at the lock, and again once this is the last state left.
     toldHere(r, st, final || r.plan!.states.every(s => s.id === st.id || doneOf(r).includes(s.id))),
   ].filter(Boolean).join('\n')
+}
+
+// What a state came from, handed back as it starts: Claude rereads what was asked just before doing the work.
+export const askedLine = (st: StateDef) =>
+  st.asked?.length ? `Asked for: ${st.asked.map(q => `"${q}"`).join(' ')}` : st.added ? `Nothing asked for this; you added it because: ${st.added}` : ''
+
+const MAX_QUOTE_WORDS = 60
+const MAX_REFUSED = 30
+const shown = (q: string) => clip(q, 240)!
+const REFUSALS: Record<Exclude<Refused['why'], 'none'>, (q: string) => string> = {
+  missing: q => `"${shown(q)}" isn't in the sources, word for word.`,
+  short: q => `"${shown(q)}" is too short to count: quote at least ${MIN_WORDS} words, or a whole message.`,
+  excluded: q => `"${shown(q)}" comes from a part of the plan marked out of scope, so it doesn't show this was asked for.`,
+  empty: q => `"${shown(q)}" has no words in it.`,
+  long: q => `"${shown(q)}" is over ${MAX_QUOTE_WORDS} words. Quote the sentence that asks for this state.`,
+}
+// A refusal first: the rarer verdict says more than "missing" from every other source does.
+const RANK: Record<string, number> = { missing: 0, short: 1, excluded: 2, empty: 3 }
+
+// Each state says where it came from, and Sentinel compares the words itself. A state a flow put in is the user's own, one
+// done before the lock has nothing left to prove, and one that is only there for a depth answer goes if they leave it unticked.
+// Sets asked or added on `states`. used: the sources to keep, which take a typed message only if a quote needs it.
+function proofOf(i: PlanInput, states: StateDef[], at: number, depth: Depth[], kept: Source[], t: string): { used: Source[]; refused: Refused[]; text: string } {
+  const typed: Source[] = (i.messages ?? []).map(m => ({ kind: 'message' as const, text: m.text, at: m.at })).reverse()
+  const docs = [...kept, ...typed]
+  const used = [...kept]
+  const refused: Refused[] = []
+  const lines: string[] = []
+  const exempt = new Set([...states.slice(0, at).map(s => s.id), ...states.filter(s => s.flow).map(s => s.id), ...depth.flatMap(d => d.state ?? [])])
+  for (const [k, st] of states.entries()) {
+    if (exempt.has(st.id)) continue
+    const sent = i.states![k]!
+    const asked = Array.isArray(sent.asked) ? sent.asked.filter((q): q is string => typeof q === 'string' && !!q.trim()).map(q => q.trim()) : []
+    if (!asked.length) {
+      const added = clip(sent.added, 300)
+      if (added) states[k] = { ...st, added }
+      else {
+        refused.push({ state: st.id, why: 'none', t })
+        lines.push(`- ${st.id} has neither "asked" nor "added".`)
+      }
+      continue
+    }
+    states[k] = { ...st, asked }
+    for (const q of asked) {
+      let why: Refused['why'] = squash(q).split(' ').length > MAX_QUOTE_WORDS ? 'long' : 'missing'
+      const from = why === 'long' ? undefined : docs.find(d => {
+        const v = checkQuote(d.text, q)
+        if (v !== 'ok' && RANK[v]! > RANK[why]!) why = v
+        return v === 'ok'
+      })
+      if (from) {
+        if (!used.includes(from)) used.push(from)
+        continue
+      }
+      // What goes on the record is saved, so its nearest passage comes from what is saved already, never an unused message.
+      const near = why === 'missing' ? nearest(kept.map(d => d.text).join('\n'), q) : ''
+      const told = why === 'missing' ? nearest(docs.map(d => d.text).join('\n'), q) : ''
+      refused.push({ state: st.id, quote: shown(q), why, ...(near ? { nearest: near } : {}), t })
+      lines.push(`- ${st.id}: ${REFUSALS[why](q)}${told ? ` Nearest: "${shown(told)}".` : ''}`)
+    }
+  }
+  const text = [
+    docs.length ? "Sentinel compared each state's quotes with the sources and refused these:" : 'There is nothing to compare quotes with yet: no approved plan, readable file or typed message.',
+    ...lines,
+    `Copy the words exactly, capitals too. The plan approved in plan mode, files from before this session and the user's typed messages count. A file you wrote in this session doesn't count until the user approves it in plan mode. If nothing asked for a state, send "added" with your reason, and it shows as your addition. Then send it again.`,
+  ].join('\n')
+  return { used, refused, text }
+}
+
+// The sources a define starts from: what a plan-mode sign-off saved, or a draft's own. A draft made while a plan runs
+// takes none of that plan's, which stay on the run until the draft locks.
+// ponytail: an approval followed by /sentinel lock while a plan runs loses the approved text, since nothing tells it from
+// the running plan's sources; mark the sign-off's sources if that route shows up.
+export const keptSources = (r: Run): Source[] | undefined => (!r.review ? r.sources : r.draft ? r.draft.sources : isUnfinished(r) ? undefined : r.sources)
+
+// One state as sent. A string says what is wrong. proofOf sets asked and added; okAt and look are Sentinel's own.
+function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | string {
+  const id = (s.id ?? '').trim()
+  if (!/^[A-Za-z0-9][\w-]*$/.test(id) || id === 'done') return `Bad state id "${id}": use letters, digits, - and _, and not "done".`
+  const check = s.check?.trim()
+  const ref = s.ref?.trim()
+  const group = s.group?.trim()
+  const title = clip(s.title, 80)
+  const problem = clip(s.problem)
+  const approach = clip(s.approach)
+  const needs = s.needs && [...new Set(s.needs.map(n => n.trim()).filter(Boolean))]
+  if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`
+  if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`
+  const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
+  const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
+}
+
+// What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
+function statesProblem(states: StateDef[], done: string[] = []): string | undefined {
+  const index = (id: string) => states.findIndex(s => s.id === id)
+  const twice = states.find((s, k) => index(s.id) < k)
+  if (twice) return `State id "${twice.id}" is used twice.`
+  for (const s of states) {
+    const unknown = s.needs?.find(n => index(n) < 0)
+    if (unknown) return `${s.id} needs "${unknown}", which is not one of the states.`
+  }
+  const circle = states.filter(s => upstream(states, s.id).has(s.id)).map(s => s.id)
+  if (circle.length) return `The needs go round in a circle through ${circle.join(', ')}. A state can't wait for itself.`
+  for (const [k, s] of states.entries()) {
+    const later = s.needs?.find(n => index(n) > k)
+    if (later) return `${s.id} needs ${later}, which is listed after it. One at a time, states run in the listed order, so list ${later} before ${s.id}.`
+  }
+  // Two states where neither needs the other can run at the same time, so they can't share files.
+  for (const [k, a] of states.entries()) {
+    if (done.includes(a.id)) continue
+    for (const b of states.slice(k + 1)) {
+      if (done.includes(b.id) || upstream(states, b.id).has(a.id)) continue
+      const f = a.files.find(x => b.files.some(y => globsMeet(x, y)))
+      if (f) return `${a.id} and ${b.id} can run at the same time (neither needs the other), and both may edit ${f}. Make one need the other, or split the files between them.`
+    }
+  }
+  return undefined
+}
+
+function loopsFrom(raw: PlanInput['loops'], states: StateDef[]): [string, string][] | string {
+  const loops: [string, string][] = []
+  for (const l of raw ?? []) {
+    const [from, to] = l
+    const known = (id?: string) => states.some(s => s.id === id)
+    if (!from || !to || from === to || !known(from) || !known(to)) return `Bad loop ${JSON.stringify(l)}: both ends must be different state ids.`
+    loops.push([from, to])
+  }
+  return loops
+}
+
+// A plan that runs can gain a state only while the comparison is on, since that is what shows where the state came from.
+export const addsMidRun = (r: Run) => isLive(r) && !r.draft && !!r.library?.on.includes('quote-the-source')
+
+// What a state's globs can reach on the breaking list: the glob itself, or a wide one over a path on it.
+// ponytail: src/** can still reach src/auth/x.ts without a stop; check at the edit if that bites.
+const BREAKING_SAMPLES = ['package.json', '.github/x.yml', '.env', 'migrations/x.sql', 'auth/x.ts']
+const reachOf = (files: string[]) => files.map(f => breakingKind(f) ?? breakingKind(BREAKING_SAMPLES.find(p => globMatch(f, p)) ?? '')).find(Boolean)
+
+const FIXED_MID_RUN = ['title', 'source', 'start', 'decisions', 'depth'] as const
+
+// States added while the plan runs. The rest stays as the user locked it and the work carries on: a state with a quote
+// goes in, one Claude added goes in tagged with its reason, and that one stops at its start if it can reach a risky path.
+function addStates(r: Run, i: PlanInput, t: string): Acted {
+  const had = r.plan!.states
+  const ids = had.map(s => s.id)
+  const order = (i.order ?? []).map(id => id.trim())
+  if (!order.length) return refuse(r, 'revise needs "order": every state id of the plan, in order.')
+  const fixed = FIXED_MID_RUN.find(k => i[k] !== undefined)
+  if (fixed) return refuse(r, `While a plan runs, revise only adds states, so "${fixed}" can't change.`)
+  const sent = i.states ?? []
+  const fresh: StateDef[] = []
+  for (const s of sent) {
+    // A flow's state skips the comparison because it is the user's own, and only the user adds those.
+    const st = stateFrom({ ...s, flow: undefined })
+    if (typeof st === 'string') return refuse(r, st)
+    if (ids.includes(st.id)) return refuse(r, `${st.id} is already in the plan. While a plan runs, revise only adds states; amend changes the active one.`)
+    if (!order.includes(st.id)) return refuse(r, `"${st.id}" is in states but not in order. Add it to order, or leave it out of states.`)
+    fresh.push(st)
+  }
+  const unknown = order.find(id => !ids.includes(id) && !fresh.some(s => s.id === id))
+  if (unknown !== undefined) return refuse(r, `${unknown} is not in the plan. Send it whole in states.`)
+  if (order.filter(id => ids.includes(id)).join() !== ids.join()) return refuse(r, 'While a plan runs, revise only adds states, so order keeps every state of the plan in its place. Only the user skips one.')
+  if (!fresh.length) return refuse(r, 'Nothing to add: states has no new state. amend changes the active one.')
+  const last = Math.max(...[r.active!, ...Object.keys(r.running ?? {})].map(id => order.indexOf(id)))
+  if (fresh.some(s => order.indexOf(s.id) < last)) return refuse(r, 'New states go after the active state and any state a member is working on.')
+  const inOrder = () => order.map(id => fresh.find(s => s.id === id) ?? had.find(s => s.id === id)!)
+  const problem = statesProblem(inOrder(), doneOf(r))
+  if (problem) return refuse(r, problem)
+  const more = loopsFrom(i.loops, inOrder())
+  if (typeof more === 'string') return refuse(r, more)
+  const proof = proofOf({ ...i, states: sent }, fresh, 0, [], r.sources ?? [], t)
+  if (proof.refused.length) return refuse({ ...r, refused: [...(r.refused ?? []), ...proof.refused].slice(-MAX_REFUSED) }, proof.text)
+  for (const [k, s] of fresh.entries()) {
+    const look = s.added ? reachOf(s.files) : undefined
+    if (look) fresh[k] = { ...s, wait: 'before', look }
+  }
+  const was = r.plan!.loops
+  const run: Run = {
+    ...r, ...(proof.used.length ? { sources: proof.used } : {}),
+    plan: { ...r.plan!, states: inOrder(), loops: [...was, ...more.filter(l => !was.some(o => o[0] === l[0] && o[1] === l[1]))] },
+    audit: [...r.audit, ...fresh.map(s => ({ step: r.step + 1, t, state: s.id, kind: 'amended' as const, text: s.added ? `Added ${s.id} with nothing asking for it: ${s.added}` : `Added ${s.id}, asked for: "${s.asked![0]}"` }))],
+    log: [...r.log, ...fresh.map(s => ({ t, icon: '+', tone: 'dim' as const, text: `Added ${s.id}${s.added ? ' · nothing asked for it' : ''}${s.look ? ' · asks you first' : ''}` }))],
+  }
+  const looks = fresh.filter(s => s.look).map(s => `${s.id} asks the user before it starts, because it could involve ${s.look}.`)
+  return { run, ok: true, text: [`Added ${fresh.map(s => s.id).join(', ')} to the plan: ${order.join(' → ')} → done.`, ...looks, here(run)].join('\n') }
 }
 
 function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): Acted {
@@ -714,49 +917,15 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   }
   const states: StateDef[] = []
   for (const s of i.states ?? []) {
-    const id = (s.id ?? '').trim()
-    if (!/^[A-Za-z0-9][\w-]*$/.test(id) || id === 'done') return refuse(r, `Bad state id "${id}": use letters, digits, - and _, and not "done".`)
-    if (states.some(x => x.id === id)) return refuse(r, `State id "${id}" is used twice.`)
-    const check = s.check?.trim()
-    const ref = s.ref?.trim()
-    const group = s.group?.trim()
-    const title = clip(s.title, 80)
-    const problem = clip(s.problem)
-    const approach = clip(s.approach)
-    const needs = s.needs && [...new Set(s.needs.map(n => n.trim()).filter(Boolean))]
-    if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return refuse(r, `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`)
-    if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return refuse(r, `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`)
-    const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
-    const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-    states.push({ id, label: s.label?.trim() || id, ...(check ? { check } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) })
+    const st = stateFrom(s)
+    if (typeof st === 'string') return refuse(r, st)
+    states.push(st)
   }
   if (!states.length) return refuse(r, 'A plan needs at least one state.')
-  const index = (id: string) => states.findIndex(s => s.id === id)
-  for (const s of states) {
-    const unknown = s.needs?.find(n => index(n) < 0)
-    if (unknown) return refuse(r, `${s.id} needs "${unknown}", which is not one of the states.`)
-  }
-  const circle = states.filter(s => upstream(states, s.id).has(s.id)).map(s => s.id)
-  if (circle.length) return refuse(r, `The needs go round in a circle through ${circle.join(', ')}. A state can't wait for itself.`)
-  for (const [k, s] of states.entries()) {
-    const later = s.needs?.find(n => index(n) > k)
-    if (later) return refuse(r, `${s.id} needs ${later}, which is listed after it. One at a time, states run in the listed order, so list ${later} before ${s.id}.`)
-  }
-  // Two states where neither needs the other can run at the same time, so they can't share files.
-  for (const [k, a] of states.entries()) {
-    for (const b of states.slice(k + 1)) {
-      if (upstream(states, b.id).has(a.id)) continue
-      const f = a.files.find(x => b.files.some(y => globsMeet(x, y)))
-      if (f) return refuse(r, `${a.id} and ${b.id} can run at the same time (neither needs the other), and both may edit ${f}. Make one need the other, or split the files between them.`)
-    }
-  }
-  const loops: [string, string][] = []
-  for (const l of i.loops ?? []) {
-    const [from, to] = l
-    const known = (id?: string) => states.some(s => s.id === id)
-    if (!from || !to || from === to || !known(from) || !known(to)) return refuse(r, `Bad loop ${JSON.stringify(l)}: both ends must be different state ids.`)
-    loops.push([from, to])
-  }
+  const problem = statesProblem(states)
+  if (problem) return refuse(r, problem)
+  const loops = loopsFrom(i.loops, states)
+  if (typeof loops === 'string') return refuse(r, loops)
   const start = i.start?.trim()
   const at = start ? states.findIndex(s => s.id === start) : 0
   if (at < 0) return refuse(r, `start "${start}" is not one of the states.`)
@@ -773,6 +942,19 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   // The user ticks depth items only on a draft they lock themselves; a plan-mode sign-off locks at once.
   const depth = r.review ? depthOf(i.depth, states) : []
   if (typeof depth === 'string') return refuse(r, depth)
+  const kept = [...(keptSources(r) ?? []), ...(i.named ? [i.named] : [])]
+  const proof = i.library?.on.includes('quote-the-source') ? proofOf(i, states, at, depth, kept, t) : undefined
+  if (proof?.refused.length) return refuse({ ...r, refused: [...(r.refused ?? []), ...proof.refused].slice(-MAX_REFUSED) }, proof.text)
+  // A state nothing asked for waits for the user's answer, even on a plan they approved. An answer they gave on this
+  // draft stands while the reason stays the same.
+  const additions = states.filter(s => s.added).map(s => s.id)
+  const drafting = r.review || additions.length > 0
+  if (r.review) {
+    for (const [k, s] of states.entries()) {
+      const was = r.draft?.plan?.states.find(x => x.id === s.id)
+      if (s.added && was?.okAt && was.added === s.added) states[k] = { ...s, okAt: was.okAt }
+    }
+  }
   const audit: Audit[] = []
   for (const d of i.decisions ?? []) {
     const topic = d.topic?.trim()
@@ -783,15 +965,17 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   const source = i.source?.trim()
   const plan: Plan = { title: i.title?.trim() || 'Plan', states, loops, lockedAt: t, ...(source ? { source } : {}) }
   const prior = states.slice(0, at).map(s => s.id)
-  const log: LogLine[] = [{ t, icon: '●', tone: 'acc', text: `${r.review ? 'Drafted' : 'Plan locked'} · ${states.length} states, ${loops.length} loop${loops.length === 1 ? '' : 's'}` }]
+  const log: LogLine[] = [{ t, icon: '●', tone: 'acc', text: `${drafting ? 'Drafted' : 'Plan locked'} · ${states.length} states, ${loops.length} loop${loops.length === 1 ? '' : 's'}` }]
   if (prior.length) log.push({ t, icon: '✓', tone: 'ok', text: `Done before the lock · ${prior.join(', ')}` })
-  const run: Run = { ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...(i.library ? { library: i.library } : {}), ...keepCount(r), ...(r.flowDraft && !r.review ? { flowDraft: r.flowDraft } : {}) }
+  const sources = proof?.used ?? kept
+  const run: Run = { ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...(i.library ? { library: i.library } : {}), ...(sources.length ? { sources } : {}), ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft && !drafting ? { flowDraft: r.flowDraft } : {}) }
   const rail = `${states.map(s => s.id).join(' → ')} → done`
   const before = prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : ''
-  if (r.review) {
+  if (drafting) {
     const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
-    const text = `Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
-    return { run: { ...r, draft: run, held: { ...i, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
+    const waits = r.review ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`
+    const text = `${waits}Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
+    return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
   return { run, ok: true, event: 'locked', text: `Locked "${plan.title}": ${rail}.${before}\n${here(run, true)}` }
 }
@@ -1032,11 +1216,21 @@ export function librarySection(always: InstructionDef[], draft: InstructionDef[]
   return parts.length ? [...parts, RULES_WIN].join('\n') : ''
 }
 
+// The user keeps a state Claude added on the draft. A second answer doesn't move the first one's time.
+export function keepAdded(r: Run, id: string, t: string): Run {
+  const d = r.draft
+  const st = d?.plan?.states.find(s => s.id === id)
+  if (!d || !st?.added || st.okAt) return r
+  return { ...r, draft: { ...d, plan: { ...d.plan!, states: d.plan!.states.map(s => (s === st ? { ...s, okAt: t } : s)) } } }
+}
+
 export function lockDraft(r: Run, t: string, now = Date.now()): Run {
   const d = r.draft!
   // The clock starts at the lock, not at the draft.
   const tasks = Object.fromEntries(Object.entries(d.tasks ?? {}).map(([id, k]) => [id, { ...k, visits: k.visits.map(v => ({ ...v, from: now })) }]))
-  return { ...d, plan: { ...d.plan!, lockedAt: t }, startedAt: now, tasks, log: [...d.log, { t, icon: '●', tone: 'acc', text: 'Locked by the user' }], ...keepCount(r), ...(r.flowDraft ? { flowDraft: r.flowDraft } : {}) }
+  // A lock keeps what the user hasn't answered.
+  const states = d.plan!.states.map(s => (s.added && !s.okAt ? { ...s, okAt: t } : s))
+  return { ...d, plan: { ...d.plan!, lockedAt: t, states }, startedAt: now, tasks, log: [...d.log, { t, icon: '●', tone: 'acc', text: 'Locked by the user' }], ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft ? { flowDraft: r.flowDraft } : {}) }
 }
 
 // The main conversation's next state: the first in the listed order with no member whose needs are all done once
@@ -1401,7 +1595,7 @@ export type VM = {
   // ms: time in the visits that are over, so a running task adds Date.now() - since. visits: how often it was entered.
   // needs: every state it needs, the one before it when it lists none. waits: those not done yet.
   // skipped: why the user skipped it; it still shows as done.
-  states: (StateDef & { status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
+  states: (StateDef & { asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
   // Some state lists its needs, so the views show what each one needs.
   deps: boolean
   loops: { from: string; to: string; count: number; hot: boolean }[]
@@ -1445,9 +1639,78 @@ export type VM = {
   flowDraft?: Run['flowDraft']
   // A draft's depth answers, which the user ticks as they lock it.
   depth?: Depth[]
+  // Where the states came from, while the plan compares quotes. quoted of of: states with a quote, of those with a quote
+  // or Claude's reason, as a flow's state and one done before the lock have neither.
+  proof?: { quoted: number; of: number; sources: SourceFact[]; refused: (Refused & { says: string })[] }
 }
 
-const base = (f: string) => f.split('/').pop() ?? f
+const base = (f: string) => f.split(/[\\/]/).pop() ?? f
+
+// source: its place in proof.sources. where: in words, for a screen to show.
+export type AskFact = { quote: string; source?: number; where?: string }
+// A saved source as the screens draw it. marks: character offsets in text. unquoted: its sections no state quotes. gaps: where those sections' headings start.
+export type SourceFact = { kind: Source['kind']; name?: string; at: string; origin: string; text: string; marks: { from: number; to: number; state: string }[]; unquoted: string[]; gaps: number[]; quotedBy: number }
+
+// Why a quote was refused, for a screen to put after the quote.
+const REFUSED_SAYS: Record<Refused['why'], string> = {
+  missing: "wasn't in the sources, word for word", short: 'was too short to count', excluded: 'came from a part of the plan marked out of scope',
+  empty: 'had no words in it', long: `was over ${MAX_QUOTE_WORDS} words`, none: 'Claude sent neither a quote nor a reason',
+}
+
+const ORIGIN: Record<Source['kind'], (s: Source) => string> = {
+  message: s => `You typed it at ${s.at}`,
+  file: () => 'A file that was there before this session',
+  approved: s => `Claude wrote it and you approved it at ${s.at}`,
+}
+
+// Where the plan's states came from. Only a source a quote uses goes out, and the approved plan, which the screens name
+// even when nothing quotes it. The pane draws often and the comparison reads each whole source, so a plan works this out once.
+// ponytail: sources changing alone keeps the old facts until the plan changes; only a new sign-off while a plan runs does that.
+const FACTS = new WeakMap<Plan, { asks: Map<string, AskFact[]>; sources: SourceFact[] }>()
+function factsOf(plan: Plan, saved: Source[]) {
+  const had = FACTS.get(plan)
+  if (had) return had
+  const matched = plan.states.flatMap(st => (st.asked ?? []).map(quote => ({ state: st.id, quote, from: saved.find(d => checkQuote(d.text, quote) === 'ok') })))
+  const out = saved.filter(s => s.kind === 'approved' || matched.some(m => m.from === s))
+  const sources = out.map((s): SourceFact => {
+    const mine = matched.filter(m => m.from === s)
+    return {
+      kind: s.kind, ...(s.name ? { name: base(s.name) } : {}), at: s.at, origin: ORIGIN[s.kind](s), text: s.text,
+      marks: mine.flatMap(m => {
+        const span = spanOf(s.text, m.quote)
+        return span ? [{ from: span[0], to: span[1], state: m.state }] : []
+      }),
+      unquoted: unquoted(s.text, mine.map(m => m.quote)),
+      gaps: unquotedSections(s.text, mine.map(m => m.quote)).map(x => x.at),
+      quotedBy: new Set(mine.map(m => m.state)).size,
+    }
+  })
+  const asks = new Map<string, AskFact[]>()
+  for (const { state, quote, from } of matched) {
+    const where = !from ? '' : from.kind === 'message' ? `Your message at ${from.at}` : [from.name && base(from.name), sectionOf(from.text, quote)].filter(Boolean).join(', ')
+    asks.set(state, [...(asks.get(state) ?? []), { quote, ...(from ? { source: out.indexOf(from), where } : {}) }])
+  }
+  const facts = { asks, sources }
+  FACTS.set(plan, facts)
+  return facts
+}
+
+// The saved copies as text, with the states that quote each line beside it: what /sentinel source prints.
+export function sourceText(vm: VM): string {
+  const sources = vm.proof?.sources ?? []
+  if (!sources.length) return 'Sentinel has no saved source for this plan.'
+  const copies = sources.flatMap(s => {
+    let at = 0
+    const lines = s.text.split('\n').map(raw => {
+      const by = [...new Set(s.marks.filter(m => m.from < at + raw.length && m.to > at).map(m => m.state))]
+      at += raw.length + 1
+      return `  ${raw.trimEnd()}${by.length ? `   <- ${by.join(', ')}` : ''}`
+    })
+    return [`${s.name ?? (s.kind === 'message' ? 'Your message' : 'The approved plan')}   ${s.origin}`, ...lines, ...(s.unquoted.length ? [`No state quotes: ${s.unquoted.join(', ')}.`] : []), '']
+  })
+  const added = vm.states.filter(s => s.added).map(s => `${s.id} has no quote. Claude added it because: ${s.added}${s.okAt ? ` You kept it at ${s.okAt}.` : ''}`)
+  return [...copies, ...added].join('\n').trimEnd()
+}
 
 // The one rule for the active state's clock: it runs while Claude works on the plan, and stops whenever the plan
 // waits, on the user, on a pause, or on nothing at all. working: the main conversation is in a turn with no question
@@ -1509,9 +1772,11 @@ export function summarize(top: Run): VM {
   const ids = plan ? [...plan.states.map(s => s.id), 'done'] : []
   const pos = r.active ? ids.indexOf(r.active) : -1
   const done = new Set(doneOf(r))
+  const facts = plan && r.library?.on.includes('quote-the-source') ? factsOf(plan, r.sources ?? []) : undefined
   const states = plan
     ? [...plan.states, { id: 'done', label: '', files: [] }].map((s, i) => ({
         ...s,
+        ...(facts?.asks.get(s.id) ? { asks: facts.asks.get(s.id) } : {}),
         // A draft has no clock until the user locks it.
         ...(phase === 'draft' ? {} : timeOf(taskIn(r.tasks, s.id))),
         status: (phase === 'complete' || done.has(s.id) ? 'done' : i === pos ? (red ? 'trap' : 'active') : r.running?.[s.id] ? 'running' : 'todo') as Status,
@@ -1614,5 +1879,11 @@ export function summarize(top: Run): VM {
     ...(phase === 'live' && r.checking?.length && { checking: r.checking }),
     ...(top.flowDraft && { flowDraft: top.flowDraft }),
     ...(top.draft && top.held?.depth && { depth: top.held.depth }),
+    ...(facts && { proof: {
+      quoted: plan!.states.filter(s => s.asked?.length).length,
+      of: plan!.states.filter(s => s.asked?.length || s.added).length,
+      sources: facts.sources,
+      refused: (top.refused ?? []).map(x => ({ ...x, says: REFUSED_SAYS[x.why] })),
+    } }),
   }
 }

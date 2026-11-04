@@ -405,7 +405,15 @@ Joined tabs on a base line, 32px tall, in condensed capitals. The picked one is 
 Now (the current state's mark, id, title, a link to its task page, done-when, files, time on it, health and check runs), then Up next, Helper agents, Decided, Asked, Models and tokens, and the Log. While stuck, Now leads with the alert box: the check command and its failing output in red.
 
 ### Task page
-Opens in place of the plan for one state. A sticky bar with Back and the pager, then a row of stat boxes (Status, Runs in, Took, Started), a bar showing where the state sat in the run, and two columns: why, approach, what was done, where it stands, what it needs, along the way and ways back on the left; done-when, files it may change and the flow that added it on the right. A live run offers Skip with a reason.
+Opens in place of the plan for one state. A sticky bar with Back and the pager, then a row of stat boxes (Status, Runs in, Took, Started), a bar showing where the state sat in the run, and two columns: Asked for, why, approach, what was done, where it stands, what it needs, along the way and ways back on the left; done-when, files it may change and the flow that added it on the right. A live run offers Skip with a reason.
+- **Asked for:** comes first because it is the only part in the user's or the plan's words; everything under it is Claude's description. Each quote sits in a sunk block with its section and origin below in small grey, and one line says Sentinel found the words, with a link to the saved copy. A state Claude added has a grey Claude added tag and its reason instead; the tag is amber only while the draft still waits for an answer. A plan that doesn't compare quotes keeps its `Plan:` line above the title instead.
+- **Along the way:** a refused quote leads the list, with the same red Refused word as other refusals.
+
+### Source page
+Opens at `#source`, or at `#source-<state>` with that state's quotes picked out and brought into view. Run stays the current tab. A page head with Back, then the saved copy in a panel: a row of facts (source, where it came from, quoted by, sections no state quotes), then the text line by line, as written. Quotes are marked with a soft ink wash and no hue, and the picked state's quotes are darker with a hairline, so the Quiet Run Rule holds. The state chips sit in a column beside the text and under it below 860px; pressing one opens that state. A section nothing quotes has one small grey line under its heading. Below the copy, panels for the messages a quote uses and for what Claude added.
+
+### Draft card: where the states came from
+With a plan that compares quotes, the slip's left column leads with the count (a green tick, or an amber warning when nothing is quoted) and one amber line per source for the sections nothing quotes. Each state Claude added follows as a block with Keep it and Take it out, tinted amber until answered and sunk after. The quotes fold under a details row across both columns. While any addition is unanswered the stub says how many and Lock the plan stays disabled.
 
 ### Library page
 Two tabs, Instructions and Flows, and a "Switches for" choice between this project and your default. Claude's draft of either kind shows above them in a slip, outlined and banded in the run's colour.

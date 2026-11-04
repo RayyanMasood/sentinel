@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { Checking, Depth, FlowDef, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PlanLibrary, Run, StateDef, Switches, View, Weight } from '../types'
+import type { Checking, Depth, FlowDef, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PlanLibrary, Run, Source, StateDef, Switches, View, Weight } from '../types'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import {
   AUTO_CAP, RETRIES, VIEWS, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
-  instructionOf, libraryOn, withWeight, librarySection, toldHere, dropStates,
-  rerunOf, snapWanted, withSnap, type Without,
+  instructionOf, libraryOn, withWeight, librarySection, toldHere, dropStates, addsMidRun, keepAdded, sourceText,
+  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -19,6 +19,15 @@ const PANE = 'sentinel'
 const TAG = '[sentinel]'
 const run = atom({ plugin: 'sentinel', key: 'run' } as const, emptyRun(), { shape: 'run-1' })
 const view = atom({ plugin: 'sentinel', key: 'view' } as const, 'focus' as View, { shape: 'view-1' })
+// The session's typed messages and the files Claude wrote. Apart from `run` because `run` goes to .sentinel/run.json and
+// a typed message must not reach disk unless a quote uses it.
+// ponytail: $.state doesn't outlive the process, so messages and writes from before a restart are gone: such a message
+// can't be quoted, and such a file counts as unwritten. Save the paths if that shows.
+const said = atom({ plugin: 'sentinel', key: 'said' } as const, { messages: [], wrote: [] }, { shape: 'said-1' })
+// ponytail: the last 100 typed messages, so an older one can't be quoted. Raise it if long sessions miss quotes.
+const MAX_SAID = 100
+// ponytail: a file over 1 MB isn't copied, as run.json is written on every call and the engine refuses a write over 4 MiB.
+const MAX_COPY = 1024 * 1024
 
 const EDITS = new Set(['Edit', 'Write', 'NotebookEdit'])
 // Bookkeeping tools: they neither move the work nor stall it.
@@ -60,7 +69,7 @@ const SCHEMA = {
   type: 'object',
   properties: {
     action: { type: 'string', enum: ['define', 'revise', 'advance', 'brief', 'propose', 'skip', 'amend', 'decide', 'escalate', 'status', 'flow'] },
-    order: { type: 'array', items: { type: 'string' }, description: 'revise: every state id of the plan, in order' },
+    order: { type: 'array', items: { type: 'string' }, description: 'revise: every state id of the plan, in order. While a plan runs, revise only adds states: send the new ones whole in states, placed after the active state in order.' },
     title: { type: 'string', description: 'define: the plan name' },
     states: {
       type: 'array',
@@ -73,6 +82,8 @@ const SCHEMA = {
           check: { type: 'string', description: 'shell command; exit 0 means the state is done' },
           files: { type: 'array', items: { type: 'string' }, description: 'globs this state may edit' },
           ref: { type: 'string', description: 'where this state is described (doc section, plan step)' },
+          asked: { type: 'array', items: { type: 'string' }, description: `where this state came from: short quotes copied word for word from the plan the user approved or their typed messages, at least 5 words each or a whole message. Sentinel compares them and refuses any that aren't there. Words from a part marked out of scope don't count.` },
+          added: { type: 'string', description: 'in place of asked, when nothing the user approved or typed asks for this state: your reason, in a sentence. The state shows as your addition. Added while a plan runs, it goes in and finishes, unless its files can reach the breaking list: then it asks the user when it starts.' },
           evidence: { type: 'string', description: 'states before start: what shows it is done' },
           group: { type: 'string', description: 'the group this state is shown under; a/b for b inside a' },
           title: { type: 'string', description: 'a plain name for the task page, under 8 words' },
@@ -139,8 +150,8 @@ export const register: Register = on => {
     await $.tool.register({ name: 'plan', description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
     await $.command.register({
       name: 'sentinel',
-      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
-      argumentHint: '[focus|map|ledger|browser|lock|lock <depth ids>|pause|resume|skip <state>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
+      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, source (the saved source, with each quote marked), lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
+      argumentHint: '[focus|map|ledger|browser|source|lock|lock <depth ids>|pause|resume|skip <state>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
     })
     // Final checks and check runs a lost session left showing are over.
     await change($, r => (r.sweep || r.checking ? { ...r, sweep: undefined, checking: undefined } : r))
@@ -166,9 +177,10 @@ export const register: Register = on => {
     // (claude -p), never run by the model or another plugin. The engine stamps every run's origin; only the test kit
     // leaves it out.
     const by = (e.origin as { kind?: string } | undefined)?.kind
-    if (/^(lock|reset|pause|resume|skip|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s|on\s|off\s|weight\s|trust\s)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
+    if (/^(lock|reset|pause|resume|skip|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s|on\s|off\s|weight\s|trust\s|source)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
       return { text: `Only the user runs /sentinel ${arg.split(/\s/)[0]}, typed at the prompt.` }
     }
+    if (arg === 'source') return { text: sourceText(summarize(await read($, run))) }
     const locking = /^lock(?:\s+(.+))?$/.exec(arg)
     if (locking) {
       const r = await read($, run)
@@ -187,7 +199,7 @@ export const register: Register = on => {
       }
       const why = held ? `\nThe define you sent before the sign-off was refused: ${held.deny}`
         : r.held ? '\nThe define you sent before the sign-off starts partway, so send it again: Sentinel runs the checks of the states before its start.' : ''
-      later($, LOCK + why)
+      later($, LOCK + (await quoteNote($)) + why)
       return { text: 'Signed off. The model drafts the plan next. Review it from the band above the prompt or with /sentinel, then lock it.' }
     }
     if (arg === 'reset') {
@@ -232,6 +244,8 @@ export const register: Register = on => {
     const band = e.props.hasSurvey ? undefined : renderBand($.ui.resolve(e), summarize(await read($, run)), {
       open: focus => void openPane($, focus),
       lock: () => void lockNow($),
+      keep: id => void keepNow($, id),
+      takeOut: id => void takeOut($, id).then(t => $.ui.toast(`Sentinel: ${t}`)),
       resume: () => void resume($),
       saveFlow: scope => void keepFlow($, scope).then(t => $.ui.toast(`Sentinel: ${t}`)),
       discardFlow: () => void flowCommand($, 'discard').then(t => $.ui.toast(`Sentinel: ${t}`)),
@@ -242,6 +256,14 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const tool = String(e.tool)
     const input = e as unknown as Record<string, unknown>
+    // A file Claude wrote doesn't count as a source, so every attempt counts, by any agent, plan or no plan. An attempt
+    // that fails only costs the file its place.
+    // ponytail: only these tools are seen; a Bash redirect into the file isn't.
+    if (EDITS.has(tool)) {
+      const file = String(input.file_path ?? input.notebook_path ?? '')
+      const key = pathKey(await $.session.root(), file)
+      if (file) await update($, said, s => (s.wrote.includes(key) ? s : { ...s, wrote: [...s.wrote, key] }))
+    }
     // Sentinel's own check runs stay out of the ledger, as does its stop of a check left in the background. Only those
     // calls: a member's own calls may carry Sentinel's origin too, since Sentinel spawned it.
     if (next.origin.plugin === $.plugin.name && ((tool === 'Bash' && input.description === CHECK) || tool === 'TaskStop')) return next(e)
@@ -438,6 +460,9 @@ export const register: Register = on => {
     const res = await next(e)
     if (!('drop' in res) && (e.origin.kind === 'composer' || e.origin.kind === 'bridge')) {
       await userSpoke($)
+      // What the person typed, for a quote to use. A prompt they don't see as typed isn't theirs.
+      // ponytail: an AskUserQuestion answer doesn't count as a message yet.
+      if (!e.isMeta) await update($, said, s => ({ ...s, messages: [...s.messages, { text: e.text, at: now() }].slice(-MAX_SAID) }))
     }
     return res
   })
@@ -575,6 +600,7 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
       : 'The draft has no depth answers to tick. Lock it with /sentinel lock alone.'
   }
   const chosen = depth.filter(x => ticked(x.id))
+  const unanswered = (r.draft?.plan?.states ?? []).filter(s => s.added && !s.okAt).map(s => s.id)
   const left = depth.filter(x => !ticked(x.id))
   const gone = [...new Set(left.flatMap(x => (x.state && !chosen.some(c => c.state === x.state) ? [x.state] : [])))]
   if (gone.length) {
@@ -588,7 +614,16 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
   const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took].filter(Boolean).join(' ')
   later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}`
+  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}`
+}
+
+const keepNow = ($: $, id: string) => change($, x => keepAdded(x, id, now()))
+
+// Takes a state Claude added out of the draft. Only those: a state with a quote was asked for, and a flow's is the user's.
+async function takeOut($: $, id: string): Promise<string> {
+  const st = (await read($, run)).draft?.plan?.states.find(s => s.id === id)
+  if (!st?.added) return `${id} is not a state Claude added to the draft.`
+  return changeDraft($, held => dropStates(held, [id]), `Took ${id} out of the draft.`)
 }
 // The answers in one sentence, each without its closing full stop.
 const texts = (xs: Depth[]) => xs.map(x => x.text.replace(/\.+$/, '')).join('; ')
@@ -672,7 +707,7 @@ async function saved($: $): Promise<Run | undefined> {
 async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal): Promise<Result> {
   const typed = user || spoke()
   // What a plan is locked with comes from the switches files, never from the model.
-  const { library: _library, ...sent } = raw
+  const { library: _library, named: _named, messages: _messages, ...sent } = raw
   let input = relInput(await $.session.root(), sent)
   const label = `plan ${input.action}${input.to ? ` → ${input.to}` : ''}`
   if (input.action === 'brief') return brief($, input, label)
@@ -737,7 +772,11 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
       if (ran.stuck) return { deny: stuckText(c, ran) }
       proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText }
     }
+    const named = await namedFile($, keptSources(was), whole.source)
+    if (named) input = { ...input, named }
+    input = { ...input, messages: (await read($, said)).messages }
   }
+  if (input.action === 'revise' && addsMidRun(was)) input = { ...input, messages: (await read($, said)).messages }
   if (signal?.aborted) return { deny: STOPPED }
   let acted: Acted | undefined
   let fresh = false
@@ -776,6 +815,29 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
   return attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), beside), apart), unrun), rules), offered)
+}
+
+// What the sign-off adds while quote-the-source is on, so the first define can get it right.
+const quoteNote = async ($: $) => ((await libraryNow($).catch(() => undefined))?.on.includes('quote-the-source')
+  ? ` Give each state "asked": short quotes copied word for word from the plan the user approved or their typed messages, which Sentinel compares. Where nothing asked for a state, send "added" with your reason instead.`
+  : '')
+
+// A copy of the file a plan's `source` names, which can read "docs/plan.md", "docs/plan.md, section 3" or "docs/plan.md
+// section 3". None when it names no readable file, when Claude wrote the file, or when `kept` already holds it (the
+// approved plan's own file, or a copy taken earlier, so later edits to the file change nothing).
+async function namedFile($: $, kept: Source[] | undefined, source: string | undefined): Promise<Source | undefined> {
+  const whole = source?.trim()
+  if (!whole) return undefined
+  const root = await $.session.root()
+  const { wrote } = await read($, said)
+  for (const name of new Set([whole, whole.split(',')[0]!.trim(), whole.split(/\s+/)[0]!])) {
+    const text = await $.fs.read(/^([a-z]:)?\//i.test(name) ? name : `${root}/${name}`).then(String, () => '')
+    if (!text) continue
+    const key = pathKey(root, name)
+    if (text.length > MAX_COPY || wrote.includes(key) || kept?.some(s => s.name !== undefined && pathKey(root, s.name) === key)) return undefined
+    return { kind: 'file', name, text, at: now() }
+  }
+  return undefined
 }
 
 // ---- the library: flows and instructions ----
@@ -1361,6 +1423,7 @@ function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string
     `Work in ${path}. It is a worktree of the project as it was when ${st.id} became ready, apart from the main checkout. Edit files there only, and only these: ${st.files.length ? st.files.join(', ') : 'none, this state edits nothing'}. Sentinel refuses other edits.`,
     st.check ? `${st.id} is done when \`${st.check}\` exits 0, run from ${path}.` : `${st.id} has no check: say what you found.`,
     st.ref ? `Details: ${st.ref}` : '',
+    askedLine(st),
     toldHere(r, st),
     'Make no commits and leave the branches alone. You may start helper agents; they meet the same limits. When you are done, stop and say what you did. Sentinel checks your work and brings it back to the project.',
   ].filter(Boolean).join('\n\n')
@@ -1625,9 +1688,13 @@ const dirKey = (p: string) => p.replace(/\\/g, '/').replace(/\/$/, '').toLowerCa
 
 async function signOff($: $, ran: Result): Promise<Result> {
   if (ran.isError || ran.deny !== undefined) return ran
+  // The plan as the user approved it, with their edits. A subagent's plan isn't saved as theirs. With none to save the
+  // older sources still go, or the next define would inherit them.
+  const out = ran.result as { plan?: string | null; isAgent?: boolean; filePath?: string } | undefined
+  const approved: Source | undefined = out?.plan && !out.isAgent ? { kind: 'approved', text: out.plan, ...(out.filePath ? { name: out.filePath } : {}), at: now() } : undefined
   // The approved plan may differ from a define kept from before, so the model sends it again.
-  await change($, r => ({ ...r, ...freshCount(r, new Date().toISOString()), signedOff: true, review: false, held: undefined }))
-  const note = `${TAG} The user approved this plan. Before editing anything, call ${TOOL} with action "define": the states in order, each with the check command that proves it done and the files it may edit, a plain title, problem and approach for the user's task page, plus the loops you expect. Then work through it without asking about choices that aren't breaking.`
+  await change($, r => ({ ...r, ...freshCount(r, new Date().toISOString()), signedOff: true, review: false, held: undefined, sources: approved ? [approved] : undefined }))
+  const note = `${TAG} The user approved this plan. Before editing anything, call ${TOOL} with action "define": the states in order, each with the check command that proves it done and the files it may edit, a plain title, problem and approach for the user's task page, plus the loops you expect. Then work through it without asking about choices that aren't breaking.${await quoteNote($)}`
   return { ...ran, context: [...(ran.context ?? []), note] } as Result
 }
 
@@ -1854,6 +1921,11 @@ async function fromPage($: $, m: Record<string, unknown>) {
     const on = [...l.items, ...l.flows].filter(x => x.trusted && (m.on as unknown[]).includes(x.name)).map(x => x.name)
     const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items }) }), '')
     return why ? toast(why) : undefined
+  }
+  if ((m.kind === 'keepadded' || m.kind === 'dropadded') && r.draft && m.draft === draftKey(r) && typeof m.state === 'string') {
+    if (m.kind === 'keepadded') return void (await keepNow($, m.state))
+    const out = await takeOut($, m.state)
+    return out.startsWith('Took') ? undefined : toast(out)
   }
   if (m.kind === 'draft' && r.draft && text) {
     return tell($, `${TAG} The user checked the draft in the dashboard and asks for changes: ${text}\nCall ${TOOL} with action "revise", then stop for their check.`)

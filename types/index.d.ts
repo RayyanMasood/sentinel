@@ -12,6 +12,11 @@ export type Wait = 'before' | 'after'
 export type StateDef = {
   id: string; label: string; check?: string; files: string[]; ref?: string; evidence?: string; group?: string
   title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]
+  // Where the state came from, while quote-the-source is on. asked: the words it quotes, compared with the sources.
+  // added: Claude's reason, when nothing asked for it.
+  asked?: string[]; added?: string
+  // okAt: when the user kept a state Claude added on the draft. look: why Sentinel stops a state Claude added at its start.
+  okAt?: string; look?: string
   // A state a flow put in the plan: the flow's name, the name of this copy (review, or review-2 for a second one), and
   // why it is there (the user added it, or one of their rules).
   flow?: FlowMark
@@ -49,6 +54,12 @@ export type LibraryItem = InstructionDef & {
 // The Library as the dashboard reads it: the weight in force, both switches files as saved, the instructions, and
 // which flows are on (the flows themselves are in `flows`).
 export type LibraryView = { weight: Weight; project: Switches; personal: Switches; instructions: LibraryItem[]; flowsOn: Record<string, boolean> }
+
+// What a quote can be compared with. approved: the plan the user approved in plan mode, with their edits (name: its file).
+// file: a copy of the file the plan's `source` names, taken once (name: that file's path). message: a typed message.
+export type Source = { kind: 'approved' | 'message' | 'file'; text: string; at: string; name?: string }
+// A quote Sentinel refused, or a state that sent none (why: none), kept for the record.
+export type Refused = { state: string; quote?: string; why: 'missing' | 'short' | 'excluded' | 'empty' | 'long' | 'none'; nearest?: string; t: string }
 
 export type Plan = {
   title: string
@@ -147,7 +158,7 @@ export type PlanInput = {
   title?: string
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; ref?: string; evidence?: string; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
   // flow: the flow the model drafts for the user to save.
   name?: string
   description?: string
@@ -170,6 +181,10 @@ export type PlanInput = {
   kind?: string
   // define: what the plan is locked with. Sentinel sets it; anything the model sends here is dropped.
   library?: PlanLibrary
+  // define, revise: the copy of the file `source` names. Sentinel sets it; anything the model sends here is dropped.
+  named?: Source
+  // define, revise: the session's typed messages, for quotes to be compared with. Sentinel sets it, and it is never kept.
+  messages?: { text: string; at: string }[]
   // define: the model's answers to "what would an expert do here", for the user to tick before the lock.
   depth?: Depth[]
   // flow: an instruction's text and moment, in place of states.
@@ -222,6 +237,11 @@ export type Run = {
   review?: boolean
   // States whose check Sentinel ran once as they started, to see it fail before the work.
   startChecked?: string[]
+  // What this plan's quotes are compared with. A plan-mode sign-off saves the approved plan here before define; a draft
+  // holds its own.
+  sources?: Source[]
+  // What Sentinel refused while this plan was being written.
+  refused?: Refused[]
   // The instructions and switches the plan was locked with. A run saved before it existed behaves as Standard did:
   // fails-first on, nothing told.
   library?: PlanLibrary
@@ -263,6 +283,7 @@ export type Run = {
 
 declare module 'claude-code' {
   interface PluginState {
-    sentinel: { run: Shaped<Run>; view: Shaped<View> }
+    // said: the session's typed messages and the files Claude wrote. Never saved, unlike run.
+    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }> }
   }
 }

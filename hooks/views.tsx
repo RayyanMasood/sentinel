@@ -8,7 +8,7 @@ type Part = string | false | undefined | [string, Tone?, boolean?]
 type Loop = VM['loops'][number]
 
 export type PaneActions = { pick: (v: View) => void; browser: () => void }
-export type BandActions = { open: (focus: boolean) => void; lock: () => void; resume: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
+export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; resume: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
 
 // The band above the prompt: what needs you, or where the plan stands, with the buttons to act on it.
 // No hotkeys: a bare digit in an empty prompt would press them while you start a message.
@@ -19,11 +19,14 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const live = !!a && vm.phase !== 'none' && vm.phase !== 'complete'
   if (!live && !f) return undefined
   const hl = vm.health
+  // What Claude added waits for an answer, one at a time, before the draft asks to be locked.
+  const added = vm.phase === 'draft' ? vm.states.find(s => s.added && !s.okAt) : undefined
   type Band = [string, Tone, [string, string, () => void][]]
   // A flow or an instruction Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
   const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
     [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save personal', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
   const [text, tone, buttons]: Band = !a || !live ? flow!
+    : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
     : vm.paused ? [`Sentinel is paused at ${a.id}.`, 'warn', [['resume', 'Resume', on.resume], ['open', 'Open', () => on.open(false)]]]
     : vm.trap ? [`Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`, 'err', [['open', 'Open', () => on.open(true)]]]
@@ -137,6 +140,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       line(a.label),
       rail(),
       gap(),
+      ...askedRows(vm.states.find(s => s.id === a.id)),
       ...(vm.waiting ? [field('waits', vm.waiting.kind === 'before' ? 'for your OK on its proposal, in the chat' : 'for your review, in the chat', 'warn')]
         : a.wait && !vm.replied ? [field('asks', a.wait === 'after' ? 'for your review once it is done' : 'for your OK before it starts', 'dim')] : []),
       field('check', a.check ? `${a.check} passes` : 'evidence and a first read (no check)'),
@@ -188,10 +192,48 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       <Box flexShrink={1}>{para(value, tone)}</Box>
     </Box>
   )
-  // A state's line: symbol and id, then its label wrapping under itself.
+  // Where a running state came from: its quotes in full, or why Claude added it, and any quote Sentinel refused for it.
+  const askedRows = (s?: VM['states'][number]) => {
+    const p = vm.proof
+    if (!p || !s) return []
+    const asks = s.asks ?? []
+    return [
+      ...(s.added ? [
+        field('asked', `Nothing asked for this. Claude's reason: ${s.added}`),
+        ...(s.okAt ? [field('', `You kept it on the draft at ${s.okAt}.`, 'dim')] : []),
+        ...(s.look ? [field('', `It asks you first, because it could involve ${s.look}.`, 'dim')] : []),
+      ] : []),
+      ...asks.flatMap(q => [
+        field('asked', `"${q.quote}"`),
+        ...(q.source !== undefined ? [field('', [p.sources[q.source]!.kind === 'message' ? '' : q.where, p.sources[q.source]!.origin].filter(Boolean).join('. ') + '.', 'dim')] : []),
+      ]),
+      ...(asks.some(q => q.source !== undefined) ? [field('', 'Sentinel found these exact words in its saved copy.', 'dim')] : []),
+      ...p.refused.filter(x => x.state === s.id).map(x => field('tried', x.quote ? `"${x.quote}" ${x.says}.` : `${x.says}.`, 'dim')),
+    ]
+  }
+  // What the draft's quotes come to: where they came from, the count, and the sections none of them falls in.
+  const proofRows = () => {
+    const p = vm.proof
+    if (!p?.of) return []
+    const from = p.sources[0]
+    return [
+      ...(from ? [para(`From ${from.name ?? 'your message'}. ${from.origin}. /sentinel source shows the saved copy.`, 'dim')] : []),
+      para(`${p.quoted} of ${p.of} states quote what you approved or typed, word for word.`, 'dim'),
+      ...p.sources.filter(s => s.unquoted.length).map(s => {
+        const many = s.unquoted.length > 1
+        return para(`${and(s.unquoted)} ${many ? 'are' : 'is'} in ${s.name ?? 'your plan'}, but no state quotes ${many ? 'them' : 'it'}.`, 'warn')
+      }),
+    ]
+  }
+  // A quote as the draft lists it: the start of the first, and how many more.
+  const quoteStart = (asks: NonNullable<VM['states'][number]['asks']>) => {
+    const q = asks[0]!.quote
+    return `"${q.length > 60 ? `${q.slice(0, 59).trimEnd()}…` : q}"${asks.length > 1 ? ` and ${asks.length - 1} more` : ''}`
+  }
+  // A state's line: symbol and id, then its label wrapping under itself. An addition still to answer shows ! for its symbol.
   const head = (s: VM['states'][number]) => (
     <Box flexDirection="row">
-      <Box flexShrink={0}>{line([`${symOf(s)} `, STATUS_TONE[s.status]], [`${s.id}  `, s.status === 'active' ? 'acc' : undefined, true])}</Box>
+      <Box flexShrink={0}>{line(s.added && !s.okAt ? ['! ', 'warn'] : [`${symOf(s)} `, STATUS_TONE[s.status]], [`${s.id}  `, s.status === 'active' ? 'acc' : undefined, true])}</Box>
       <Box flexShrink={1}>{para(s.label, s.status === 'todo' ? 'dim' : undefined)}</Box>
     </Box>
   )
@@ -205,6 +247,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       line(['DRAFT', 'warn', true], ['  not locked yet', 'dim']),
       para(vm.title, undefined, true),
       para(`${states.length} states, starts at ${vm.active?.id ?? '?'}${vm.source ? ` · from ${vm.source}` : ''}`, 'dim'),
+      ...proofRows(),
       gap(),
       para('Lock it with Lock above the prompt, or /sentinel lock. To change it, tell the model.', 'dim'),
       para('Add a saved flow with /sentinel add <flow> after <state> (or start, end, before <state>), and take one out with /sentinel drop <flow>. /sentinel flows lists them.', 'dim'),
@@ -217,6 +260,8 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
     for (const s of todo) {
       rows.push(
         head(s),
+        ...(s.added ? [field('added', `${s.okAt ? `You kept it at ${s.okAt}.` : 'Nothing asked for this.'} Claude's reason: ${s.added}`, s.okAt ? 'dim' : 'warn')] : []),
+        ...(s.asks?.length ? [field('asked', quoteStart(s.asks), 'dim')] : []),
         field('check', s.check ?? 'none (evidence and a read)', s.check ? undefined : 'dim'),
         field('files', s.files.length ? s.files.join(', ') : 'none', s.files.length ? undefined : 'dim'),
         ...(s.ref ? [field('see', s.ref, 'dim')] : []),
@@ -240,6 +285,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
     const c = vm.counts
     const tr = vm.traps
     const loopText = vm.loops.filter(l => l.count).map(l => `${l.from} → ${l.to} ×${l.count}`).join(', ')
+    const added = vm.states.filter(s => s.added)
     const stat = (label: string, value: string | number, detail: string, tone?: Tone) =>
       line([label.padEnd(11), 'dim'], [String(value).padEnd(4), tone, true], [detail, 'dim'])
     const box = [
@@ -261,6 +307,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       gap(),
       line(['review these', 'dim'], ['  decisions made without you', 'dim']),
       ...auditRows(true).slice(1),
+      ...(added.length ? [gap(), line(['Claude added along the way', 'dim']), ...added.map(s => para(` ${s.id}: ${s.added}${s.okAt ? ` You kept it at ${s.okAt}.` : ''}`))] : []),
     ]
   }
 

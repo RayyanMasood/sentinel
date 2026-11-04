@@ -1,8 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Run } from '../types'
 import { DESCRIPTION } from '../hooks/register'
-import { act, addFlow, autoContinue, dropFlow, emptyRun, flowOf, heard, instructionOf, isTestFile, libraryOn, notYet, lockDraft, memberByFile, memberIn, memberOff, needsOf, observe, relPath, snapWanted, startCheck, startClock, startMember, stopClock, summarize, tokenSplit, untested, withRules, withSnap, withWeight, type PlanInput } from '../hooks/core'
+import { act, addFlow, autoContinue, keepAdded, sourceText, dropFlow, emptyRun, flowOf, freshCount, heard, instructionOf, isTestFile, libraryOn, notYet, lockDraft, memberByFile, memberIn, memberOff, needsOf, observe, pathKey, relPath, snapWanted, startCheck, startClock, startMember, stopClock, summarize, tokenSplit, untested, withRules, withSnap, withWeight, type PlanInput } from '../hooks/core'
 import { BUILTINS, BUILTIN_FLOWS } from '../hooks/builtins'
+import { renderBand, renderPane } from '../hooks/views'
 import type { FlowDef, InstructionDef, StateDef } from '../types'
 
 const ROOT = 'D:/proj'
@@ -38,11 +39,16 @@ function engine(on: any) {
   const outs: Record<string, string> = {}
   let tasks = 0
   let cwd = ROOT
+  let quoting = false
   on('session.root', () => ({ value: ROOT }))
   on('session.cwd', () => ({ value: cwd }))
   const key = (path: string) => path.replace(/\\/g, '/')
   on('fs.read', (_: unknown, e: any) => {
     reads.push(key(e.path))
+    // As the real read does for a file that isn't there. Elsewhere a missing file reads as empty.
+    if (key(e.path).includes('/missing')) throw new Error(`ENOENT: ${e.path}`)
+    // Most tests' plans quote nothing, so the comparison is off by the user's default until a test calls eng.quoting().
+    if (!quoting && key(e.path) === `${HOME}/.sentinel/library.json` && !files[key(e.path)]) return { value: '{"on":{"quote-the-source":false}}' }
     return { value: files[key(e.path)] ?? '' }
   })
   on('fs.write', (_: unknown, e: any) => {
@@ -58,6 +64,12 @@ function engine(on: any) {
   })
   on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? HOME : undefined }))
   mock.store(on)
+  // What the plugin holds in memory, as it last wrote it. A test reads it here, since $.state is the plugin's own.
+  const memory: { run?: Run; said?: { messages: { text: string; at: string }[]; wrote: string[] } } = {}
+  on('state.set', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => {
+    memory[e.key as 'run' | 'said'] = e.value.value
+    return next(e)
+  })
   const statuses: (string | undefined)[] = []
   on('ui.status', (_: unknown, e: any) => {
     statuses.push(e.text)
@@ -69,7 +81,9 @@ function engine(on: any) {
     return { value: undefined }
   })
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  let dropping: string | undefined
   on('prompt.submit', (_: unknown, e: any) => {
+    if (dropping) return { drop: dropping }
     submitted.push(e.text)
     return { text: e.text }
   })
@@ -95,6 +109,7 @@ function engine(on: any) {
     files[key(e.file_path)] = e.new_string ?? e.content
     return { result: {}, text: 'ok' }
   })
+  on('tool.call', { tool: 'NotebookEdit' }, () => ({ result: {}, text: 'ok' }))
   on('tool.call', { tool: ['Read', 'Grep'] }, (_: unknown, e: any) => ({ result: {}, text: `read ${e.file_path ?? e.pattern}` }))
   // Like the real Bash tool: a trailing echo always succeeds, the tool may add a note after the output,
   // and `quiet` is a non-zero exit it reports as success (test, grep).
@@ -120,7 +135,8 @@ function engine(on: any) {
     if (bash.fail && bash.quiet) return { result: { ...ok, returnCodeInterpretation: 'Condition is false' }, text: bash.text }
     return bash.fail ? { isError: true, result: bash.text, text: bash.text } : { result: ok, text: bash.text }
   })
-  on('tool.call', { tool: 'ExitPlanMode' }, () => ({ result: { plan: 'p', isAgent: false }, text: 'approved' }))
+  let approved: object = { plan: 'p', isAgent: false }
+  on('tool.call', { tool: 'ExitPlanMode' }, () => ({ result: approved, text: 'approved' }))
   const stops: string[] = []
   on('tool.call', { tool: 'TaskStop' }, (_: unknown, e: any) => (stops.push(e.task_id), { result: {}, text: 'stopped' }))
   // The question dialog answers at once, unless the test holds it open.
@@ -169,10 +185,11 @@ function engine(on: any) {
     return { model: 'm' }
   })
   return {
-    files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts,
+    files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory,
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
     setDialog: (d?: () => Promise<unknown>) => (dialog = d),
+    setApproved: (a: object) => (approved = a), setDropping: (d?: string) => (dropping = d), quoting: () => (quoting = true),
     // Several messages go out in one piece, as two tabs sending at once can.
     page: (...ms: object[]) => {
       const lines = ms.map(m => JSON.stringify(m) + '\n').join('')
@@ -2626,13 +2643,13 @@ test('library: an instruction file is checked like a flow', () => {
 })
 
 test('library: a weight sets the built-ins and switches win over it', () => {
-  const standard = ['depth-before-size', 'failure-list', 'fails-first', 'break-it-once', 'mine']
+  const standard = ['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
   expect(libraryOn(ITEMS)).toEqual({ weight: 'standard', on: standard })
-  expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'mine'] })
+  expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'quote-the-source', 'mine'] })
   expect(libraryOn(ITEMS, { weight: 'thorough' }, { weight: 'light' }).on)
-    .toEqual(['depth-before-size', 'failure-list', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
+    .toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
   // sources-first and close-phase are in no weight; a switch turns them on.
-  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'failure-list', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
+  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
   // The project's switch beats the user's, for their own items and for built-ins.
   expect(libraryOn(ITEMS, { on: { mine: false } }, { on: { mine: true } }).on).not.toContain('mine')
   expect(libraryOn(ITEMS, {}, { on: { mine: false } }).on).not.toContain('mine')
@@ -2708,6 +2725,7 @@ const textOf = (name: string) => BUILTINS.find(b => b.name === name)!.text
 
 test('library: on, off and weight commands write the switches files', async ($: any, on: any) => {
   const eng = engine(on)
+  eng.quoting()
   const sentinel = command(mock.clock(on), $)
   const saved = (file: string) => JSON.parse(eng.files[file]!)
   eng.files[`${ROOT}/.sentinel/instructions/mine.json`] = JSON.stringify({ at: 'start', text: 'Mine.' })
@@ -2818,7 +2836,7 @@ test("library: define stores the library the switches give, never the model's", 
   const sentinel = command(mock.clock(on), $)
   // A bad project file reads as none, so the user's default decides.
   eng.files[LIB_PROJECT] = '{ "weight": '
-  eng.files[LIB_PERSONAL] = JSON.stringify({ weight: 'light', on: { 'sources-first': true } })
+  eng.files[LIB_PERSONAL] = JSON.stringify({ weight: 'light', on: { 'sources-first': true, 'quote-the-source': false } })
   eng.files[`${ROOT}/.sentinel/instructions/widths.json`] = JSON.stringify({ description: 'Widths', at: 'start', files: ['web/**'], text: 'Check three widths.' })
   eng.files[`${ROOT}/.sentinel/instructions/cloned.json`] = JSON.stringify({ at: 'always', text: 'Nobody trusted this.' })
   await sentinel('trust widths')
@@ -2848,9 +2866,9 @@ test("library: define stores the library the switches give, never the model's", 
   await sentinel('reset')
   await sentinel('weight standard')
   await $.tool.call({ tool: 'ExitPlanMode' })
-  await $.tool.call({ tool: TOOL, ...PLAN })
-  const standard = (await savedRun($, eng)).library!
-  expect(standard.on).toEqual(['depth-before-size', 'failure-list', 'fails-first', 'break-it-once', 'widths'])
+  await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
+  const standard = heldRun(eng).draft!.library!
+  expect(standard.on).toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
   expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'failure-list', 'break-it-once', 'widths'])
 })
 
@@ -3030,6 +3048,7 @@ test('library: depth items the user leaves unticked take their states out', asyn
 test('library: the dashboard switches items and the plan copy', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = engine(on)
+  eng.quoting()
   const sentinel = command(clock, $)
   const saved = (file: string) => JSON.parse(eng.files[file]!)
   const item = (name: string) => eng.snap().library.instructions.find((x: any) => x.name === name)
@@ -3067,7 +3086,7 @@ test('library: the dashboard switches items and the plan copy', async ($: any, o
   await until(clock, () => eng.submitted.some(t => /asks for an instruction from the dashboard: Check the widths\.\nDraft it with .*"at" \(draft, start, close, final or always\), "text"/.test(t)))
   // A draft takes the Library as it is. The card changes the plan's copy only, and drops what isn't in the Library.
   await sentinel('lock')
-  await $.tool.call({ tool: TOOL, ...PLAN })
+  await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
   await until(clock, () => eng.snap().draftLibrary)
   expect(eng.snap().draftLibrary.weight).toBe('thorough')
   eng.page({ kind: 'libplan', draft: 'older', weight: 'light', on: [] })
@@ -3083,7 +3102,7 @@ test('library: the dashboard switches items and the plan copy', async ($: any, o
   // Locked with "Also make it this project's default": the project's switches now give the same set.
   eng.page({ kind: 'lock', draft: eng.snap().draftKey, keep: 'project' })
   await until(clock, () => eng.files[LIB_PROJECT] && saved(LIB_PROJECT).weight === 'light')
-  expect(saved(LIB_PROJECT)).toEqual({ weight: 'light', on: { 'failure-list': true, mine: false } })
+  expect(saved(LIB_PROJECT)).toEqual({ weight: 'light', on: { 'failure-list': true, 'quote-the-source': false, mine: false } })
   const run = await savedRun($, eng)
   expect(run.library!.on).toEqual(['fast-checks', 'failure-list'])
   expect(run.plan!.title).toBe('Partial refunds')
@@ -3092,7 +3111,7 @@ test('library: the dashboard switches items and the plan copy', async ($: any, o
 test('library: the final instructions of a real define come at the lock', async ($: any, on: any) => {
   const eng = engine(on)
   const sentinel = command(mock.clock(on), $)
-  eng.files[LIB_PROJECT] = JSON.stringify({ weight: 'thorough' })
+  eng.files[LIB_PROJECT] = JSON.stringify({ weight: 'thorough', on: { 'quote-the-source': false } })
   const final = `Before the plan completes:\n${told(textOf('prove-end-to-end'))}`
   await $.tool.call({ tool: 'ExitPlanMode' })
   expect(said(await $.tool.call({ tool: TOOL, ...PLAN }))).toContain(final)
@@ -3110,7 +3129,7 @@ test('library: the final instructions of a real define come at the lock', async 
 const TEST_FILE = `${ROOT}/tests/refund.test.ts`
 const WITHOUT: PlanInput['library'] = { weight: 'thorough', on: ['fails-without-change'], told: [] }
 // Through the plan tool the switches files decide, and the model's library is dropped.
-const SWITCHED_ON = { on: { 'fails-without-change': true } }
+const SWITCHED_ON = { on: { 'fails-without-change': true, 'quote-the-source': false } }
 // PLAN with service editing tests too.
 const rerunPlan = (library?: PlanInput['library']): PlanInput => ({
   ...PLAN, states: [PLAN.states[0]!, { ...PLAN.states[1]!, files: ['src/refund*.ts', 'tests/**'] }, PLAN.states[2]!], ...(library ? { library } : {}),
@@ -3210,7 +3229,7 @@ test('library: a check that passes without the code change is refused', async ($
 
   // A plan with fails-without-change off, at Standard or switched off: no snapshot and no copy. The model's library
   // counts for nothing.
-  for (const switches of [{}, { weight: 'thorough', on: { 'fails-without-change': false } }]) {
+  for (const switches of [{}, { weight: 'thorough', on: { 'fails-without-change': false, 'quote-the-source': false } }]) {
     await $.command.run({ command: 'sentinel', args: 'reset' })
     eng.files[LIB_PROJECT] = JSON.stringify(switches)
     const runs = eng.runs.length
@@ -3241,4 +3260,1774 @@ test('library: a draft the user locks takes its snapshot before the first edit',
   expect(held).toBe('original')
   await $.tool.call({ tool: 'Write', file_path: TEST_FILE, content: 'test v1' })
   expect(gitDid(eng, 'commit-tree')).toHaveLength(1)
+})
+
+// ---- sources: what a quote can later be compared with ----
+
+const PLAN_FILE = 'C:/Users/me/.claude/plans/refunds.md'
+const APPROVED = { plan: '# Refunds\nPartial refunds attach after capture.', isAgent: false, filePath: PLAN_FILE }
+const NO_PLAN = { plan: null, isAgent: false }
+const DOC = `${ROOT}/docs/plan.md`
+const DOC_TEXT = 'Refunds attach after the capture settles.'
+const approvedCopy = (text = APPROVED.plan) => ({ kind: 'approved', text, name: PLAN_FILE, at: expect.any(String) })
+const fileCopy = (text = DOC_TEXT, name = 'docs/plan.md') => ({ kind: 'file', name, text, at: expect.any(String) })
+// What the plugin holds now: the run, with its draft, and the session's typed messages and written files.
+const heldRun = (eng: ReturnType<typeof engine>) => eng.memory.run ?? emptyRun()
+const heardSoFar = (eng: ReturnType<typeof engine>) => eng.memory.said?.messages ?? []
+const wroteSoFar = (eng: ReturnType<typeof engine>) => eng.memory.said?.wrote ?? []
+const typed = ($: any, text: string, kind = 'composer', more: object = {}) => $.prompt.submit({ text, origin: { kind }, ...more })
+const definePlan = ($: any, input: object = {}) => $.tool.call({ tool: TOOL, ...PLAN, ...input })
+const ORDER = PLAN.states.map(s => s.id)
+// From a plan locked at explore to its end.
+async function finishPlan($: any) {
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'service', evidence: 'read it' })
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete/)
+}
+
+test('sources: a plan-mode sign-off saves the approved plan, and define carries it', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(heldRun(eng).sources).toEqual([approvedCopy()])
+  // A define that is refused leaves it for the next try.
+  expect(said(await definePlan($, { states: [] }))).toMatch(/at least one state/)
+  expect(said(await definePlan($))).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy()])
+  // Moving through the plan keeps it.
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'service', evidence: 'read it' })
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy()])
+})
+
+test("sources: the user's edits are what is saved, and a plan with no file has no name", async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.setApproved({ ...APPROVED, plan: 'The plan as the user left it.', planWasEdited: true })
+  await $.tool.call({ tool: 'ExitPlanMode', plan: 'The plan as Claude wrote it.' })
+  expect(heldRun(eng).sources).toEqual([approvedCopy('The plan as the user left it.')])
+  eng.setApproved({ plan: 'A plan with no file.', isAgent: false })
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(heldRun(eng).sources).toEqual([{ kind: 'approved', text: 'A plan with no file.', at: expect.any(String) }])
+})
+
+test('sources: a sign-off with plan null saves nothing and still signs off', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.setApproved(NO_PLAN)
+  const approved = await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(String(approved.context)).toMatch(/action "define"/)
+  expect(heldRun(eng).sources).toBeUndefined()
+  expect(said(await definePlan($))).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toBeUndefined()
+  // With a plan running, its sources don't pass to the plan that replaces it.
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($)
+  expect(heldRun(eng).sources).toEqual([approvedCopy()])
+  eng.setApproved(NO_PLAN)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await definePlan($))).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toBeUndefined()
+})
+
+test('sources: a new approval replaces the older sources', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.files[DOC] = DOC_TEXT
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { source: 'docs/plan.md' })
+  expect(heldRun(eng).sources).toEqual([approvedCopy(), fileCopy()])
+  eng.setApproved({ ...APPROVED, plan: 'The second plan.' })
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(heldRun(eng).sources).toEqual([approvedCopy('The second plan.')])
+  expect(said(await definePlan($))).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy('The second plan.')])
+})
+
+test('sources: a plan a subagent exits with is not saved as approved, and still signs off', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.setApproved({ ...APPROVED, isAgent: true })
+  await $.tool.call({ tool: 'ExitPlanMode', agentId: 'helper' })
+  expect(heldRun(eng).sources).toBeUndefined()
+  expect(said(await definePlan($))).toMatch(/Locked/)
+})
+
+test('sources: a message typed at the prompt or sent through the bridge is kept', async ($: any, on: any) => {
+  const eng = engine(on)
+  await typed($, 'Add partial refunds please.')
+  await typed($, 'And keep the ledger in sync.', 'bridge')
+  expect(heardSoFar(eng)).toEqual([
+    { text: 'Add partial refunds please.', at: expect.any(String) },
+    { text: 'And keep the ledger in sync.', at: expect.any(String) },
+  ])
+})
+
+test("sources: other origins and Sentinel's own prompts are not counted", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  for (const kind of ['sdk', 'task-notification', 'scheduled-trigger', 'peer', 'peer-send-message', 'projects-relay', 'channel', 'plugin', 'unclassified']) await typed($, `from ${kind}`, kind)
+  // /sentinel lock sends the model a prompt of its own.
+  await command(clock, $)('lock')
+  await clock.advance(1)
+  expect(eng.submitted.at(-1)).toMatch(/The user signed off/)
+  expect(heardSoFar(eng)).toEqual([])
+})
+
+test('sources: a dropped prompt is not counted', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.setDropping('a settings hook blocked it')
+  expect(await typed($, 'This never went in.')).toMatchObject({ drop: expect.any(String) })
+  expect(heardSoFar(eng)).toEqual([])
+})
+
+test('sources: a prompt the person does not see as typed is not counted', async ($: any, on: any) => {
+  const eng = engine(on)
+  await typed($, 'A skill body the engine sent.', 'composer', { isMeta: true })
+  expect(heardSoFar(eng)).toEqual([])
+})
+
+test('sources: only the last 100 messages are held', async ($: any, on: any) => {
+  const eng = engine(on)
+  for (let i = 0; i < 103; i++) await typed($, `message ${i}`)
+  const messages = heardSoFar(eng)
+  expect(messages).toHaveLength(100)
+  expect(messages[0]!.text).toBe('message 3')
+  expect(messages.at(-1)!.text).toBe('message 102')
+})
+
+test('sources: a typed message reaches no file, through several changes to the run', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  const SECRET = 'sk-live-12345'
+  await typed($, `My key is ${SECRET}, use it.`)
+  eng.setApproved(APPROVED)
+  await toService($, eng)
+  await typed($, `It is still ${SECRET}.`, 'bridge')
+  await $.tool.call({ tool: TOOL, action: 'decide', topic: 'rounding', choice: 'half-even' })
+  await $.tool.call({ tool: 'Edit', file_path: REFUND, old_string: 'a', new_string: 'b' })
+  await sentinel('pause')
+  await sentinel('resume')
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
+  await savedRun($, eng)
+  expect(heardSoFar(eng)).toHaveLength(2)
+  expect(eng.files[`${ROOT}/.sentinel/run.json`]).toBeDefined()
+  expect(eng.files[`${ROOT}/.sentinel/state.js`]).toBeDefined()
+  for (const [path, text] of Object.entries(eng.files)) expect(`${path}: ${text}`).not.toContain(SECRET)
+})
+
+test('sources: writes are recorded before any plan exists, as normalised absolute paths', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'Write', file_path: 'D:\\Proj\\Docs\\Plan.md', content: 'x' })
+  expect(wroteSoFar(eng)).toEqual(['d:/proj/docs/plan.md'])
+  // The same file spelled another way is the same entry.
+  await $.tool.call({ tool: 'Edit', file_path: 'D:/proj/docs/../docs/./plan.md', old_string: 'a', new_string: 'b' })
+  expect(wroteSoFar(eng)).toEqual(['d:/proj/docs/plan.md'])
+  await $.tool.call({ tool: 'NotebookEdit', notebook_path: 'C:\\Users\\Me\\n.ipynb', new_source: 'x' })
+  await $.tool.call({ tool: 'Write', file_path: 'src/new.ts', content: 'x' })
+  await $.tool.call({ tool: 'Read', file_path: `${ROOT}/only-read.md` })
+  expect(wroteSoFar(eng)).toEqual(['d:/proj/docs/plan.md', 'c:/users/me/n.ipynb', 'd:/proj/src/new.ts'])
+})
+
+test('sources: pathKey keeps case without a drive letter, and takes a worktree file as the project file', () => {
+  expect(pathKey('D:/proj', 'D:\\Proj\\.\\docs\\..\\A.md')).toBe('d:/proj/a.md')
+  expect(pathKey('D:/proj/', './docs//A.md')).toBe('d:/proj/docs/a.md')
+  expect(pathKey('D:/proj', 'C:/Elsewhere/A.md')).toBe('c:/elsewhere/a.md')
+  expect(pathKey('D:/proj', 'D:/proj-main/.claude/worktrees/agent-a1/src/A.ts')).toBe('d:/proj/src/a.ts')
+  expect(pathKey('/home/me/proj', 'Docs/A.md')).toBe('/home/me/proj/Docs/A.md')
+  expect(pathKey('/home/me/proj', '/etc/../opt/B.md')).toBe('/opt/B.md')
+})
+
+test("sources: a subagent's write is recorded, with a plan running and when it is refused", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  const edit = (file: string, agentId?: string) => $.tool.call({ tool: 'Edit', file_path: file, old_string: 'a', new_string: 'b', ...(agentId ? { agentId } : {}) })
+  expect(said(await edit(REFUND, 'b1'))).toBe('ok')
+  expect(said(await edit(`${ROOT}/src/lib/money.ts`, 'b1'))).toMatch(/outside the files of state service/)
+  await edit(`${ROOT}/.claude/worktrees/agent-a1/docs/spec.md`, 'b2')
+  expect(said(await edit(`${ROOT}/docs/main.md`))).toMatch(/outside the files of state service/)
+  await command(clock, $)('pause')
+  await edit(`${ROOT}/docs/paused.md`, 'b3')
+  expect(wroteSoFar(eng)).toEqual(['d:/proj/src/refund.ts', 'd:/proj/src/lib/money.ts', 'd:/proj/docs/spec.md', 'd:/proj/docs/main.md', 'd:/proj/docs/paused.md'])
+})
+
+test('sources: the file a source names is copied at define, however it is spelled', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.setApproved(NO_PLAN)
+  eng.files[DOC] = DOC_TEXT
+  eng.files['C:/specs/out.md'] = 'Outside the project.'
+  eng.files[`${ROOT}/my docs/plan.md`] = 'In a folder with a space.'
+  eng.files[`${ROOT}/docs/a, b.md`] = 'A comma in its name.'
+  const cases: [string, object][] = [
+    ['docs/plan.md', fileCopy()],
+    ['docs/plan.md, section 3', fileCopy()],
+    ['docs/plan.md section 3', fileCopy()],
+    [`${DOC}, section 3`, fileCopy()],
+    ['D:\\proj\\docs\\plan.md section 3', fileCopy()],
+    ['C:/specs/out.md', fileCopy('Outside the project.', 'C:/specs/out.md')],
+    ['my docs/plan.md', fileCopy('In a folder with a space.', 'my docs/plan.md')],
+    ['docs/a, b.md', fileCopy('A comma in its name.', 'docs/a, b.md')],
+    ['my docs/plan.md, section 3', fileCopy('In a folder with a space.', 'my docs/plan.md')],
+  ]
+  for (const [source, copy] of cases) {
+    await sentinel('reset')
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    expect(said(await definePlan($, { source }))).toMatch(/Locked/)
+    expect(heldRun(eng).sources).toEqual([copy])
+  }
+  // The plan's source still reads as it was sent.
+  expect(heldRun(eng).plan!.source).toBe('my docs/plan.md, section 3')
+})
+
+test('sources: a file Claude wrote is not copied, whoever wrote it and however it is spelled', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.setApproved(NO_PLAN)
+  eng.files[DOC] = DOC_TEXT
+  eng.files[`${ROOT}/docs/helper.md`] = 'A helper wrote this.'
+  await $.tool.call({ tool: 'Write', file_path: 'D:\\PROJ\\docs\\plan.md', content: DOC_TEXT })
+  await $.tool.call({ tool: 'Write', file_path: `${ROOT}/docs/helper.md`, content: 'A helper wrote this.', agentId: 'b1' })
+  for (const source of ['docs/plan.md', 'docs/plan.md, section 3', `${DOC} section 3`, 'docs/helper.md']) {
+    await sentinel('reset')
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    expect(said(await definePlan($, { source }))).toMatch(/Locked/)
+    expect(heldRun(eng).sources).toBeUndefined()
+  }
+  // A file nobody wrote still copies.
+  eng.files[`${ROOT}/docs/user.md`] = 'The user wrote this.'
+  await sentinel('reset')
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { source: 'docs/user.md' })
+  expect(heldRun(eng).sources).toEqual([fileCopy('The user wrote this.', 'docs/user.md')])
+})
+
+test("sources: the approved plan's own path is not copied again", async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.files[PLAN_FILE] = APPROVED.plan
+  eng.setApproved({ ...APPROVED, filePath: 'C:\\Users\\Me\\.claude\\plans\\refunds.md' })
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await definePlan($, { source: `${PLAN_FILE}, section 3` }))).toMatch(/Locked/)
+  expect(heldRun(eng).sources).toEqual([{ kind: 'approved', text: APPROVED.plan, name: 'C:\\Users\\Me\\.claude\\plans\\refunds.md', at: expect.any(String) }])
+})
+
+test('sources: the copy is taken once, so later edits to the file change nothing', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  await sentinel('lock')
+  expect(said(await definePlan($, { source: 'docs/plan.md, section 3' }))).toMatch(/Draft saved/)
+  eng.files[DOC] = 'Edited after the copy.'
+  // A revise that names the same file another way, one that names nothing, and the same define again.
+  expect(said(await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, source: 'docs/plan.md section 4' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  expect(said(await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, title: 'Refunds' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  expect(said(await definePlan($, { source: 'docs/plan.md' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([fileCopy()])
+})
+
+test('sources: a revise that names another file adds its copy and keeps the first', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  eng.files[`${ROOT}/docs/other.md`] = 'Another document.'
+  await sentinel('lock')
+  await definePlan($, { source: 'docs/plan.md' })
+  await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, source: 'docs/other.md' })
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy(), fileCopy('Another document.', 'docs/other.md')])
+})
+
+test('sources: a missing, unreadable or empty file is no source and no error', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.setApproved(NO_PLAN)
+  eng.files[`${ROOT}/docs/empty.md`] = ''
+  for (const source of ['docs/missing.md', 'docs/missing.md, section 3', 'the chat with the user', 'docs/empty.md', '   ']) {
+    await sentinel('reset')
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    expect(said(await definePlan($, { source }))).toMatch(/Locked/)
+    expect(heldRun(eng).sources).toBeUndefined()
+  }
+})
+
+test('sources: a file over 1 MB is left out', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.setApproved(NO_PLAN)
+  const MB = 1024 * 1024
+  eng.files[DOC] = 'x'.repeat(MB + 1)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await definePlan($, { source: 'docs/plan.md' }))).toMatch(/Locked/)
+  expect(heldRun(eng).sources).toBeUndefined()
+  eng.files[DOC] = 'x'.repeat(MB)
+  await sentinel('reset')
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { source: 'docs/plan.md' })
+  expect(heldRun(eng).sources).toHaveLength(1)
+})
+
+test('sources: a file copy the model sends is dropped', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  const named = { kind: 'file', name: 'docs/plan.md', text: 'Made up by the model.', at: '00:00' }
+  eng.setApproved(NO_PLAN)
+  // Sent before the sign-off, it isn't kept with the define.
+  expect(said(await definePlan($, { named }))).toMatch(/No sign-off/)
+  expect(heldRun(eng).held!.named).toBeUndefined()
+  await sentinel('lock')
+  expect(heldRun(eng).draft!.sources).toBeUndefined()
+  await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, named })
+  expect(heldRun(eng).draft!.sources).toBeUndefined()
+  await sentinel('reset')
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { named })
+  expect(heldRun(eng).sources).toBeUndefined()
+})
+
+test('sources: the held route copies the file at the sign-off and carries it to the lock', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = 'Before the sign-off.'
+  expect(said(await definePlan($, { source: 'docs/plan.md, section 3' }))).toMatch(/No sign-off/)
+  expect(heldRun(eng).sources).toBeUndefined()
+  eng.files[DOC] = DOC_TEXT
+  expect(await sentinel('lock')).toMatch(/is the draft now/)
+  const r = heldRun(eng)
+  expect(r.draft!.sources).toEqual([fileCopy()])
+  // The copy lives on the draft alone, so it isn't saved twice.
+  expect(r.sources).toBeUndefined()
+  expect(r.held!.named).toBeUndefined()
+  eng.files[DOC] = 'After the sign-off.'
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([fileCopy()])
+})
+
+test('sources: a define sent after /sentinel lock copies the file, and an approval just before the lock stays', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  await sentinel('lock')
+  expect(said(await definePlan($, { source: 'docs/plan.md' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([fileCopy()])
+
+  await sentinel('reset')
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await sentinel('lock')
+  expect(said(await definePlan($, { source: 'docs/plan.md' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([approvedCopy(), fileCopy()])
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy(), fileCopy()])
+})
+
+test('sources: a revise keeps them on a draft, and one on a live plan is refused and changes nothing', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await sentinel('lock')
+  await definePlan($)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, title: 'Refunds' }))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toEqual([approvedCopy()])
+  expect(await sentinel('lock')).toMatch(/Locked "Refunds"/)
+  const reads = eng.reads.filter(p => p === DOC).length
+  expect(said(await $.tool.call({ tool: TOOL, action: 'revise', order: ORDER, source: 'docs/plan.md' }))).toMatch(/no draft to revise/)
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy()])
+  expect(eng.reads.filter(p => p === DOC).length).toBe(reads)
+})
+
+test("sources: the user's changes to a draft keep them, once each", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  eng.files[`${ROOT}/.sentinel/flows/review.json`] = JSON.stringify(REVIEW_FLOW)
+  await sentinel('lock')
+  await definePlan($, { ...DEPTH_PLAN, source: 'docs/plan.md' })
+  eng.files[DOC] = 'Edited after the copy.'
+  expect(await sentinel('add review after verify')).toMatch(/Added review/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  expect(await sentinel('drop review')).toMatch(/Took review out/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
+  // Locking with depth answers unticked takes their states out through dropStates.
+  expect(await sentinel('lock')).toMatch(/Took out bench, csv/)
+  const run = await savedRun($, eng)
+  expect(run.plan!.states.map(s => s.id)).toEqual(ORDER)
+  expect(run.sources).toEqual([fileCopy()])
+})
+
+test("sources: lockDraft keeps the draft's own, and a draft takes none of a live plan's", () => {
+  const old = { kind: 'approved' as const, text: 'The plan that runs.', at: '09:00' }
+  const named = { kind: 'file' as const, name: 'docs/plan.md', text: DOC_TEXT, at: '10:00' }
+  const live = act({ ...emptyRun(), signedOff: true }, PLAN as PlanInput, '09:00').run
+  const r = act({ ...live, sources: [old], signedOff: true, review: true }, { ...PLAN, named } as PlanInput, '10:00').run
+  expect(r.sources).toEqual([old])
+  expect(r.draft!.sources).toEqual([named])
+  expect(r.held!.named).toBeUndefined()
+  expect(lockDraft(r, '10:01').sources).toEqual([named])
+})
+
+test('sources: a resume from run.json keeps them', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { source: 'docs/plan.md' })
+  await savedRun($, eng)
+  const disk = eng.files[`${ROOT}/.sentinel/run.json`]!
+  await sentinel('reset')
+  expect(heldRun(eng).sources).toBeUndefined()
+  eng.files[`${ROOT}/.sentinel/run.json`] = disk
+  expect(await sentinel('resume')).toMatch(/Resumed "Partial refunds"/)
+  expect(eng.submitted.at(-1)).toMatch(/from an earlier session/)
+  expect(heldRun(eng).sources).toEqual([approvedCopy(), fileCopy()])
+  expect((await savedRun($, eng)).sources).toEqual([approvedCopy(), fileCopy()])
+})
+
+test('sources: freshCount drops them only when nothing is under way', () => {
+  const sources = [{ kind: 'approved' as const, text: 'An earlier plan.', at: '09:00' }]
+  const fresh = (r: Run) => ({ ...r, ...freshCount(r, 'now') })
+  const live = { ...act({ ...emptyRun(), signedOff: true }, PLAN as PlanInput, '09:00').run, sources }
+  expect(fresh(live).sources).toEqual(sources)
+  expect(fresh({ ...emptyRun(), signedOff: true, sources }).sources).toEqual(sources)
+  expect(fresh({ ...emptyRun(), draft: emptyRun(), sources }).sources).toEqual(sources)
+  const over = fresh({ ...live, active: 'done' })
+  expect(over.sources).toBeUndefined()
+  expect(over.spendFrom).toBe('now')
+})
+
+test('sources: a plan signed off after an earlier one finished starts clean', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  const firstPlan = async () => {
+    eng.setApproved(APPROVED)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await definePlan($, { source: 'docs/plan.md' })
+    await finishPlan($)
+    expect(heldRun(eng).sources).toEqual([approvedCopy(), fileCopy()])
+  }
+  // /sentinel lock, with the define sent after it.
+  await firstPlan()
+  await sentinel('lock')
+  expect(heldRun(eng).sources).toBeUndefined()
+  expect(said(await definePlan($))).toMatch(/Draft saved/)
+  expect(heldRun(eng).draft!.sources).toBeUndefined()
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toBeUndefined()
+  await finishPlan($)
+
+  // /sentinel lock, with the define kept from before it. Naming the same file takes a new copy of it as it is now.
+  await firstPlan()
+  eng.files[DOC] = 'The file as it is for the next plan.'
+  expect(said(await definePlan($, { source: 'docs/plan.md' }))).toMatch(/No sign-off/)
+  expect(await sentinel('lock')).toMatch(/is the draft now/)
+  expect(heldRun(eng).draft!.sources).toEqual([fileCopy('The file as it is for the next plan.')])
+  expect(await sentinel('lock')).toMatch(/Locked/)
+  await finishPlan($)
+  eng.files[DOC] = DOC_TEXT
+
+  // A plan-mode sign-off with no plan to save.
+  await firstPlan()
+  eng.setApproved(NO_PLAN)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(heldRun(eng).sources).toBeUndefined()
+  expect(said(await definePlan($))).toMatch(/Locked/)
+  expect((await savedRun($, eng)).sources).toBeUndefined()
+})
+
+test('sources: a draft made while a plan runs takes none of its sources, and the plan keeps them until the lock', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.setApproved(APPROVED)
+  await toService($, eng)
+  await sentinel('lock')
+  expect(heldRun(eng).sources).toEqual([approvedCopy()])
+  expect(said(await definePlan($, { title: 'The next plan' }))).toMatch(/Draft saved/)
+  const r = heldRun(eng)
+  expect(r.sources).toEqual([approvedCopy()])
+  expect(r.draft!.sources).toBeUndefined()
+  expect(await sentinel('lock')).toMatch(/Locked "The next plan"/)
+  expect((await savedRun($, eng)).sources).toBeUndefined()
+})
+
+test('sources: the page snapshot does not hold them, while run.json does', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.files[DOC] = DOC_TEXT
+  const state = () => eng.files[`${ROOT}/.sentinel/state.js`]!
+  await sentinel('lock')
+  await definePlan($, { source: 'docs/plan.md' })
+  await clock.advance(1)
+  await $.tool.call({ tool: TOOL, action: 'status' })
+  await clock.advance(1)
+  expect(state()).not.toContain(DOC_TEXT)
+  await sentinel('reset')
+  eng.setApproved(APPROVED)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await definePlan($, { source: 'docs/plan.md' })
+  const run = await savedRun($, eng)
+  expect(run.sources).toEqual([approvedCopy(), fileCopy()])
+  expect(eng.files[`${ROOT}/.sentinel/run.json`]).toContain(DOC_TEXT)
+  expect(state()).not.toContain(DOC_TEXT)
+  expect(state()).not.toContain('attach after capture')
+  expect(eng.snap().sources).toBeUndefined()
+  expect(eng.snap().source).toBe('docs/plan.md')
+})
+
+// ---- quotes: each state says where it came from ----
+
+const ASKED = `# Refunds
+
+## Service
+Partial refunds attach after the capture settles.
+Read the payments code before changing it.
+Run the full suite before it ships to staff.
+
+## Not in this plan
+Add a loyalty points scheme for members.`
+const REFUND_ASK = 'Partial refunds attach after the capture settles.'
+const READ_ASK = 'Read the payments code before changing it.'
+const SUITE_ASK = 'Run the full suite before it ships'
+const LIB_ON = { weight: 'standard' as const, on: ['quote-the-source'], told: [] }
+const fromPlan = { kind: 'approved' as const, text: ASKED, at: '09:00' }
+const ready = (more: Partial<Run> = {}): Run => ({ ...emptyRun(), signedOff: true, sources: [fromPlan], ...more })
+const quoted = (r: Run, i: object, t = '09:01') => act(r, { action: 'define', library: LIB_ON, ...i } as PlanInput, t)
+const one = (more: object) => ({ loops: [], states: [{ id: 'a', label: 'a', ...more }] })
+const ALL_ASKED = { explore: { asked: [READ_ASK] }, service: { asked: [REFUND_ASK] }, verify: { asked: [SUITE_ASK] } } as Record<string, object>
+const withAsks = (asks: Record<string, object> = ALL_ASKED) => ({ states: PLAN.states.map(s => ({ ...s, ...asks[s.id] })) })
+const ALL_ADDED = { states: PLAN.states.map(s => ({ ...s, added: 'A plan for a test.' })) }
+async function signOffQuoting($: any, eng: ReturnType<typeof engine>, plan = ASKED) {
+  eng.quoting()
+  eng.setApproved({ plan, isAgent: false, filePath: PLAN_FILE })
+  return $.tool.call({ tool: 'ExitPlanMode' })
+}
+
+test('quotes: a quote that is in the approved plan locks, and stays on its state', () => {
+  const a = quoted(ready(), one({ asked: [REFUND_ASK] }))
+  expect(a.ok).toBe(true)
+  expect(a.event).toBe('locked')
+  expect(a.run.plan!.states[0]!.asked).toEqual([REFUND_ASK])
+  expect(a.run.sources).toEqual([fromPlan])
+})
+
+test('quotes: a changed word is refused with the nearest passage, and nothing locks', () => {
+  const a = quoted(ready(), one({ asked: ['Partial refunds attach after the capture clears.'] }))
+  expect(a.ok).toBe(false)
+  expect(a.run.plan).toBeNull()
+  expect(a.text).toMatch(/\ba: "Partial refunds attach after the capture clears\." isn't in /)
+  expect(a.text).toContain(`Nearest: "${REFUND_ASK}"`)
+})
+
+test('quotes: every bad state is named at once, and good ones are not', () => {
+  const a = quoted(ready(), { states: [
+    { id: 'good', label: 'g', asked: [READ_ASK] },
+    { id: 'bad1', label: 'b', asked: ['A feature nobody ever asked for at all.'] },
+    { id: 'bad2', label: 'b' },
+  ] })
+  expect(a.text).toMatch(/\bbad1: /)
+  expect(a.text).toMatch(/\bbad2 /)
+  expect(a.text).not.toMatch(/\bgood\b/)
+})
+
+test('quotes: each kind of refusal says why', () => {
+  const why = (asked: string[], r = ready()) => quoted(r, one({ asked })).text
+  expect(why(['Partial refunds attach'])).toMatch(/at least 5 words/)
+  expect(why(['Add a loyalty points scheme for members.'])).toMatch(/out of scope/)
+  expect(why(['** `` _'])).toMatch(/no words/)
+  const long = Array.from({ length: 61 }, (_, k) => `word${k}`).join(' ')
+  expect(why([long], ready({ sources: [{ kind: 'file', text: long, at: '09:00' }] }))).toMatch(/over 60 words/)
+  const sixty = long.split(' ').slice(0, 60).join(' ')
+  expect(quoted(ready({ sources: [{ kind: 'file', text: long, at: '09:00' }] }), one({ asked: [sixty] })).ok).toBe(true)
+  // A bare yes is no proof, even as a whole message.
+  const yes = quoted(ready(), { ...one({ asked: ['yeah, looks good'] }), messages: [{ text: 'yeah, looks good', at: '09:00' }] })
+  expect(yes.ok).toBe(false)
+  expect(yes.text).toMatch(/at least 5 words/)
+})
+
+test('quotes: every quote on a state is compared', () => {
+  expect(quoted(ready(), one({ asked: [REFUND_ASK, 'A feature nobody ever asked for at all.'] })).ok).toBe(false)
+  expect(quoted(ready(), one({ asked: [REFUND_ASK, READ_ASK] })).ok).toBe(true)
+})
+
+test('quotes: a state with neither is refused, and the reply says what to send', () => {
+  for (const more of [{}, { asked: [] }, { asked: ['  '] }, { added: '  ' }, { asked: [7, null] }, { asked: 'not a list' }, { added: 7 }]) {
+    const a = quoted(ready(), one(more))
+    expect(a.ok).toBe(false)
+    expect(a.text).toMatch(/a has neither "asked" nor "added"/)
+    expect(a.text).toMatch(/send "added" with your reason/)
+  }
+})
+
+test('quotes: added with a reason passes, and the reason is kept and clipped', () => {
+  const a = quoted(ready(), one({ added: '  Card rules ask for a receipt on each charge.  ' }))
+  expect(a.ok).toBe(true)
+  expect(a.run.draft!.plan!.states[0]!.added).toBe('Card rules ask for a receipt on each charge.')
+  expect(a.run.draft!.plan!.states[0]!.asked).toBeUndefined()
+  expect(quoted(ready(), one({ added: 'x'.repeat(900) })).run.draft!.plan!.states[0]!.added).toHaveLength(300)
+})
+
+test('quotes: asked wins over added, and is still compared', () => {
+  expect(quoted(ready(), one({ asked: ['A feature nobody ever asked for at all.'], added: 'A reason.' })).ok).toBe(false)
+  const a = quoted(ready(), one({ asked: [REFUND_ASK], added: 'A reason.' }))
+  expect(a.ok).toBe(true)
+  expect(a.run.plan!.states[0]!.added).toBeUndefined()
+})
+
+test('quotes: a typed message proves a state, and only that message is kept', () => {
+  const ask = 'Add a receipt to each card charge.'
+  const secret = 'My key is sk-live-12345, use it for this.'
+  const a = quoted(ready(), { ...one({ asked: ['Add a receipt to each card charge'] }), messages: [{ text: secret, at: '08:00' }, { text: ask, at: '08:30' }, { text: 'Other words here.', at: '08:40' }] })
+  expect(a.ok).toBe(true)
+  expect(a.run.sources).toEqual([fromPlan, { kind: 'message', text: ask, at: '08:30' }])
+  expect(JSON.stringify(a.run).includes('sk-live')).toBe(false)
+  expect(JSON.stringify(a.run).includes('Other words')).toBe(false)
+})
+
+test('quotes: a message two states quote is kept once, and the newest copy counts', () => {
+  const ask = 'Add a receipt to each card charge.'
+  const a = quoted(ready(), { states: [{ id: 'a', label: 'a', asked: [ask] }, { id: 'b', label: 'b', asked: ['a receipt to each card charge'] }], messages: [{ text: ask, at: '08:00' }, { text: ask, at: '08:30' }] })
+  expect(a.run.sources).toEqual([fromPlan, { kind: 'message', text: ask, at: '08:30' }])
+})
+
+test('quotes: words in the plan do not bring a message along', () => {
+  const a = quoted(ready(), { ...one({ asked: [REFUND_ASK] }), messages: [{ text: `As the plan says: ${REFUND_ASK}`, at: '08:00' }] })
+  expect(a.run.sources).toEqual([fromPlan])
+})
+
+test('quotes: a short message quoted whole passes, and part of one does not', () => {
+  const messages = [{ text: 'Fix the typo', at: '08:00' }, { text: 'Fix the login page on mobile', at: '08:10' }]
+  expect(quoted(ready(), { ...one({ asked: ['Fix the typo'] }), messages }).ok).toBe(true)
+  expect(quoted(ready(), { ...one({ asked: ['Fix the login'] }), messages }).ok).toBe(false)
+})
+
+test('quotes: a file copy proves a state', () => {
+  const named = { kind: 'file' as const, name: 'docs/plan.md', text: 'Refunds attach after the capture settles down.', at: '09:00' }
+  const a = quoted(ready(), { ...one({ asked: ['Refunds attach after the capture'] }), named })
+  expect(a.ok).toBe(true)
+  expect(a.run.sources).toEqual([fromPlan, named])
+})
+
+test('quotes: nothing to compare with says so, and points at added', () => {
+  const a = quoted(ready({ sources: undefined }), one({ asked: [REFUND_ASK] }))
+  expect(a.ok).toBe(false)
+  expect(a.text).toMatch(/nothing to compare/i)
+  expect(a.text).toMatch(/send "added" with your reason/)
+})
+
+test('quotes: every refusal says which sources count', () => {
+  const a = quoted(ready(), one({ asked: ['A feature nobody ever asked for at all.'] }))
+  expect(a.text).toMatch(/A file you wrote in this session doesn't count/)
+})
+
+test('quotes: a state a flow added quotes nothing, since the user added it', () => {
+  const a = quoted(ready(), { states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }, { id: 'f', label: 'f', flow: { name: 'x', as: 'x', why: 'y' } }] })
+  expect(a.ok).toBe(true)
+})
+
+test('quotes: states done before the start quote nothing', () => {
+  const a = quoted(ready(), { start: 'b', states: [{ id: 'a', label: 'a', evidence: 'commit abc' }, { id: 'b', label: 'b', asked: [REFUND_ASK] }] })
+  expect(a.ok).toBe(true)
+  expect(a.run.active).toBe('b')
+})
+
+test('quotes: a state only there for a depth answer quotes nothing', () => {
+  const r = ready({ review: true })
+  const a = quoted(r, { states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }, { id: 'perf', label: 'p' }], depth: [{ id: 'fast', text: 'Measure it.', state: 'perf' }] })
+  expect(a.ok).toBe(true)
+  expect(a.event).toBe('drafted')
+  // A depth answer that names no state exempts nothing.
+  expect(quoted(r, { states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }, { id: 'perf', label: 'p' }], depth: [{ id: 'fast', text: 'Measure it.' }] }).ok).toBe(false)
+})
+
+test('quotes: with the switch off nothing is compared and the fields go', () => {
+  for (const library of [undefined, { weight: 'standard' as const, on: [], told: [] }]) {
+    const none = act(ready(), { action: 'define', library, ...one({}) } as PlanInput, '09:01')
+    expect(none.ok).toBe(true)
+    const sent = act(ready(), { action: 'define', library, ...one({ asked: ['A feature nobody ever asked for.'], added: 'Why.' }) } as PlanInput, '09:01')
+    expect(sent.ok).toBe(true)
+    expect(sent.run.plan!.states[0]!.asked).toBeUndefined()
+    expect(sent.run.plan!.states[0]!.added).toBeUndefined()
+    // Nor is a typed message kept.
+    expect(JSON.stringify(act(ready(), { action: 'define', library, ...one({}), messages: [{ text: 'A typed message.', at: '08:00' }] } as PlanInput, '09:01').run).includes('typed message')).toBe(false)
+  }
+})
+
+test('quotes: it is a built-in that checks, on at every weight', () => {
+  const b = BUILTINS.find(x => x.name === 'quote-the-source')!
+  expect(b.kind).toBe('checks')
+  for (const weight of ['light', 'standard', 'thorough'] as const) expect(libraryOn(ITEMS, { weight }).on).toContain('quote-the-source')
+})
+
+test('quotes: a draft never holds the messages it was not using', () => {
+  const a = quoted(ready({ review: true }), { ...one({ asked: ['Add a receipt to each card charge'] }), messages: [{ text: 'Add a receipt to each card charge.', at: '08:30' }, { text: 'An unused message here.', at: '08:40' }] })
+  expect(a.event).toBe('drafted')
+  expect(a.run.held!.messages).toBeUndefined()
+  expect(JSON.stringify(a.run).includes('unused message')).toBe(false)
+  expect(a.run.draft!.sources).toEqual([fromPlan, { kind: 'message', text: 'Add a receipt to each card charge.', at: '08:30' }])
+})
+
+test('quotes: a revise compares what it adds, and earlier quotes still hold', () => {
+  const ask = 'Add a receipt to each card charge.'
+  const first = quoted(ready({ review: true }), { ...one({ asked: [ask] }), messages: [{ text: ask, at: '08:30' }] })
+  const revise = (states: object[], order: string[], messages?: object[]) => act(first.run, { action: 'revise', order, states, messages } as PlanInput, '09:02')
+  // The first state's message was kept with the draft, so it needs none sent again.
+  const good = revise([{ id: 'b', label: 'b', asked: [REFUND_ASK] }], ['a', 'b'])
+  expect(good.ok).toBe(true)
+  expect(good.run.draft!.plan!.states.map(s => s.asked)).toEqual([[ask], [REFUND_ASK]])
+  const bad = revise([{ id: 'b', label: 'b', asked: ['A feature nobody ever asked for at all.'] }], ['a', 'b'])
+  expect(bad.ok).toBe(false)
+  // A message typed since the draft counts.
+  const later = 'Please show the receipt on the booking page.'
+  expect(revise([{ id: 'b', label: 'b', asked: [later] }], ['a', 'b'], [{ text: later, at: '09:01' }]).ok).toBe(true)
+})
+
+test('quotes: locking a draft keeps its quotes and sources', () => {
+  const a = quoted(ready({ review: true }), one({ asked: [REFUND_ASK] }))
+  const locked = lockDraft(a.run, '09:05')
+  expect(locked.plan!.states[0]!.asked).toEqual([REFUND_ASK])
+  expect(locked.sources).toEqual([fromPlan])
+})
+
+test('quotes: a state hears its quote when it starts, and its reason if it has none', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = command(mock.clock(on), $)
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [
+    { id: 'a', label: 'a', asked: [REFUND_ASK, READ_ASK] },
+    { id: 'b', label: 'b', added: 'Card rules ask for a receipt.' },
+    { id: 'c', label: 'c', flow: { name: 'x', as: 'x', why: 'y' } },
+  ] })
+  await sentinel('lock')
+  expect(said(await $.tool.call({ tool: TOOL, action: 'status' }))).toContain(`Asked for: "${REFUND_ASK}" "${READ_ASK}"`)
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  const atB = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'b', evidence: 'read it' }))
+  expect(atB).toContain('Nothing asked for this; you added it because: Card rules ask for a receipt.')
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  const atC = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'c', evidence: 'read it' }))
+  expect(atC).toMatch(/Moved to c/)
+  expect(atC).not.toMatch(/Asked for|you added it/)
+})
+
+test('quotes: a plan locked before this hears nothing new', () => {
+  const old = act({ ...emptyRun(), signedOff: true }, PLAN as PlanInput, '09:00')
+  expect(old.ok).toBe(true)
+  expect(old.text).not.toMatch(/Asked for|you added it/)
+})
+
+test('quotes: refusals are kept for the record, and reach the plan that locks', () => {
+  const bad = 'Partial refunds attach after the capture clears.'
+  const first = quoted(ready(), one({ asked: [bad] }), '09:01')
+  expect(first.run.refused).toEqual([{ state: 'a', quote: bad, why: 'missing', nearest: REFUND_ASK, t: '09:01' }])
+  const second = quoted(first.run, one({}), '09:02')
+  expect(second.run.refused).toHaveLength(2)
+  expect(second.run.refused![1]).toEqual({ state: 'a', why: 'none', t: '09:02' })
+  const locked = quoted(second.run, one({ asked: [REFUND_ASK] }), '09:03')
+  expect(locked.ok).toBe(true)
+  expect(locked.run.refused).toHaveLength(2)
+  // On a draft too.
+  const draft = quoted({ ...second.run, review: true }, one({ asked: [REFUND_ASK] }), '09:03')
+  expect(lockDraft(draft.run, '09:04').refused).toHaveLength(2)
+})
+
+test('quotes: the record never takes words from an unused message', () => {
+  const secret = 'Refund the sk-live-12345 key before the capture settles.'
+  const a = quoted(ready(), { ...one({ asked: ['Refund the money before the capture settles.'] }), messages: [{ text: secret, at: '08:00' }] })
+  // Claude read that message already, so the reply can show it.
+  expect(a.text).toContain(secret)
+  expect(JSON.stringify(a.run).includes('sk-live')).toBe(false)
+  expect(a.run.refused![0]!.nearest).toBe(REFUND_ASK)
+})
+
+test('quotes: its text is for the Library page, and Claude is never told it', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.quoting()
+  const text = BUILTINS.find(x => x.name === 'quote-the-source')!.text
+  await signOffQuoting($, eng)
+  await definePlan($, withAsks())
+  const held = await savedRun($, eng)
+  expect(held.library!.on).toContain('quote-the-source')
+  expect(JSON.stringify(held.library!.told).includes(text.slice(0, 30))).toBe(false)
+})
+
+test('quotes: the record stays small, and ends with its plan', () => {
+  let r = ready()
+  for (let k = 0; k < 40; k++) r = quoted(r, one({})).run
+  expect(r.refused).toHaveLength(30)
+  const over = { ...r, signedOff: false }
+  expect({ ...over, ...freshCount(over, 'now') }.refused).toBeUndefined()
+  // A sign-off still being worked on keeps it.
+  expect({ ...r, ...freshCount(r, 'now') }.refused).toHaveLength(30)
+})
+
+test('quotes: a plan-mode sign-off checks against the plan as approved', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng)
+  const bad = await definePlan($, withAsks({ ...ALL_ASKED, service: { asked: ['Partial refunds attach after the capture clears.'] } }))
+  expect(said(bad)).toMatch(/service: "Partial refunds attach/)
+  expect(said(bad)).toContain(`Nearest: "${REFUND_ASK}"`)
+  expect(said(await definePlan($, withAsks()))).toMatch(/Locked/)
+  const saved = await savedRun($, eng)
+  expect(saved.plan!.states.map(s => s.asked)).toEqual([[READ_ASK], [REFUND_ASK], [SUITE_ASK]])
+  expect(saved.refused).toHaveLength(1)
+})
+
+test('quotes: the plan text as edited is what counts', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng, 'The user edited this plan to say partial refunds wait a day.')
+  expect(said(await definePlan($, one({ asked: [REFUND_ASK] })))).toMatch(/isn't in /)
+  expect(said(await definePlan($, one({ asked: ['partial refunds wait a day'] })))).toMatch(/Locked/)
+})
+
+test('quotes: a typed message proves a state, and an unused one stays off the disk', async ($: any, on: any) => {
+  const eng = engine(on)
+  await typed($, 'My key is sk-live-12345, use it for this.')
+  await typed($, 'Add a receipt to each card charge.', 'bridge')
+  await signOffQuoting($, eng)
+  expect(said(await definePlan($, withAsks({ ...ALL_ASKED, explore: { asked: ['Add a receipt to each card charge.'] } })))).toMatch(/Locked/)
+  const saved = await savedRun($, eng)
+  expect(saved.sources!.map(s => s.kind)).toEqual(['approved', 'message'])
+  expect(Object.values(eng.files).join('\n').includes('sk-live')).toBe(false)
+})
+
+test('quotes: Claude cannot send its own proof', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng)
+  const made = 'Add a made up export feature to the plan.'
+  const words = withAsks({ ...ALL_ASKED, service: { asked: [made] } })
+  for (const forged of [{ messages: [{ text: made, at: '08:00' }] }, { sources: [{ kind: 'approved', text: made, at: '08:00' }] }, { named: { kind: 'file', text: made, at: '08:00' } }, { library: { weight: 'light', on: [], told: [] } }]) {
+    expect(said(await definePlan($, { ...words, ...forged }))).toMatch(/service: "Add a made up export feature/)
+  }
+})
+
+test('quotes: what Claude sends as messages is not kept, even before a sign-off', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.quoting()
+  await definePlan($, { ...one({}), messages: [{ text: 'Made up words here.', at: '08:00' }] })
+  expect(heldRun(eng).held!.messages).toBeUndefined()
+})
+
+test('quotes: a prompt Sentinel sent itself is no proof', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.prompt.submit({ text: 'Add a made up export feature to the plan.' })
+  await typed($, 'Add a made up export feature to the plan.', 'task-notification')
+  await signOffQuoting($, eng)
+  expect(said(await definePlan($, one({ asked: ['Add a made up export feature to the plan.'] })))).toMatch(/isn't in /)
+})
+
+test('quotes: a file from before the session counts, and one Claude wrote does not', async ($: any, on: any) => {
+  const eng = engine(on)
+  eng.files[DOC] = 'Refunds attach after the capture settles down.'
+  await signOffQuoting($, eng)
+  expect(said(await definePlan($, { source: 'docs/plan.md', ...one({ asked: ['Refunds attach after the capture'] }) }))).toMatch(/Locked/)
+
+  const other = 'docs/mine.md'
+  const words = 'Claude wrote these words down itself.'
+  eng.files[`${ROOT}/${other}`] = words
+  await $.tool.call({ tool: 'Write', file_path: `${ROOT}/${other}`, content: words })
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  const refused = said(await definePlan($, { source: other, ...one({ asked: [words] }) }))
+  expect(refused).toMatch(/isn't in /)
+  expect(refused).toMatch(/A file you wrote in this session doesn't count/)
+})
+
+test('quotes: a define held for /sentinel lock is compared at the sign-off', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.quoting()
+  const ask = 'Add a receipt to each card charge.'
+  await typed($, ask)
+  await definePlan($, one({ asked: [ask] }))
+  expect(await sentinel('lock')).toMatch(/is the draft now/)
+  expect(eng.snap().phase).toBe('draft')
+  expect(heldRun(eng).draft!.sources).toEqual([{ kind: 'message', text: ask, at: expect.any(String) }])
+})
+
+test('quotes: a held define that fails goes back to Claude', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.quoting()
+  await definePlan($, one({ asked: ['A feature nobody ever asked for at all.'] }))
+  expect(await sentinel('lock')).toMatch(/The model drafts the plan next/)
+  await clock.settle()
+  expect(eng.submitted.join('\n')).toMatch(/The define you sent before the sign-off was refused: .*a: "A feature nobody/s)
+})
+
+test('quotes: a Claude-written plan locked with /sentinel lock has only additions to show', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  eng.quoting()
+  const words = 'Claude wrote these words down itself.'
+  await $.tool.call({ tool: 'Write', file_path: DOC, content: words })
+  eng.files[DOC] = words
+  await sentinel('lock')
+  expect(said(await definePlan($, { source: 'docs/plan.md', ...one({ asked: [words] }) }))).toMatch(/isn't in /)
+  expect(said(await definePlan($, { source: 'docs/plan.md', ...one({ added: 'I planned this myself.' }) }))).toMatch(/Draft saved/)
+})
+
+test('quotes: switching it off lets a plan through with no quotes', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await signOffQuoting($, eng)
+  expect(said(await definePlan($))).toMatch(/explore has neither/)
+  await sentinel('off quote-the-source')
+  expect(said(await definePlan($))).toMatch(/Locked/)
+})
+
+test('quotes: the sign-off tells Claude to quote, only when it is on', async ($: any, on: any) => {
+  const eng = engine(on)
+  const offNote = await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(notes(offNote)).not.toMatch(/"asked"/)
+  const onNote = await signOffQuoting($, eng)
+  expect(notes(onNote)).toMatch(/"asked"/)
+  expect(notes(onNote)).toMatch(/"added"/)
+})
+
+test('quotes: /sentinel lock tells Claude to quote, only when it is on', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await sentinel('lock')
+  await clock.settle()
+  expect(eng.submitted.join('\n')).not.toMatch(/"asked"/)
+  await sentinel('reset')
+  eng.quoting()
+  await sentinel('lock')
+  await clock.settle()
+  expect(eng.submitted.join('\n')).toMatch(/"asked"/)
+})
+
+test('quotes: a member hears its quote too', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await sentinel('parallel on')
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [
+    { id: 'a', label: 'a', asked: [READ_ASK], files: ['a/**'] },
+    { id: 'b', label: 'b', needs: [], asked: [REFUND_ASK], files: ['b/**'] },
+  ] })
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'b', brief: 'Do b.' })
+  expect(eng.spawns[0].prompt).toContain(`Asked for: "${REFUND_ASK}"`)
+})
+
+// ---- when it stops and when it doesn't ----
+// How it can fail:
+// After a sign-off: a plan with an addition locks anyway; one with none stops; the draft forgets the approved plan or a
+// used message on the next revise; the comparison being off still makes a draft; a flow's state counts as an addition;
+// the draft takes over a plan that is running.
+// Answers: Keep marks the wrong state, or a state Claude didn't add; an answer is lost on a change to the draft, or
+// outlives a changed reason; Claude answers for the user; a lock leaves one unanswered, or overwrites an earlier time;
+// Take it out removes a state with a quote, acts on a stale page, or locks the plan by itself.
+// Mid-run: a quote goes unchecked; a tag or its reason is lost; a refusal changes the plan; a used message isn't kept, or
+// an unused one is; the rest of the plan changes (dropped, reordered, redefined, retitled); a new state lands before the
+// active state or a member's, or shares files with work that can run beside it; a state claims to be a flow's to skip the
+// comparison; Claude's own "messages" count; the route opens with the comparison off, with a draft waiting, or when
+// nothing runs.
+// A look: a risky path, or a wide glob over one, goes through; a clear path stops; a state with a quote stops for its
+// files; Claude's own mark is lost; the stop comes at the adding, holding up the active state.
+const TWO = { title: 'Refunds', loops: [] as string[][], states: [
+  { id: 'a', label: 'a', asked: [READ_ASK], files: ['a/**'] },
+  { id: 'b', label: 'b', asked: [REFUND_ASK], files: ['b/**'] },
+] }
+const WHY = 'Card rules ask for a receipt.'
+const WAITLIST = 'add a waitlist for full classes please'
+const running = (more: Partial<Run> = {}): Run => ({ ...quoted(ready(), TWO).run, ...more })
+const adding = (r: Run, states: object[], order: string[], more: object = {}) => act(r, { action: 'revise', order, states, ...more } as PlanInput, '09:30')
+const withAddition = (more: object = {}) => quoted(ready(), { title: 'Refunds', loops: [], states: [{ id: 'a', label: 'a', asked: [READ_ASK] }, { id: 'w', label: 'w', added: WHY }], ...more })
+const draftState = (r: Run, id: string) => r.draft!.plan!.states.find(s => s.id === id)
+const newState = (r: Run, id = 'n') => r.plan!.states.find(s => s.id === id)
+const addOne = (more: object, r = running()) => adding(r, [{ id: 'n', label: 'n', ...more }], ['a', 'n', 'b'])
+
+test('stops: with every quote matching, a plan-mode sign-off locks straight away', () => {
+  const a = quoted(ready(), TWO)
+  expect(a.event).toBe('locked')
+  expect(a.run.draft).toBeUndefined()
+  expect(a.run.active).toBe('a')
+  expect(a.text).toContain(`Asked for: "${READ_ASK}"`)
+})
+
+test('stops: one addition after plan mode saves a draft instead, and says why', () => {
+  const a = withAddition()
+  expect(a.ok).toBe(true)
+  expect(a.event).toBe('drafted')
+  expect(a.run.plan).toBeNull()
+  expect(draftState(a.run, 'w')!.added).toBe(WHY)
+  expect(a.run.draft!.sources).toEqual([fromPlan])
+  expect(a.run.draft!.log[0]!.text).toMatch(/^Drafted/)
+  expect(a.text).toMatch(/w/)
+  expect(a.text).toMatch(/waits for their answer/)
+  expect(a.text).toMatch(/Draft saved/)
+})
+
+test('stops: a draft made that way keeps the approved plan and a used message through a revise', () => {
+  const a = withAddition({ states: [{ id: 'a', label: 'a', asked: [WAITLIST] }, { id: 'w', label: 'w', added: WHY }], messages: [{ text: WAITLIST, at: '09:00' }] })
+  expect(a.run.review).toBe(true)
+  const r = act(a.run, { action: 'revise', order: ['a', 'w'], title: 'New name' } as PlanInput, '09:05')
+  expect(r.ok).toBe(true)
+  expect(r.event).toBe('drafted')
+  expect(r.run.draft!.plan!.title).toBe('New name')
+  expect(r.run.draft!.sources!.map(s => s.text)).toEqual([ASKED, WAITLIST])
+})
+
+test('stops: with the comparison off, "added" changes nothing and the plan locks', () => {
+  const a = act(ready(), { action: 'define', library: { weight: 'standard', on: [], told: [] }, states: [{ id: 'w', label: 'w', added: WHY }] } as PlanInput, '09:01')
+  expect(a.event).toBe('locked')
+  expect(a.run.plan!.states[0]!.added).toBeUndefined()
+})
+
+test("stops: a flow's state and one done before the lock are no additions", () => {
+  const a = quoted(ready(), { loops: [], start: 'f', states: [
+    { id: 'd', label: 'd', evidence: 'Commit 1234.', added: WHY },
+    { id: 'f', label: 'f', flow: { name: 'x', as: 'x', why: 'y' }, added: WHY },
+    { id: 'a', label: 'a', asked: [READ_ASK] },
+  ] })
+  expect(a.event).toBe('locked')
+})
+
+test('stops: an addition on a new sign-off leaves the running plan running until the draft locks', () => {
+  const r = { ...running(), signedOff: true, review: false }
+  const a = quoted(r, { title: 'Next', loops: [], states: [{ id: 'w', label: 'w', added: WHY }] })
+  expect(a.event).toBe('drafted')
+  expect(a.run.active).toBe('a')
+  expect(a.run.plan!.title).toBe('Refunds')
+  expect(a.run.draft!.plan!.title).toBe('Next')
+})
+
+test('stops: a flow Claude drafted stays beside the draft, so discarding it holds', () => {
+  const flowDraft = { name: 'mine', states: [] } as unknown as Run['flowDraft']
+  const a = quoted(ready({ flowDraft }), { loops: [], states: [{ id: 'w', label: 'w', added: WHY }] })
+  expect(a.run.flowDraft).toEqual(flowDraft)
+  expect(a.run.draft!.flowDraft).toBeUndefined()
+})
+
+test('stops: keeping an addition marks that state with the time, and only a state Claude added', () => {
+  const r = withAddition().run
+  const kept = keepAdded(r, 'w', '09:12')
+  expect(draftState(kept, 'w')!.okAt).toBe('09:12')
+  expect(draftState(kept, 'a')!.okAt).toBeUndefined()
+  expect(keepAdded(r, 'a', '09:12')).toBe(r)
+  expect(keepAdded(r, 'nope', '09:12')).toBe(r)
+  expect(keepAdded(running(), 'a', '09:12').draft).toBeUndefined()
+  expect(draftState(keepAdded(kept, 'w', '09:20'), 'w')!.okAt).toBe('09:12')
+})
+
+test('stops: an answer stands through a change to the draft, until Claude changes the reason', () => {
+  const r = keepAdded(withAddition().run, 'w', '09:12')
+  const same = act(r, { action: 'revise', order: ['a', 'w'], title: 'New name' } as PlanInput, '09:15')
+  expect(draftState(same.run, 'w')!.okAt).toBe('09:12')
+  const other = act(r, { action: 'revise', order: ['a', 'w'], states: [{ id: 'w', label: 'w', added: 'Another reason entirely.' }] } as PlanInput, '09:15')
+  expect(other.ok).toBe(true)
+  expect(draftState(other.run, 'w')!.okAt).toBeUndefined()
+  const asked = act(r, { action: 'revise', order: ['a', 'w'], states: [{ id: 'w', label: 'w', asked: [REFUND_ASK] }] } as PlanInput, '09:15')
+  expect(asked.ok).toBe(true)
+  expect(draftState(asked.run, 'w')!.okAt).toBeUndefined()
+})
+
+test("stops: Claude can't answer for the user, or set why a state stops", () => {
+  const r = withAddition({ states: [{ id: 'a', label: 'a', asked: [READ_ASK] }, { id: 'w', label: 'w', added: WHY, okAt: '09:00', look: 'nothing' }] }).run
+  expect(draftState(r, 'w')!.okAt).toBeUndefined()
+  expect(draftState(r, 'w')!.look).toBeUndefined()
+  const n = newState(addOne({ added: WHY, okAt: '09:00', look: 'nothing', files: ['docs/**'] }).run)!
+  expect(n.okAt).toBeUndefined()
+  expect(n.look).toBeUndefined()
+})
+
+test('stops: a lock keeps every addition not yet answered, at the time of the lock', () => {
+  const two = withAddition({ states: [{ id: 'a', label: 'a', asked: [READ_ASK] }, { id: 'w', label: 'w', added: WHY }, { id: 'x', label: 'x', added: WHY }] }).run
+  const locked = lockDraft(keepAdded(two, 'w', '09:12'), '09:20')
+  const at = (id: string) => locked.plan!.states.find(s => s.id === id)!.okAt
+  expect([at('a'), at('w'), at('x')]).toEqual([undefined, '09:12', '09:20'])
+})
+
+test('stops: the page keeps and takes out additions on the draft it shows, and only those', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await openPage($, clock)
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [['c', 'w1']], states: [
+    { id: 'a', label: 'a', asked: [READ_ASK] },
+    { id: 'w1', label: 'w1', added: WHY },
+    { id: 'w2', label: 'w2', added: WHY },
+    { id: 'c', label: 'c', asked: [REFUND_ASK], needs: ['w2'] },
+  ] })
+  await until(clock, () => eng.snap().draftKey)
+  const ids = () => heldRun(eng).draft!.plan!.states.map(s => s.id)
+  // A tab that shows an older draft changes nothing, and a state with a quote isn't Claude's to lose.
+  eng.page({ kind: 'keepadded', draft: 'older', state: 'w1' }, { kind: 'dropadded', draft: 'older', state: 'w2' }, { kind: 'dropadded', draft: eng.snap().draftKey, state: 'a' })
+  eng.page({ kind: 'keepadded', draft: eng.snap().draftKey, state: 'w1' })
+  await until(clock, () => draftState(heldRun(eng), 'w1')!.okAt)
+  expect(ids()).toEqual(['a', 'w1', 'w2', 'c'])
+  const kept = draftState(heldRun(eng), 'w1')!.okAt
+  await clock.advance(1)
+  eng.page({ kind: 'dropadded', draft: eng.snap().draftKey, state: 'w2' })
+  await until(clock, () => !ids().includes('w2'))
+  expect(ids()).toEqual(['a', 'w1', 'c'])
+  expect(draftState(heldRun(eng), 'c')!.needs).toEqual(['w1'])
+  expect(draftState(heldRun(eng), 'w1')!.okAt).toBe(kept)
+  expect(heldRun(eng).draft!.plan!.loops).toEqual([['c', 'w1']])
+  expect(heldRun(eng).plan).toBeNull()
+})
+
+test('stops: taking the last addition out leaves a draft for the user to lock', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await openPage($, clock)
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [READ_ASK] }, { id: 'w', label: 'w', added: WHY }] })
+  await until(clock, () => eng.snap().draftKey)
+  eng.page({ kind: 'dropadded', draft: eng.snap().draftKey, state: 'w' })
+  await until(clock, () => heldRun(eng).draft!.plan!.states.length === 1)
+  expect(heldRun(eng).plan).toBeNull()
+  expect(heldRun(eng).draft).toBeTruthy()
+})
+
+test('stops: /sentinel lock keeps them and says so', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [READ_ASK] }, { id: 'w', label: 'w', added: WHY }] })
+  const out = await sentinel('lock')
+  expect(out).toMatch(/Locked "Partial refunds" at a/)
+  expect(out).toMatch(/Kept w, which Claude added/)
+  const saved = await savedRun($, eng)
+  expect(saved.plan!.states[1]!.okAt).toBeTruthy()
+  expect(saved.sources!.map(x => x.kind)).toEqual(['approved'])
+  expect(saved.review).toBeFalsy()
+})
+
+test('stops: mid-run, a state with a quote goes in and the work carries on', () => {
+  const r = running()
+  const a = addOne({ asked: [REFUND_ASK], files: ['n/**'] }, r)
+  expect(a.ok).toBe(true)
+  expect(a.event).toBeUndefined()
+  expect(a.run.plan!.states.map(s => s.id)).toEqual(['a', 'n', 'b'])
+  expect(a.run.active).toBe('a')
+  expect(a.run.tasks).toEqual(r.tasks)
+  expect(a.run.plan!.lockedAt).toBe(r.plan!.lockedAt)
+  expect(a.run.plan!.states[0]).toBe(r.plan!.states[0])
+  const n = newState(a.run)!
+  expect(n.asked).toEqual([REFUND_ASK])
+  expect(n.added).toBeUndefined()
+  expect(n.wait).toBeUndefined()
+  expect(a.text).toMatch(/Added n/)
+  expect(a.text).toMatch(/Active: a/)
+  expect(a.run.audit.at(-1)).toMatchObject({ kind: 'amended', state: 'n' })
+})
+
+test('stops: mid-run, a state with "added" goes in tagged, hears its reason when it starts, and comes next', () => {
+  const a = addOne({ added: WHY, files: ['docs/**'] })
+  expect(a.ok).toBe(true)
+  const n = newState(a.run)!
+  expect(n.added).toBe(WHY)
+  expect(n.wait).toBeUndefined()
+  expect(a.run.audit.at(-1)!.text).toContain(WHY)
+  expect(a.run.log.at(-1)!.text).toMatch(/Added n/)
+  expect(a.run.log.at(-1)!.tone).toBe('dim')
+  expect(act(read(a.run), { action: 'advance', to: 'b', evidence: 'read it' } as PlanInput, '09:40').ok).toBe(false)
+  const moved = act(read(a.run), { action: 'advance', to: 'n', evidence: 'read it' } as PlanInput, '09:40')
+  expect(moved.ok).toBe(true)
+  expect(moved.text).toContain(`you added it because: ${WHY}`)
+})
+
+test('stops: mid-run, a made-up quote is refused and recorded, and nothing else changes', () => {
+  const r = running()
+  const a = addOne({ asked: ['Members pay by card at the checkout counter'] }, r)
+  expect(a.ok).toBe(false)
+  expect(a.text).toMatch(/isn't in the sources/)
+  expect(a.text).toMatch(/send it again/i)
+  expect(a.run.plan).toBe(r.plan)
+  expect(a.run.refused!.at(-1)).toMatchObject({ state: 'n', why: 'missing' })
+  expect(a.run.audit).toBe(r.audit)
+  const none = addOne({}, r)
+  expect(none.ok).toBe(false)
+  expect(none.text).toMatch(/neither "asked" nor "added"/)
+  expect(none.run.plan).toBe(r.plan)
+})
+
+test("stops: mid-run, the message a new quote uses is kept, and one it doesn't use isn't", () => {
+  const a = adding(running(), [{ id: 'n', label: 'n', asked: [WAITLIST] }], ['a', 'n', 'b'], { messages: [{ text: WAITLIST, at: '09:20' }, { text: 'here is my secret token abc123', at: '09:21' }] })
+  expect(a.ok).toBe(true)
+  expect(a.run.sources).toEqual([fromPlan, { kind: 'message', text: WAITLIST, at: '09:20' }])
+})
+
+test("stops: mid-run, the rest of the plan can't change", () => {
+  const r = running()
+  const n = { id: 'n', label: 'n', added: WHY }
+  const no = (a: { ok: boolean; run: Run; text: string }, why: RegExp) => {
+    expect(a.ok).toBe(false)
+    expect(a.text).toMatch(why)
+    expect(a.run).toBe(r)
+  }
+  no(adding(r, [n], ['a', 'n']), /keeps every state/)
+  no(adding(r, [n], ['b', 'a', 'n']), /keeps every state/)
+  no(adding(r, [n], ['n', 'a', 'b']), /after the active state/)
+  no(adding(r, [{ id: 'b', label: 'changed', added: WHY }], ['a', 'b']), /already in the plan/)
+  no(adding(r, [n, { id: 'b', label: 'changed', added: WHY }], ['a', 'n', 'b']), /already in the plan/)
+  no(adding(r, [], ['a', 'b']), /Nothing to add/)
+  no(adding(r, [n], []), /needs "order"/)
+  no(adding(r, [n], ['a', 'b']), /in states but not in order/)
+  no(adding(r, [], ['a', 'x', 'b']), /x is not in the plan/)
+  no(adding(r, [n], ['a', 'n', 'n', 'b']), /used twice/)
+  for (const more of [{ title: 'Other' }, { source: 'other.md' }, { start: 'b' }, { decisions: [{ topic: 't', choice: 'c' }] }, { depth: [] }]) {
+    no(adding(r, [n], ['a', 'n', 'b'], more), new RegExp(`"${Object.keys(more)[0]}" can't change`))
+  }
+})
+
+test("stops: mid-run, a new state can't land before a member's state, or share files with work beside it", () => {
+  const plan = { title: 'P', loops: [], states: [{ id: 'a', label: 'a', asked: [READ_ASK], files: ['a/**'] }, { id: 'b', label: 'b', asked: [REFUND_ASK], files: ['b/**'], needs: [] }] }
+  const r: Run = { ...quoted(ready(), plan).run, running: { b: { agent: 'x', name: 'm', since: 0 } } }
+  const before = adding(r, [{ id: 'n', label: 'n', added: WHY }], ['a', 'n', 'b'])
+  expect(before.ok).toBe(false)
+  expect(before.text).toMatch(/after the active state and any state a member is working on/)
+  expect(adding(r, [{ id: 'n', label: 'n', added: WHY }], ['a', 'b', 'n']).ok).toBe(true)
+  const clash = adding(r, [{ id: 'n', label: 'n', added: WHY, files: ['b/**'], needs: ['a'] }], ['a', 'b', 'n'])
+  expect(clash.ok).toBe(false)
+  expect(clash.text).toMatch(/both may edit/)
+})
+
+test("stops: mid-run, sharing files with a state that is done doesn't count", () => {
+  const plan = { title: 'P', loops: [], states: [{ id: 'a', label: 'a', asked: [READ_ASK], files: ['a/**'] }, { id: 'b', label: 'b', asked: [REFUND_ASK], files: ['b/**'], needs: [] }] }
+  const r: Run = { ...quoted(ready(), plan).run, active: 'b', done: ['a'] }
+  expect(adding(r, [{ id: 'n', label: 'n', added: WHY, files: ['a/**'], needs: ['b'] }], ['a', 'b', 'n']).ok).toBe(true)
+  // And when the state that is done comes after the new one in the list.
+  const later: Run = { ...quoted(ready(), plan).run, done: ['b'] }
+  expect(adding(later, [{ id: 'n', label: 'n', added: WHY, files: ['b/**'], needs: ['a'] }], ['a', 'n', 'b']).ok).toBe(true)
+})
+
+test('stops: mid-run, bad states and loops are refused as at the lock, and a good loop joins the others', () => {
+  const r = running({ plan: { ...running().plan!, loops: [['b', 'a']] } })
+  const bad = (more: object, why: RegExp, loops?: unknown) => {
+    const a = adding(r, [{ id: 'n', label: 'n', added: WHY, ...more }], ['a', 'n', 'b'], loops ? { loops } : {})
+    expect(a.ok).toBe(false)
+    expect(a.text).toMatch(why)
+    expect(a.run.plan).toBe(r.plan)
+  }
+  bad({ needs: ['nope'] }, /not one of the states/)
+  bad({ needs: ['b'] }, /round in a circle/)
+  bad({ wait: 'soon' }, /wait on n/)
+  bad({ group: 'a b' }, /Bad group/)
+  bad({}, /Bad loop/, [['n', 'nope']])
+  const badId = adding(r, [{ id: 'done', label: 'n', added: WHY }], ['a', 'done', 'b'])
+  expect(badId.text).toMatch(/Bad state id/)
+  const good = adding(r, [{ id: 'n', label: 'n', added: WHY }], ['a', 'n', 'b'], { loops: [['n', 'a'], ['b', 'a']] })
+  expect(good.run.plan!.loops).toEqual([['b', 'a'], ['n', 'a']])
+})
+
+test("stops: mid-run, a new state can't claim to be a flow's to skip the comparison", () => {
+  const a = addOne({ flow: { name: 'x', as: 'x', why: 'y' } })
+  expect(a.ok).toBe(false)
+  expect(a.text).toMatch(/neither "asked" nor "added"/)
+  const b = addOne({ flow: { name: 'x', as: 'x', why: 'y' }, added: WHY })
+  expect(newState(b.run)!.flow).toBeUndefined()
+})
+
+test('stops: with the comparison off, or nothing running, revise does what it did', () => {
+  const off = running({ library: undefined })
+  expect(addOne({ added: WHY }, off).text).toMatch(/no draft to revise/)
+  const paused = running({ paused: true })
+  expect(addOne({ added: WHY }, paused).text).toMatch(/no draft to revise/)
+  const finished = running({ active: 'done' })
+  expect(addOne({ added: WHY }, finished).text).toMatch(/no draft to revise/)
+  expect(addOne({ added: WHY }, emptyRun()).text).toMatch(/no draft to revise/)
+})
+
+test('stops: with a draft waiting, revise changes the draft and leaves the running plan alone', () => {
+  const r = { ...running(), signedOff: true, review: true }
+  const held = quoted(r, { title: 'Next', loops: [], states: [{ id: 'w', label: 'w', added: WHY }] }).run
+  const a = act(held, { action: 'revise', order: ['w', 'x'], states: [{ id: 'x', label: 'x', added: WHY }] } as PlanInput, '09:30')
+  expect(a.ok).toBe(true)
+  expect(a.run.plan!.states.map(s => s.id)).toEqual(['a', 'b'])
+  expect(a.run.draft!.plan!.states.map(s => s.id)).toEqual(['w', 'x'])
+})
+
+test('stops: mid-run, an addition that can reach a risky path asks first, and says why', () => {
+  for (const f of ['package.json', 'migrations/001.sql', 'src/auth/login.ts', '.env', '.github/workflows/ci.yml', 'Dockerfile', '**', '*', '**/*.json', '**/*.ts', '**/*.yml', '**/*.sql', '.*']) {
+    const a = addOne({ added: WHY, files: [f] })
+    expect(a.ok).toBe(true)
+    const n = newState(a.run)!
+    expect(n.wait).toBe('before')
+    expect(n.look).toBeTruthy()
+    expect(a.text).toContain(`n asks the user before it starts, because it could involve ${n.look}`)
+    expect(a.run.active).toBe('a')
+  }
+})
+
+test('stops: mid-run, an addition clear of them goes and finishes', () => {
+  for (const f of ['docs/**', 'src/refund.ts', 'tests/**', '**/*.md', 'hooks/core.ts']) {
+    const a = addOne({ added: WHY, files: [f] })
+    const n = newState(a.run)!
+    expect(n.wait).toBeUndefined()
+    expect(n.look).toBeUndefined()
+    expect(a.text).not.toMatch(/asks the user/)
+  }
+  expect(newState(addOne({ added: WHY }).run)!.wait).toBeUndefined()
+})
+
+test("stops: a state with a quote doesn't stop for its files, since the user asked for it", () => {
+  const n = newState(addOne({ asked: [REFUND_ASK], files: ['package.json'] }).run)!
+  expect(n.wait).toBeUndefined()
+  expect(n.look).toBeUndefined()
+})
+
+test('stops: Claude can mark a state itself, and a risky addition asks first over a later review', () => {
+  const marked = newState(addOne({ added: WHY, files: ['docs/**'], wait: 'before' }).run)!
+  expect(marked.wait).toBe('before')
+  expect(marked.look).toBeUndefined()
+  expect(newState(addOne({ added: WHY, files: ['package.json'], wait: 'before' }).run)!.look).toBeTruthy()
+  expect(newState(addOne({ asked: [REFUND_ASK], wait: 'before' }).run)!.wait).toBe('before')
+  expect(newState(addOne({ added: WHY, files: ['docs/**'], wait: 'after' }).run)!.wait).toBe('after')
+  const risky = newState(addOne({ added: WHY, files: ['package.json'], wait: 'after' }).run)!
+  expect(risky.wait).toBe('before')
+  expect(risky.look).toBeTruthy()
+})
+
+test('stops: that stop comes when the state starts, so the active state carries on until then', () => {
+  const a = addOne({ added: WHY, files: ['package.json'] })
+  expect(notYet(a.run)).toBeUndefined()
+  const moved = act(read(a.run), { action: 'advance', to: 'n', evidence: 'read it' } as PlanInput, '09:40')
+  expect(moved.ok).toBe(true)
+  expect(moved.text).toMatch(/It asks the user first/)
+  expect(notYet(moved.run)).toMatch(/asks the user before you start/)
+  const asked = act(moved.run, { action: 'propose', intent: 'Add the receipt package.' } as PlanInput, '09:41')
+  expect(asked.ok).toBe(true)
+  expect(asked.run.pending).toMatchObject({ state: 'n', kind: 'before' })
+})
+
+test("stops: a live revise compares with the user's typed messages and never Claude's", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  void clock
+  await signOffQuoting($, eng)
+  expect(said(await definePlan($, { loops: [], states: [{ id: 'explore', label: 'e', asked: [READ_ASK] }, { id: 'verify', label: 'v', asked: [SUITE_ASK] }] }))).toMatch(/Locked/)
+  await typed($, WAITLIST)
+  const made = 'the user surely wants a coupon field here'
+  const refused = said(await $.tool.call({ tool: TOOL, action: 'revise', order: ['explore', 'n', 'verify'], states: [{ id: 'n', label: 'n', asked: [made] }], messages: [{ text: made, at: '09:00' }] }))
+  expect(refused).toMatch(/isn't in the sources/)
+  const ok = said(await $.tool.call({ tool: TOOL, action: 'revise', order: ['explore', 'n', 'verify'], states: [{ id: 'n', label: 'n', asked: [WAITLIST] }] }))
+  expect(ok).toMatch(/Added n/)
+  const saved = await savedRun($, eng)
+  expect(saved.plan!.states.map(s => s.id)).toEqual(['explore', 'n', 'verify'])
+  expect(saved.sources!.map(s => s.kind)).toEqual(['approved', 'message'])
+  expect(saved.sources![1]!.text).toBe(WAITLIST)
+})
+
+// ---- what both screens read ----
+// How it can fail: a quote points at the wrong source or section; a mark covers the wrong words or the wrong state; a
+// source no quote uses reaches the page, above all a typed message; the note lists a section a state quotes, background
+// or a message's "sections"; a flow counts against the plan's quotes; a refusal made on the draft is lost at the lock; the
+// facts show with the comparison off; a command prints the wrong copy, or Claude runs it.
+const REFUND_DOC = `# Refunds
+Intro words here.
+## Payments
+${REFUND_ASK}
+## Exports
+Staff can export a class roster to a sheet.
+## Overview
+Nobody needs to quote this overview part.
+`
+const docSource = { kind: 'approved' as const, text: REFUND_DOC, at: '09:00', name: 'C:\\Users\\someone\\.claude\\plans\\refunds.md' }
+const usedMessage = { kind: 'message' as const, text: WAITLIST, at: '09:05' }
+const factsOf = (states: object[], sources: object[] = [docSource], more: object = {}) =>
+  summarize(quoted(ready({ sources } as Partial<Run>), { title: 'P', loops: [], states, ...more }).run)
+
+test('facts: each quote says which source it matched and where', () => {
+  const vm = factsOf([
+    { id: 'a', label: 'a', asked: [REFUND_ASK] },
+    { id: 'b', label: 'b', asked: [WAITLIST] },
+  ], [docSource], { messages: [usedMessage] })
+  expect(vm.phase).toBe('live')
+  expect(vm.states[0]!.asks).toEqual([{ quote: REFUND_ASK, source: 0, where: 'refunds.md, Payments' }])
+  expect(vm.states[1]!.asks).toEqual([{ quote: WAITLIST, source: 1, where: 'Your message at 09:05' }])
+  expect(vm.proof!.sources.map(s => s.kind)).toEqual(['approved', 'message'])
+  expect(vm.proof!.sources[0]!.name).toBe('refunds.md')
+  expect(vm.proof!.sources[0]!.origin).toBe('Claude wrote it and you approved it at 09:00')
+  expect(vm.proof!.sources[1]!.origin).toBe('You typed it at 09:05')
+  expect(vm.states[2]!.asks).toBeUndefined()
+})
+
+test('facts: a state with two quotes shows both, and its line names it once', () => {
+  const part = 'refunds attach after the capture settles'
+  const vm = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK, part] }])
+  expect(vm.states[0]!.asks!.map(x => x.quote)).toEqual([REFUND_ASK, part])
+  expect(sourceText(vm).split('\n')).toContain(`  ${REFUND_ASK}   <- a`)
+})
+
+test('facts: a quote points at its source among those that go out', () => {
+  const unused = { kind: 'file' as const, text: 'Words from a file nobody quotes at all.', at: '09:00', name: 'docs/other.md' }
+  const vm = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }], [unused, docSource])
+  expect(vm.proof!.sources.map(s => s.kind)).toEqual(['approved'])
+  expect(vm.states[0]!.asks![0]!.source).toBe(0)
+})
+
+test("facts: a file's origin says what Sentinel knows, and no more", () => {
+  const file = { kind: 'file' as const, text: REFUND_DOC, at: '09:00', name: 'docs/plan.md' }
+  const vm = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }], [file])
+  expect(vm.proof!.sources[0]!.origin).toBe('A file that was there before this session')
+  expect(vm.states[0]!.asks![0]!.where).toBe('plan.md, Payments')
+})
+
+test('facts: the marks cover the quoted words, for the state that quotes them', () => {
+  const vm = factsOf([
+    { id: 'a', label: 'a', asked: [REFUND_ASK] },
+    { id: 'b', label: 'b', asked: ['Staff can export a class roster'], needs: ['a'] },
+  ])
+  const s = vm.proof!.sources[0]!
+  expect(s.marks.map(m => [m.state, s.text.slice(m.from, m.to)])).toEqual([['a', REFUND_ASK], ['b', 'Staff can export a class roster']])
+  expect(s.quotedBy).toBe(2)
+})
+
+test('facts: only a source a quote uses goes out, and the approved plan always does', () => {
+  const file = { kind: 'file' as const, text: 'Words from a file nobody quotes at all.', at: '09:00', name: 'docs/other.md' }
+  const unused = { kind: 'message' as const, text: 'here is my secret token abc123 today', at: '09:01' }
+  const draft = quoted(ready({ sources: [docSource, file, unused] } as Partial<Run>), { loops: [], states: [{ id: 'a', label: 'a', added: WHY }] }).run
+  for (const v of [summarize(draft), summarize(lockDraft(draft, '09:30'))]) {
+    expect(v.proof!.sources.map(s => s.kind)).toEqual(['approved'])
+    expect(v.proof!.sources[0]!.quotedBy).toBe(0)
+    expect(JSON.stringify(v)).not.toContain('abc123')
+  }
+})
+
+test('facts: an unused typed message never reaches the page', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await openPage($, clock)
+  await typed($, 'here is my secret token abc123 today')
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }] })
+  await until(clock, () => eng.snap().proof)
+  const snap = eng.snap()
+  expect(snap.proof.sources.map((s: any) => s.kind)).toEqual(['approved'])
+  expect(snap.states[0].asks[0].quote).toBe(REFUND_ASK)
+  expect(JSON.stringify(snap)).not.toContain('abc123')
+})
+
+test('facts: the note lists what no state quotes, and leaves out background', () => {
+  const vm = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }])
+  expect(vm.proof!.sources[0]!.unquoted).toEqual(['Exports'])
+  const both = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK, 'Staff can export a class roster'] }])
+  expect(both.proof!.sources[0]!.unquoted).toEqual([])
+  expect(both.proof!.sources[0]!.quotedBy).toBe(1)
+})
+
+test('facts: the count leaves out flows and states done before the lock', () => {
+  const vm = factsOf([
+    { id: 'd', label: 'd', evidence: 'Commit 1234.' },
+    { id: 'f', label: 'f', flow: { name: 'x', as: 'x', why: 'y' } },
+    { id: 'a', label: 'a', asked: [REFUND_ASK] },
+    { id: 'w', label: 'w', added: WHY },
+  ], [docSource], { start: 'f' })
+  expect(vm.phase).toBe('draft')
+  expect(vm.proof).toMatchObject({ quoted: 1, of: 2 })
+  expect(vm.states.find(s => s.id === 'w')).toMatchObject({ added: WHY })
+})
+
+test('facts: refused quotes show, on the draft and after it locks', () => {
+  const draft = withAddition().run
+  const out = act(draft, { action: 'revise', order: ['a', 'w'], states: [{ id: 'a', label: 'a', asked: ['Members pay by card at the counter'] }] } as PlanInput, '09:05')
+  expect(out.ok).toBe(false)
+  expect(summarize(out.run).proof!.refused.at(-1)).toMatchObject({ state: 'a', why: 'missing', t: '09:05', says: "wasn't in the sources, word for word" })
+  const locked = lockDraft(out.run, '09:10')
+  expect(summarize(locked).proof!.refused.at(-1)).toMatchObject({ state: 'a', why: 'missing' })
+})
+
+test('facts: a state added mid-run shows, with its reason and why it stops', () => {
+  const vm = summarize(addOne({ added: WHY, files: ['package.json'] }).run)
+  expect(vm.states.find(s => s.id === 'n')).toMatchObject({ added: WHY, wait: 'before' })
+  expect(vm.states.find(s => s.id === 'n')!.look).toBeTruthy()
+  expect(vm.proof).toMatchObject({ quoted: 2, of: 3 })
+})
+
+test('facts: with the comparison off there is nothing to read', () => {
+  const vm = summarize(act(ready(), { action: 'define', library: { weight: 'standard', on: [], told: [] }, states: [{ id: 'a', label: 'a' }] } as PlanInput, '09:01').run)
+  expect(vm.proof).toBeUndefined()
+  expect(vm.states[0]!.asks).toBeUndefined()
+  expect(summarize(emptyRun()).proof).toBeUndefined()
+})
+
+test('facts: drawing again costs nothing, as the pane draws often', () => {
+  const r = quoted(ready({ sources: [docSource] } as Partial<Run>), { title: 'P', loops: [], states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }, { id: 'b', label: 'b', asked: [REFUND_ASK] }] }).run
+  expect(summarize({ ...r, step: 5 }).proof!.sources).toBe(summarize(r).proof!.sources)
+  const more = adding(r, [{ id: 'n', label: 'n', asked: ['Staff can export a class roster'] }], ['a', 'n', 'b'])
+  expect(more.ok).toBe(true)
+  expect(summarize(more.run).proof!.sources[0]!.unquoted).toEqual([])
+})
+
+test('facts: /sentinel source prints the saved copy with each quote beside its line', () => {
+  const r = quoted(ready({ sources: [docSource] } as Partial<Run>), { title: 'P', loops: [], messages: [usedMessage], states: [
+    { id: 'a', label: 'a', asked: [REFUND_ASK] },
+    { id: 'b', label: 'b', asked: [WAITLIST] },
+    { id: 'w', label: 'w', added: WHY },
+  ] }).run
+  const out = sourceText(summarize(keepAdded(r, 'w', '09:12')))
+  const lines = out.split('\n')
+  expect(lines[0]).toBe('refunds.md   Claude wrote it and you approved it at 09:00')
+  expect(lines).toContain(`  ${REFUND_ASK}   <- a`)
+  expect(lines).toContain('  Intro words here.')
+  // The lines either side of a quote stay unmarked.
+  expect(lines).toContain('  ## Payments')
+  expect(lines).toContain('  ## Exports')
+  expect(out).toContain('No state quotes: Exports.')
+  expect(out).toContain(`  ${WAITLIST}   <- b`)
+  expect(out).toContain('Your message   You typed it at 09:05')
+  expect(out).toContain(`w has no quote. Claude added it because: ${WHY} You kept it at 09:12.`)
+})
+
+test('facts: /sentinel source reads a copy with no name or with Windows line ends', () => {
+  const plain = sourceText(summarize(quoted(ready(), TWO).run))
+  expect(plain.split('\n')[0]).toBe('The approved plan   Claude wrote it and you approved it at 09:00')
+  const crlf = { ...docSource, text: REFUND_DOC.replace(/\n/g, '\r\n') }
+  const lines = sourceText(factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }], [crlf])).split('\n')
+  expect(lines).toContain(`  ${REFUND_ASK}   <- a`)
+  expect(lines).toContain('  Intro words here.')
+})
+
+test('facts: a line two states quote names both, and an unanswered addition says only why', () => {
+  const r = quoted(ready({ sources: [docSource] } as Partial<Run>), { loops: [], states: [
+    { id: 'a', label: 'a', asked: [REFUND_ASK] },
+    { id: 'b', label: 'b', asked: [REFUND_ASK], needs: ['a'] },
+    { id: 'w', label: 'w', added: WHY },
+  ] }).run
+  const out = sourceText(summarize(r))
+  expect(out).toContain(`  ${REFUND_ASK}   <- a, b`)
+  expect(out).toContain(`w has no quote. Claude added it because: ${WHY}`)
+  expect(out).not.toContain('You kept it')
+})
+
+test('facts: /sentinel source says so when there is nothing to print, and only the user runs it', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  expect(await sentinel('source')).toMatch(/no saved source/i)
+  await signOffQuoting($, eng)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [REFUND_ASK] }] })
+  expect(await sentinel('source')).toContain(`${REFUND_ASK}   <- a`)
+  const denied = said(await $.command.run({ command: 'sentinel', args: 'source', origin: { kind: 'model' } }))
+  expect(denied).toMatch(/Only the user runs/)
+})
+
+// ---- the same facts in the pane ----
+// How it can fail: the draft hides a quote or shows the whole of a long one; an addition has no mark, or keeps it once
+// answered; the count or the note is missing, or the note runs to a line per section; the band doesn't ask, asks about one
+// already answered, or its buttons don't work; a running state shows a clipped quote, another state's refusal, or no
+// reason; what Claude added is missing at the finish; a plan that doesn't compare quotes shows any of it.
+const LONG_ASK = 'Members pay by card at checkout, and the card company tells us when a payment succeeds or fails.'
+const STUDIO = `# Studio
+## Payments
+${LONG_ASK}
+${REFUND_ASK}
+## Exports
+Staff can export a class roster to a sheet.
+## Reports
+Staff can print a weekly report for the owner.
+`
+const BAND_UI = { plugin: 'sentinel', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 9 }, view: {} }, surface: 'terminal' } as const
+const paneHas = async ($: any, texts: RegExp[], missing: RegExp[] = []) => {
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  for (const text of texts) expect([String(text), await ui.find({ type: 'Text', text }) !== undefined]).toEqual([String(text), true])
+  for (const text of missing) expect([String(text), await ui.find({ type: 'Text', text }) === undefined]).toEqual([String(text), true])
+  await ui.unmount()
+}
+const bandHas = async ($: any, text: RegExp) => {
+  const ui = await $.ui.mount(BAND_UI)
+  const found = await ui.find({ type: 'Text', text })
+  await ui.unmount()
+  return found !== undefined
+}
+const bandPress = async ($: any, clock: any, key: string) => {
+  const ui = await $.ui.mount(BAND_UI)
+  await ui.press({ key })
+  await ui.unmount()
+  await clock.advance(1)
+}
+const TWO_ADDED = { loops: [], states: [
+  { id: 'a', label: 'Payments', asked: [LONG_ASK] },
+  { id: 'w1', label: 'Receipts', added: WHY },
+  { id: 'w2', label: 'Waitlist', added: 'Full classes need a queue.' },
+] }
+
+test('terminal proof: the draft lists where each state came from, with the odd one out marked', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng, STUDIO)
+  await definePlan($, TWO_ADDED)
+  await paneHas($, [
+    /"Members pay by card at checkout, and the card company tells…"/,
+    /Claude wrote it and you approved it at/,
+    /\/sentinel source/,
+    /1 of 3 states quote what you approved or typed, word for word/,
+    /Exports and Reports are in .*, but no state quotes them/,
+    /! w1/,
+    /Nothing asked for this\. Claude's reason: Card rules ask for a receipt\./,
+  ], [/succeeds or fails/, /! a/])
+})
+
+test('terminal proof: one section in the note reads as one, a second quote is counted, and a kept one loses its mark', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await signOffQuoting($, eng, STUDIO)
+  await definePlan($, { loops: [], states: [
+    { id: 'a', label: 'Payments', asked: [LONG_ASK, REFUND_ASK] },
+    { id: 'r', label: 'Reports', asked: ['Staff can print a weekly report'] },
+    { id: 'w', label: 'Receipts', added: WHY },
+  ] })
+  await paneHas($, [/Exports is in .*, but no state quotes it/, /and 1 more/])
+  await bandPress($, clock, 'keep')
+  await paneHas($, [/You kept it at \d\d:\d\d\. Claude's reason: Card rules/], [/! w/, /Nothing asked for this/])
+})
+
+test('terminal proof: with nothing left out of the plan there is no note', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng, `# Studio\n## Payments\n${LONG_ASK}\n`)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [LONG_ASK] }, { id: 'w', label: 'w', added: WHY }] })
+  await paneHas($, [/1 of 2 states quote/], [/no state quotes/])
+})
+
+test('terminal proof: the band asks about each addition in turn, and its buttons answer', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await signOffQuoting($, eng, STUDIO)
+  await definePlan($, TWO_ADDED)
+  expect(await bandHas($, /Claude added w1, and nothing asks for it\. "Card rules ask for a receipt\."/)).toBe(true)
+  await bandPress($, clock, 'keep')
+  expect(draftState(heldRun(eng), 'w1')!.okAt).toBeTruthy()
+  expect(await bandHas($, /Claude added w2, and nothing asks for it\. "Full classes need a queue\."/)).toBe(true)
+  await bandPress($, clock, 'takeout')
+  expect(heldRun(eng).draft!.plan!.states.map(s => s.id)).toEqual(['a', 'w1'])
+  expect(await bandHas($, /Check it, then lock it/)).toBe(true)
+  await bandPress($, clock, 'lock')
+  expect(heldRun(eng).plan!.states.map(s => s.id)).toEqual(['a', 'w1'])
+})
+
+test('terminal proof: a draft with no addition and a running plan keep their usual band', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = command(mock.clock(on), $)
+  eng.quoting()
+  await sentinel('lock')
+  await typed($, LONG_ASK)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [LONG_ASK] }] })
+  expect(await bandHas($, /Check it, then lock it/)).toBe(true)
+  await sentinel('lock')
+  expect(await bandHas($, /Sentinel: a 1\/2/)).toBe(true)
+})
+
+test('terminal proof: a running state shows its whole quote, where it came from, and only its own refusals', async ($: any, on: any) => {
+  const eng = engine(on)
+  await signOffQuoting($, eng, STUDIO)
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: ['Members pay by card at the counter'] }, { id: 'b', label: 'b', asked: ['Staff pay by card at the counter'] }] })
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a' }, { id: 'b', label: 'b', asked: [REFUND_ASK] }] })
+  await definePlan($, { loops: [], states: [{ id: 'a', label: 'a', asked: [LONG_ASK, REFUND_ASK] }, { id: 'b', label: 'b', asked: [REFUND_ASK] }] })
+  await paneHas($, [
+    new RegExp(`"${LONG_ASK.replace(/[.,]/g, '.')}"`),
+    new RegExp(`"${REFUND_ASK.replace(/\./g, '.')}"`),
+    /\.md, Payments\. Claude wrote it and you approved it at/,
+    /Sentinel found these exact words in its saved copy/,
+    /"Members pay by card at the counter" wasn't in the sources, word for word/,
+    /^Claude sent neither a quote nor a reason\.$/,
+  ], [/Staff pay by card at the counter/, /Nothing asked for this/])
+})
+
+test("terminal proof: a state Claude added shows its reason, your answer, and why it stops", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await signOffQuoting($, eng, STUDIO)
+  await definePlan($, { loops: [], states: [{ id: 'w', label: 'w', added: WHY }, { id: 'a', label: 'a', asked: [LONG_ASK] }] })
+  await sentinel('lock')
+  await paneHas($, [/Nothing asked for this\. Claude's reason: Card rules/, /You kept it on the draft at \d\d:\d\d/], [/found these exact words/, /asks you first/])
+  await $.tool.call({ tool: TOOL, action: 'revise', order: ['w', 'n', 'a'], states: [{ id: 'n', label: 'n', added: 'It needs a package.', files: ['package.json'] }] })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'n', evidence: 'read it' })
+  await paneHas($, [/Claude's reason: It needs a package\./, /It asks you first, because it could involve /], [/You kept it/])
+})
+
+const paneWords = (vm: ReturnType<typeof summarize>) => JSON.stringify(renderPane({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, 'focus', { pick: () => {}, browser: () => {} }))
+
+test('terminal proof: the finish lists what Claude added along the way, and your answer', () => {
+  const two = quoted(ready(), { loops: [], states: [{ id: 'w', label: 'w', added: WHY }, { id: 'x', label: 'x', added: 'Another reason.' }] }).run
+  const vm = summarize({ ...lockDraft(two, '09:20'), active: 'done' })
+  expect(vm.phase).toBe('complete')
+  const words = paneWords(vm)
+  expect(words).toContain('Claude added along the way')
+  expect(words).toContain(`w: ${WHY} You kept it at 09:20.`)
+  expect(words).toContain('x: Another reason. You kept it at 09:20.')
+  const midRun = summarize({ ...addOne({ added: WHY }).run, active: 'done' })
+  expect(paneWords(midRun)).toContain(`n: ${WHY}`)
+  expect(paneWords(midRun)).not.toContain('You kept it')
+  expect(paneWords(summarize({ ...running(), active: 'done' }))).not.toContain('Claude added along the way')
+})
+
+test('terminal proof: a source with no name still reads properly', () => {
+  const plain = { kind: 'approved' as const, text: `Some words first.\n${REFUND_ASK}`, at: '09:00' }
+  const live = paneWords(factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }], [plain]))
+  expect(live).toContain('Claude wrote it and you approved it at 09:00.')
+  expect(live).not.toContain('. Claude wrote it')
+  const sections = { kind: 'approved' as const, text: REFUND_DOC, at: '09:00' }
+  const draft = paneWords(factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }, { id: 'w', label: 'w', added: WHY }], [sections]))
+  expect(draft).toContain('Exports is in your plan, but no state quotes it.')
+  expect(draft).toContain('From your message.')
+})
+
+test('terminal proof: a draft with nothing to count says nothing about quotes', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = command(mock.clock(on), $)
+  eng.quoting()
+  await sentinel('lock')
+  await definePlan($, { loops: [], states: [{ id: 'f', label: 'f', flow: { name: 'x', as: 'x', why: 'y' } }] })
+  await paneHas($, [/Lock it with Lock above the prompt/], [/states quote/, /\/sentinel source/])
+})
+
+test('terminal proof: a state added during the run gets no question in the band', () => {
+  const vm = summarize(addOne({ added: WHY }).run)
+  const band = JSON.stringify(renderBand({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, saveFlow: () => {}, discardFlow: () => {} }))
+  expect(band).not.toContain('nothing asks for it')
+  expect(band).toContain('Sentinel: a 1/4')
+})
+
+test("terminal proof: a plan that doesn't compare quotes shows none of it", async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = command(mock.clock(on), $)
+  await sentinel('lock')
+  await definePlan($)
+  await paneHas($, [/Lock it with Lock above the prompt/], [/states quote/, /no state quotes/, /\/sentinel source/])
+  await sentinel('lock')
+  await paneHas($, [/npm test|Read payments code/], [/found these exact words/, /Nothing asked for this/])
+  void eng
+})
+
+test('facts: a source says where each section nothing quotes begins', () => {
+  const s = factsOf([{ id: 'a', label: 'a', asked: [REFUND_ASK] }]).proof!.sources[0]!
+  expect(s.unquoted).toEqual(['Exports'])
+  expect(s.gaps).toEqual([REFUND_DOC.indexOf('## Exports')])
+})
+
+test('terminal proof: a quoted message gives its time once', () => {
+  const words = paneWords(factsOf([{ id: 'a', label: 'a', asked: [WAITLIST] }], [docSource], { messages: [usedMessage] }))
+  expect(words).toContain('You typed it at 09:05.')
+  expect(words).not.toContain('Your message at')
 })
