@@ -57,8 +57,12 @@ const plan = {
 const drafted = act({ ...emptyRun(), signedOff: true, review: true }, plan, '', {}, now).run
 if (!drafted.draft) throw new Error('no draft')
 const standardOn = libraryOn(BUILTINS.map(b => ({ ...b })), {}, {}).on
+// A parallel plan with a state nothing needs, early on, and a way back across rows: the two lines most likely to run under a card.
+const step = (id, ...needs) => ({ id, label: id, needs, check: `npm test -- ${id}`, files: [`src/${id}/**`] })
+const graph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Graph', states: [{ id: 'a', label: 'a' }, step('b', 'a'), step('side', 'a'), step('c', 'b'), step('d', 'c'), step('e', 'd')], loops: [['e', 'b']] }, '', {}, now).run
 
 const VARIANTS = {
+  graph: page(graph, { parallel: true }),
   library: page(emptyRun()),
   light: page(emptyRun(), library({ weight: 'light', on: { 'failure-list': true } })),
   insDraft: page({ ...emptyRun(), flowDraft: { name: 'quick-checks', description: 'Checks under a minute', at: 'start', text: 'Keep each check under a minute: one test file, a type check or a build.', asked: 'keep checks quick' } }),
@@ -221,6 +225,26 @@ try {
   await p.locator('#slip input[name=pkeep][value=project]').check()
   await p.locator('#stub [data-act=lock]').click()
   await sent('lock with picks', b => b.kind === 'lock' && b.draft === key && b.picked?.join() === 'perf' && b.keep === 'project')
+  await p.context().close()
+
+  // The Map of a parallel plan: no line runs under a card.
+  p = await open('graph', '')
+  await p.locator('#viewSeg [data-v=map]').click()
+  const under = await p.evaluate(() => {
+    const cards = [...document.querySelectorAll('#v-map .mcard')].map(c => c.getBoundingClientRect()), hits = []
+    const paths = [...document.querySelectorAll('#v-map svg path.ar, #v-map svg path.lp')]
+    for (const l of paths) {
+      const m = l.getScreenCTM()
+      for (let i = 3; i < l.getTotalLength() - 3; i += 3) {
+        const q = l.getPointAtLength(i), x = q.x * m.a + m.e, y = q.y * m.d + m.f
+        if (cards.some(c => x > c.left + 2 && x < c.right - 2 && y > c.top + 2 && y < c.bottom - 2)) { hits.push(`${l.dataset.a}>${l.dataset.b}`); break }
+      }
+    }
+    return { lines: paths.length, back: document.querySelectorAll('#v-map svg path.lp').length, hits }
+  })
+  check(under.lines >= 7 && under.back === 1, `the graph draws its lines and its way back (${under.lines}, ${under.back})`)
+  check(!under.hits.length, `no line runs under a card (${under.hits.join(', ')})`)
+  if (shots) await p.screenshot({ path: join(shots, 'graph.png'), fullPage: true })
   await p.context().close()
 
   await layout('library', '#library', 'library')

@@ -2398,9 +2398,11 @@ function mapPar() {
   const rowIn = (n, t) => via[`${n}>${t}`]?.at(-1)[1] ?? row[n]
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length
   const ncol = Math.max(0, ...S.map(s => col[s.id])) + 1
+  const lasts = S.filter(s => !S.some(o => needs(o).includes(s.id)))
   for (let c = 0; c < ncol; c++) {
     const items = S.filter(s => col[s.id] === c).map(s => ({ id: s.id, want: needs(s).length ? mean(needs(s).map(n => rowIn(n, s.id))) : 0 }))
     for (const t of S) for (const n of needs(t)) if (col[n] < c && c < col[t.id]) items.push({ edge: `${n}>${t.id}`, want: rowIn(n, t.id) })
+    for (const s of lasts) if (col[s.id] < c) items.push({ edge: `${s.id}>end`, want: rowIn(s.id, 'end') })
     items.sort((a, b) => a.want - b.want || !!a.edge - !!b.edge)
     let prev = -1
     for (const it of items) {
@@ -2433,16 +2435,17 @@ function mapPar() {
     return `<path class="ar ${cls}" d="${d}" data-a="${at[n]}" marker-end="url(#mk-${cls})"`
   }
   for (const t of S) for (const n of needs(t)) svg += `${wire(n, col[t.id], row[t.id], via[`${n}>${t.id}`] || [])} data-b="${at[t.id]}"/>`
-  S.filter(s => !S.some(o => needs(o).includes(s.id))).forEach(s => { svg += `${wire(s.id, ncol, 0, [])} data-b="${S.length}"/>` })
-  // Ways back curve over the cards when they lead up, and under them when they lead down.
+  lasts.forEach(s => { svg += `${wire(s.id, ncol, 0, via[`${s.id}>end`] || [])} data-b="${S.length}"/>` })
+  // Ways back leave over a card when they lead up and under it when they lead down, then run in the gaps between rows and
+  // the gap left of the column they start in, so they cross no card.
   vm.loops.forEach(l => {
     const a = S[at[l.from]], b = S[at[l.to]]
     if (!a || !b) return
-    const up = row[b.id] <= row[a.id], ax = X(col[a.id]) + 30, bx = X(col[b.id]) + CW - 30
-    const ay = Y(row[a.id]) + (up ? 0 : CH), by = Y(row[b.id]) + (up ? -3 : CH + 3), apex = up ? Math.min(ay, by) - 30 : Math.max(ay, by) + 30
+    const up = row[b.id] <= row[a.id], gap = (RH - CH) / 2 * (up ? -1 : 1), ax = X(col[a.id]) + 30, bx = X(col[b.id]) + CW - 30, gx = Math.max(8, X(col[a.id]) - CG / 2)
+    const ay = Y(row[a.id]) + (up ? 0 : CH), by = Y(row[b.id]) + (up ? -3 : CH + 3), ya = ay + gap, yb = by + gap
     const cls = l.count ? 'used' : 'idle'
-    svg += `<path class="lp ${cls}" d="M${ax},${ay} C${ax},${apex} ${bx},${apex} ${bx},${by}" data-a="${at[a.id]}" data-b="${at[b.id]}" marker-end="url(#mk-lp-${cls})">${backTitle(l.from, l.to, l.count)}</path>`
-    if (l.count) svg += `<text class="lpt" x="${(ax + bx) / 2}" y="${(ay + by) / 8 + apex * .75 - 4}">${l.count}×</text>`
+    svg += `<path class="lp ${cls}" d="${rounded([[ax, ay], [ax, ya], [gx, ya], [gx, yb], [bx, yb], [bx, by]])}" data-a="${at[a.id]}" data-b="${at[b.id]}" marker-end="url(#mk-lp-${cls})">${backTitle(l.from, l.to, l.count)}</path>`
+    if (l.count) svg += `<text class="lpt" x="${bx + 5}" y="${yb - 3}">${l.count}×</text>`
   })
   const T = longest()
   S.forEach((s, i) => { html += scard(s, i, cpos(X(col[s.id]), Y(row[s.id])), T) })
