@@ -103,7 +103,7 @@ export function briefRefusal(r: Run, i: PlanInput, parallel: boolean): string | 
   }
   // Only an amend can make a ready state share files with a state being worked on.
   const busy = [r.active!, ...Object.keys(r.running ?? {})].find(o => stateOf(r, o)?.files.some(f => st.files.some(g => globsMeet(f, g))))
-  if (busy) return `${id} may edit the same files as ${busy}, which is being worked on now. Wait until ${busy} is done, then brief ${id}.`
+  if (busy) return `${id} may edit the same files as ${busy}, which is ${busy === r.active && waitingOn(r) ? `waiting on the user now. Wait until they answer and ${busy} is done` : `being worked on now. Wait until ${busy} is done`}, then brief ${id}.`
   if (!i.brief?.trim()) return `brief needs the text for ${id}'s member: what to do and what to watch for.`
   return undefined
 }
@@ -132,12 +132,26 @@ export function untestedNote(states: StateDef[]): string | undefined {
   return `[sentinel] These pairs can run at the same time, and no later state with a check builds on both, so nothing tests them together: ${pairs.slice(0, 4).map(p => p.join(' and ')).join('; ')}${more}. Add a state that needs each pair and checks them together, such as an end-to-end test.`
 }
 
+// With parallel states on, a plan may run in a line only because nobody set needs. The neighbours that share no files are
+// the ones to ask about. One that asks the user first can't go to a member, and one listed as done can't run at all.
+export function lineNote(states: StateDef[]): string | undefined {
+  if (states.some((s, k) => needsOf(states, s.id).join() !== (k ? states[k - 1]!.id : ''))) return undefined
+  const free = (s: StateDef) => s.files.length > 0 && !waitOf(s) && !s.evidence
+  const pairs = states.slice(1).flatMap((s, k) => {
+    const a = states[k]!
+    return free(a) && free(s) && !a.files.some(f => s.files.some(g => globsMeet(f, g))) ? [`${a.id} and ${s.id}`] : []
+  })
+  if (!pairs.length) return undefined
+  const more = pairs.length > 4 ? ` and ${pairs.length - 4} more` : ''
+  return `[sentinel] Parallel states are on, but this plan runs in a line. These neighbours share no files: ${pairs.slice(0, 4).join('; ')}${more}. If neither of a pair builds on the other, give them "needs" so they run at the same time. If the line is right, tell the user why.`
+}
+
 // Before the plan completes, the checks of the done states run again: each command once, apart from the one that
 // just passed.
 // A skipped state is left out.
 export function sweepChecks(r: Run, passed?: string): string[] {
   const done = doneOf(r)
-  const checks = r.plan!.states.filter(s => done.includes(s.id) && !r.skipped?.[s.id] && s.check && !(passed && sameText(s.check, passed))).map(s => s.check!)
+  const checks = r.plan!.states.filter(s => done.includes(s.id) && !r.skipped?.[s.id] && s.check && !s.once && !(passed && sameText(s.check, passed))).map(s => s.check!)
   return [...new Set(checks)]
 }
 
@@ -158,7 +172,7 @@ export function fixChecks(r: Run, to?: string): string[] {
   const st = isLive(r) ? stateOf(r) : undefined
   if (!st || (to ?? '').trim() !== nextOf(r, st)) return []
   const own = st.check
-  return [...new Set(fixedOf(r).flatMap(s => (s.check && !(own && sameText(s.check, own)) ? [s.check] : [])))]
+  return [...new Set(fixedOf(r).flatMap(s => (s.check && !s.once && !(own && sameText(s.check, own)) ? [s.check] : [])))]
 }
 
 export const RETRIES = 2 // times a member's failing check goes back to it
@@ -273,6 +287,9 @@ export function waitingOn(r: Run): boolean {
   return e !== undefined && e >= enteredAt(r, r.active!) && (r.heardAt ?? 0) <= e
 }
 
+// What the run is blocked on, while the user hasn't replied and Claude hasn't moved on.
+export const blockedOn = (r: Run) => (r.blocked && r.blocked.at === r.escalatedAt && waitingOn(r) ? r.blocked : undefined)
+
 // A state that asks before it starts takes no edits until the user has answered its proposal.
 export function notYet(r: Run): string | undefined {
   const st = isLive(r) ? stateOf(r) : undefined
@@ -317,17 +334,31 @@ export function globMatch(glob: string, path: string): boolean {
   return new RegExp(`^${re}$`, 'i').test(path)
 }
 
+// A forward-slash path with its . and .. parts resolved. Nothing goes above a root; a relative path keeps the .. that
+// climb past its start, so it still reads as leaving.
+function dropDots(path: string): string {
+  const parts: string[] = []
+  for (const p of path.split('/')) {
+    const top = parts.at(-1)
+    if (p === '.' || (p === '' && parts.length)) continue
+    if (p !== '..') parts.push(p)
+    else if (top === undefined || top === '..') parts.push(p)
+    else if (top !== '' && !/^[a-z]:$/i.test(top)) parts.pop()
+  }
+  return parts.join('/') + (path.length > 1 && path.endsWith('/') ? '/' : '')
+}
+
 // Project-relative path with forward slashes, or undefined when outside the project.
 export function relPath(root: string, file: string): string | undefined {
   const r = root.replace(/\\/g, '/').replace(/\/$/, '')
   // Git Bash spells D:/x as /d/x.
-  const f = file.replace(/\\/g, '/').replace(/^\/([a-z])\//i, (m, d: string) => (/^[a-z]:/i.test(r) ? `${d}:/` : m))
+  const f = dropDots(file.replace(/\\/g, '/').replace(/^\/([a-z])\//i, (m, d: string) => (/^[a-z]:/i.test(r) ? `${d}:/` : m)))
   // A worktree agent edits the project's files under .claude/worktrees/<name>/, inside the project or in the main checkout.
   // ponytail: any such path counts as this project's; compare git common dirs if other repos' worktrees get edited from here.
   // The last such folder in the path counts, so a session that itself runs in a worktree maps its members' files too.
   const wt = /^(?:.*\/)?\.claude\/worktrees\/[^/]+\/(.+)$/.exec(f)
   if (wt) return wt[1]
-  if (!/^([a-z]:)?\//i.test(f)) return f.replace(/^\.\//, '')
+  if (!/^([a-z]:)?\//i.test(f)) return /^\.\.(\/|$)/.test(f) ? undefined : f
   return f.toLowerCase().startsWith(r.toLowerCase() + '/') ? f.slice(r.length + 1) : undefined
 }
 
@@ -335,13 +366,9 @@ export function relPath(root: string, file: string): string | undefined {
 // Windows (a drive letter shows it). A file in a member's worktree counts as the project's, where its work comes back.
 export function pathKey(root: string, file: string): string {
   const rel = relPath(root, file)
-  const abs = rel === undefined ? file.replace(/\\/g, '/') : `${root.replace(/\\/g, '/').replace(/\/$/, '')}/${rel}`
-  const parts: string[] = []
-  for (const p of abs.split('/')) {
-    if (p === '..') parts.pop()
-    else if (p !== '.' && (p || !parts.length)) parts.push(p)
-  }
-  const key = parts.join('/')
+  const r = root.replace(/\\/g, '/').replace(/\/$/, '')
+  const f = file.replace(/\\/g, '/')
+  const key = dropDots(rel !== undefined ? `${r}/${rel}` : /^([a-z]:)?\//i.test(f) ? f : `${r}/${f}`)
   return /^[a-z]:\//i.test(key) ? key.toLowerCase() : key
 }
 
@@ -432,7 +459,10 @@ export type Observed =
   | { kind: 'check'; label: string; pass: boolean; sig: string; sigText: string; fails: number; touches?: number; tail?: string }
 
 // The end of a check's output, which a refusal shows.
-export const tailOf = (text: string) => text.replace(/\n?\[sentinel\] exit \d+\s*$/, '').trim().slice(-1500)
+// eslint-disable-next-line no-control-regex
+export const tailOf = (text: string) => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\n?\[sentinel\] exit \d+\s*$/, '').trim().slice(-1500)
+// What a check printed last, to say why it failed.
+export const lastLines = (text: string, n = 20) => tailOf(text).split(/\r?\n/).slice(-n).join('\n')
 
 const AUDIT_ON: Partial<Record<Kind, [AuditKind, AuditKind]>> = { ask: ['blocked', 'asked'], plan: ['refused', 'refused'], edit: ['refused', 'refused'] }
 
@@ -580,7 +610,9 @@ export function verLabel(calls: Call[], file: string, ver?: string): string {
 
 export type Acted = { run: Run; text: string; ok: boolean; event?: 'locked' | 'drafted' | 'complete' }
 // Results of the checks of states done before the lock, keyed by command.
-export type Proofs = Record<string, { pass: boolean; sigText: string }>
+export type Proofs = Record<string, { pass: boolean; sigText: string; tail?: string }>
+// A failing check's one line, with its last lines under it. Three checks' worth is enough to act on: the final-checks log keeps the rest.
+export const withTail = (line: string, proof: Proofs[string] | undefined, i: number) => (proof?.tail && i < 3 ? `${line}\n${proof.tail}` : line)
 
 // A refusal leaves the run as it was, apart from a define kept for the sign-off.
 const refuse = (r: Run, text: string): Acted => ({ run: r, text, ok: false })
@@ -599,6 +631,7 @@ export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = 
     return a.ok && kept.length ? { ...a, text: `${a.text}\nKept the flows the user added: ${kept.join(', ')}. Only the user removes them.` } : a
   }
   if (i.action === 'status') return { run: r, text: status(r), ok: true }
+  if (i.action === 'finish') return finish(r, i, t, now, typed)
   if (!isLive(r)) {
     if (r.paused) return refuse(r, 'The user paused Sentinel. Work as they ask; they resume the plan with /sentinel resume.')
     return refuse(r, r.active === 'done' ? 'The plan is complete. A new plan needs a new sign-off.' : 'No plan is locked.')
@@ -609,7 +642,38 @@ export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = 
   if (i.action === 'amend') return amend(r, i, t)
   if (i.action === 'decide') return decide(r, i, t)
   if (i.action === 'escalate') return escalate(r, i, t, now)
-  return refuse(r, `Unknown action "${i.action}". Use define, revise, advance, brief, propose, skip, amend, decide, escalate or status.`)
+  return refuse(r, `Unknown action "${i.action}". Use define, revise, advance, brief, propose, skip, finish, amend, decide, escalate or status.`)
+}
+
+const closedText = (c: NonNullable<Run['closed']>) => [
+  'Plan closed by the user, with no final checks.',
+  c.unfinished.length ? `Not finished: ${c.unfinished.join(', ')}.` : '',
+  c.unchecked.length ? `Done but not rechecked: ${c.unchecked.join(', ')}.` : '',
+  'Questions are open again.',
+].filter(Boolean).join(' ')
+
+// The user closes the plan, finished or not, paused or not: nothing runs again, and the plan says what that leaves
+// unproven. A state left unfinished counts as skipped. A member working on one is let go, and its answer is ignored.
+function finish(r: Run, i: PlanInput, t: string, now: number, typed: boolean): Acted {
+  if (!isUnfinished(r)) return refuse(r, r.active === 'done' ? 'The plan is complete. A new plan needs a new sign-off.' : 'No plan is locked.')
+  if (!typed) return refuse(r, 'Only the user closes a plan. Call finish in the turn where they ask for it in the chat; they can also type /sentinel finish.')
+  const why = clip(i.reason) ?? 'The user closed the plan.'
+  const done = doneOf(r)
+  const states = r.plan!.states
+  const unfinished = states.filter(s => !done.includes(s.id)).map(s => s.id)
+  const unchecked = states.filter(s => done.includes(s.id) && s.check && !s.once && !r.skipped?.[s.id]).map(s => s.id)
+  let tasks = closeVisit(r.tasks, r.active!, now)
+  for (const id of Object.keys(r.running ?? {})) tasks = closeVisit(tasks, id, now)
+  const { running: _running, pending: _pending, paused: _paused, hung: _hung, lastLoop: _lastLoop, ...rest } = r
+  const closed = { why, unfinished, unchecked }
+  const run: Run = {
+    ...rest, active: 'done', done: [...done, ...unfinished], closed, enteredAt: r.step, endedAt: now, tasks, auto: 0, askToken: 0, breakingOk: false,
+    skipped: { ...r.skipped, ...Object.fromEntries(unfinished.map(id => [id, `Not finished: ${why}`])) },
+    traps: r.traps.map(x => (x.end === undefined ? { ...x, end: r.step } : x)),
+    audit: [...r.audit, { step: r.step + 1, t, state: r.active!, kind: 'decided', text: `Closed the plan: ${why}` }],
+    log: [...r.log, { t, icon: '■', tone: 'warn', text: `Plan closed by the user · ${done.length}/${states.length} done` }],
+  }
+  return { run, ok: true, event: 'complete', text: closedText(closed) }
 }
 
 // A state that asks before it starts: what the model will do there goes to the user, who answers in the chat or on
@@ -705,7 +769,9 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
 // final: say what the plan's instructions ask before it completes even when the active state isn't the last.
 function here(r: Run, final = false): string {
   const skipped = Object.keys(r.skipped ?? {})
-  if (r.active === 'done') return `Plan complete.${skipped.length ? ` The user skipped ${skipped.join(', ')}.` : ''} Questions are open again.`
+  if (r.closed) return closedText(r.closed)
+  const onceOnly = r.plan?.states.filter(s => s.once && !r.skipped?.[s.id]).map(s => s.id) ?? []
+  if (r.active === 'done') return `Plan complete.${onceOnly.length ? ` Not run again, marked once: ${onceOnly.join(', ')}.` : ''}${skipped.length ? ` The user skipped ${skipped.join(', ')}.` : ''} Questions are open again.`
   const st = stateOf(r)
   if (!st) return ''
   return [
@@ -808,8 +874,10 @@ function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | stri
   if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`
   if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`
   const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
+  if (s.once !== undefined && typeof s.once !== 'boolean') return `"once" on ${id} must be true or false.`
+  if (s.once && !check) return `${id} has "once" but no check. "once" means its check runs at its advance and not again at the end.`
   const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
 }
 
 // What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
@@ -933,11 +1001,12 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   for (let k = 0; k < at; k++) {
     const s = states[k]!
     const given = i.states![k]!.evidence?.trim()
-    const proof = s.check ? proofs[s.check] : undefined
-    if (s.check && !proof) return refuse(r, `Sentinel couldn't run \`${s.check}\` for ${s.id}.`)
-    if (proof && !proof.pass) return refuse(r, `${s.id} is listed as done, but \`${s.check}\` fails now: ${proof.sigText}. Start at ${s.id}, or fix it first.`)
-    if (!s.check && !given) return refuse(r, `${s.id} is listed as done but has no check, so it needs evidence: a commit, a test run, or what the user confirmed.`)
-    states[k] = { ...s, evidence: [given, s.check && `\`${s.check}\` passed at the lock`].filter(Boolean).join('; ') }
+    const runs = s.check && !s.once
+    const proof = runs ? proofs[s.check!] : undefined
+    if (runs && !proof) return refuse(r, `Sentinel couldn't run \`${s.check}\` for ${s.id}.`)
+    if (proof && !proof.pass) return refuse(r, `${s.id} is listed as done, but \`${s.check}\` fails now: ${proof.sigText}. Start at ${s.id}, or fix it first.${proof.tail ? `\n${proof.tail}` : ''}`)
+    if (!runs && !given) return refuse(r, `${s.id} is listed as done but has ${s.once ? 'a check marked once' : 'no check'}, so it needs evidence: a commit, a test run, or what the user confirmed.`)
+    states[k] = { ...s, evidence: [given, runs && `\`${s.check}\` passed at the lock`].filter(Boolean).join('; ') }
   }
   // The user ticks depth items only on a draft they lock themselves; a plan-mode sign-off locks at once.
   const depth = r.review ? depthOf(i.depth, states) : []
@@ -1002,7 +1071,7 @@ function depthOf(raw: PlanInput['depth'], states: StateDef[]): Depth[] | string 
 export function priorChecks(i: PlanInput): string[] {
   const states = i.states ?? []
   const at = states.findIndex(s => s.id?.trim() === i.start?.trim())
-  return [...new Set(states.slice(0, Math.max(0, at)).flatMap(s => s.check?.trim() || []))]
+  return [...new Set(states.slice(0, Math.max(0, at)).flatMap(s => (s.once === true ? [] : s.check?.trim() || [])))]
 }
 
 // ---- flows ----
@@ -1211,6 +1280,11 @@ export function toldHere(r: Run, st: StateDef, final = false): string {
 
 // The system prompt's Library section: the always instructions, and the draft ones while no plan is locked. The
 // dashboard previews this text. Empty when neither has any.
+// While a plan is written with parallel states on. It sits with the Library's draft instructions, though the switch, not the Library, decides it.
+export const PARALLEL_DRAFT: InstructionDef = {
+  name: 'parallel-states', at: 'draft',
+  text: 'Parallel states are on in this project. Give each state "needs" for only what it really builds on: a state with no "needs" waits on the one listed before it, so a plan without them runs in a line. States where neither needs the other run at the same time, so their files must not overlap. If the plan has to run in a line, tell the user why.',
+}
 export function librarySection(always: InstructionDef[], draft: InstructionDef[]): string {
   const parts = [block('Every turn:', always), block('While you draft a plan:', draft)].filter(Boolean)
   return parts.length ? [...parts, RULES_WIN].join('\n') : ''
@@ -1347,11 +1421,10 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
       if (edited) return refuse(r, `${edited.file} changed after the last passing run (step ${last.step}). Run \`${st.check}\` again.`)
     } else {
       if (!evidence) return refuse(r, `${st.id} has no check, so advancing needs evidence: say what you found.`)
-      if (!visit.some(c => c.kind === 'look' && c.u === 1)) return refuse(r, `${st.id} has no check, so advancing needs at least one read in this state first.`)
     }
     const broke = fixedOf(r).filter(s => s.check && proofs[s.check]?.pass === false)
     if (broke.length) {
-      const why = [...new Set(broke.map(s => s.check!))].map(c => `\`${c}\` (${broke.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`)
+      const why = [...new Set(broke.map(s => s.check!))].map((c, k) => withTail(`\`${c}\` (${broke.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`, proofs[c], k))
       return refuse(r, `You changed files of done states, and their checks fail now:\n${why.join('\n')}\nFix that before moving on.`)
     }
     if (without && 'pass' in without && without.pass) {
@@ -1395,9 +1468,10 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
   const key = `${st.id}>${to}`
   const loops = isLoop ? { ...r.loops, [key]: (r.loops[key] ?? 0) + 1 } : r.loops
   const n = plan.states.length
+  const skippedN = Object.keys(r.skipped ?? {}).length
   const line: LogLine = isLoop
     ? { t, icon: '↺', tone: 'warn', text: `${st.id} → ${to} · loop ${loops[key]}` }
-    : to === 'done' ? { t, icon: '■', tone: 'ok', text: `Plan complete · ${n}/${n}` } : { t, icon: '▶', tone: 'ok', text: `${st.id} → ${to}` }
+    : to === 'done' ? { t, icon: '■', tone: 'ok', text: `Plan complete · ${n - skippedN}/${n}${skippedN ? ` · ${skippedN} skipped` : ''}` } : { t, icon: '▶', tone: 'ok', text: `${st.id} → ${to}` }
   // Going back reopens the state and every state built on its old result. A member on such a state works from the
   // old result, so it is let go and its answer is ignored.
   // ponytail: the member agent itself runs on until it stops; stop it through the engine if that costs too much.
@@ -1429,7 +1503,8 @@ function reopen(r: Run, st: StateDef, failed: StateDef[], proofs: Proofs, outcom
   const first = ids[0]!
   const tasks = closeVisit(r.tasks, st.id, now, outcome)
   tasks[first] = { visits: [...(taskIn(tasks, first)?.visits ?? []), { from: now }] }
-  const why = [...new Set(failed.map(s => s.check!))].map(c => `\`${c}\` (${failed.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`)
+  const checks = [...new Set(failed.map(s => s.check!))]
+  const why = checks.map(c => `\`${c}\` (${failed.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`)
   // Their checks just failed twice, so the start check would only fail a third time.
   const run: Run = {
     ...r, active: first, done: [...doneOf(r), st.id].filter(id => !ids.includes(id)), enteredAt: r.step, lastLoop: undefined,
@@ -1441,7 +1516,7 @@ function reopen(r: Run, st: StateDef, failed: StateDef[], proofs: Proofs, outcom
   }
   return {
     run, ok: true,
-    text: `${st.id} is done, but the plan is not complete yet. Before finishing, Sentinel ran the checks of the done states again, and these fail now:\n${why.join('\n')}\n`
+    text: `${st.id} is done, but the plan is not complete yet. Before finishing, Sentinel ran the checks of the done states again, and these fail now:\n${why.map((w, k) => withTail(w, proofs[checks[k]!], k)).join('\n')}\n`
       + `Later work may have broken them, or they relied on something that changed. Reopened: ${ids.join(', ')}. Moved to ${first}. If a check no longer applies, amend it with a reason.\n${here(run)}`,
   }
 }
@@ -1488,7 +1563,18 @@ function decide(r: Run, i: PlanInput, t: string): Acted {
 function escalate(r: Run, i: PlanInput, t: string, now: number): Acted {
   const reason = i.reason?.trim()
   if (!reason) return refuse(r, 'escalate needs a reason: which rule, and why.')
-  if (i.kind !== 'breaking' && i.kind !== 'stuck') return refuse(r, 'kind must be "breaking" or "stuck".')
+  if (i.kind === 'blocked') {
+    return {
+      ok: true,
+      run: {
+        ...r, quiet: true, escalatedAt: now, blocked: { what: reason, at: now },
+        audit: [...r.audit, { step: r.step + 1, t, state: r.active ?? undefined, kind: 'escalated', text: `Blocked: ${reason}` }],
+        log: [...r.log, { t, icon: '⚑', tone: 'acc', text: 'Blocked · needs you' }],
+      },
+      text: "Logged. The user sees what you need. End your turn: Sentinel won't push you on, and you go on when they reply. Questions stay held, so put everything they need in the reason.",
+    }
+  }
+  if (i.kind !== 'breaking' && i.kind !== 'stuck') return refuse(r, 'kind must be "breaking", "stuck" or "blocked".')
   if (i.kind === 'stuck') {
     const notes = Math.max(0, ...r.traps.filter(x => x.state === r.active && x.step > r.enteredAt).map(x => x.notes))
     // Sentinel refusing to move on counts as stuck too.
@@ -1516,7 +1602,7 @@ function status(r: Run): string {
   const wait = r.draft ? `A draft of "${r.draft.plan!.title}" is waiting for the user to lock it with /sentinel lock.` : undefined
   if (!r.plan) return wait ?? (r.signedOff ? 'Signed off, but no plan is defined yet. Call define.' : 'No plan is locked.')
   const vm = summarize(r)
-  const rail = vm.states.map(s => `${SYM[s.status]}${s.id}`).join(' ')
+  const rail = vm.states.map(s => `${s.skipped ? '–' : SYM[s.status]}${s.id}`).join(' ')
   const lines = [`Plan "${r.plan.title}": ${rail}`, here(r, true)]
   if (r.paused) lines.push('Paused by the user: nothing is enforced until /sentinel resume.')
   if (r.plan.source) lines.push(`The plan is written in ${r.plan.source}.`)
@@ -1620,6 +1706,8 @@ export type VM = {
   trips: Trip[]
   startedAt?: number
   endedAt?: number
+  // The user closed the plan with /sentinel finish.
+  closed?: Run['closed']
   // Tool calls since the running task was entered.
   visitCalls: number
   spend: Spend[]
@@ -1628,6 +1716,7 @@ export type VM = {
   lanes: Lane[]
   // What the active state asked the user and is waiting on now: its proposal (before) or its finished work (after).
   waiting?: { kind: Wait; text?: string; at: number }
+  blocked?: { what: string; at: number }
   // The user answered what the active state asked, so it may go on.
   replied: boolean
   // The user is away: Claude makes the calls that would wait for them.
@@ -1868,11 +1957,12 @@ export function summarize(top: Run): VM {
     counts, log: r.log.slice(-8),
     timeline: r.calls.map(c => ({ step: c.step, state: c.state, kind: c.kind, label: c.label, u: c.u, denied: !!c.denied, revoked: !!c.revoked, H: c.H })),
     traps: r.traps,
-    trips: (r.trips ?? []).slice(-50), startedAt: phase === 'draft' ? undefined : r.startedAt, endedAt: phase === 'draft' ? undefined : r.endedAt, visitCalls: phase === 'live' ? visit.length : 0,
+    trips: (r.trips ?? []).slice(-50), startedAt: phase === 'draft' ? undefined : r.startedAt, endedAt: phase === 'draft' ? undefined : r.endedAt, ...(phase === 'complete' && r.closed ? { closed: r.closed } : {}), visitCalls: phase === 'live' ? visit.length : 0,
     spend: top.spend ?? [], spendFrom: top.spendFrom,
     lanes: (top.lanes ?? []).map(l => ({ ...l, name: l.name || l.id })),
     deps: !!plan?.states.some(s => s.needs),
     ...(asked && !answered(r) ? { waiting: { kind: asked.kind, text: asked.text, at: asked.at } } : {}),
+    ...(blockedOn(r) ? { blocked: blockedOn(r) } : {}),
     replied: !!asked && answered(r),
     handsFree: !!r.handsFree,
     ...(r.sweep && { sweep: r.sweep }),

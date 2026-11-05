@@ -29,6 +29,7 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
     : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
     : vm.paused ? [`Sentinel is paused at ${a.id}.`, 'warn', [['resume', 'Resume', on.resume], ['open', 'Open', () => on.open(false)]]]
+    : vm.blocked ? [`Sentinel: needs you on ${a.id}. ${vm.blocked.what}`, 'warn', [['open', 'Open', () => on.open(true)]]]
     : vm.trap ? [`Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`, 'err', [['open', 'Open', () => on.open(true)]]]
     : vm.waiting ? [vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts. Reply in the chat.` : `Sentinel: ${a.id} is ready for your review. Reply in the chat.`, 'warn', [['open', 'Open', () => on.open(true)]]]
     : flow ? flow
@@ -141,6 +142,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       rail(),
       gap(),
       ...askedRows(vm.states.find(s => s.id === a.id)),
+      ...(vm.blocked ? [field('needs you', vm.blocked.what, 'warn')] : []),
       ...(vm.waiting ? [field('waits', vm.waiting.kind === 'before' ? 'for your OK on its proposal, in the chat' : 'for your review, in the chat', 'warn')]
         : a.wait && !vm.replied ? [field('asks', a.wait === 'after' ? 'for your review once it is done' : 'for your OK before it starts', 'dim')] : []),
       field('check', a.check ? `${a.check} passes` : 'evidence and a first read (no check)'),
@@ -263,6 +265,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
         ...(s.added ? [field('added', `${s.okAt ? `You kept it at ${s.okAt}.` : 'Nothing asked for this.'} Claude's reason: ${s.added}`, s.okAt ? 'dim' : 'warn')] : []),
         ...(s.asks?.length ? [field('asked', quoteStart(s.asks), 'dim')] : []),
         field('check', s.check ?? 'none (evidence and a read)', s.check ? undefined : 'dim'),
+        ...(s.once ? [field('once', 'runs at its advance, not again at the end', 'warn')] : []),
         field('files', s.files.length ? s.files.join(', ') : 'none', s.files.length ? undefined : 'dim'),
         ...(s.ref ? [field('see', s.ref, 'dim')] : []),
         ...(s.flow ? [field('flow', `${s.flow.as}. ${s.flow.why}`, 'dim')] : []),
@@ -286,9 +289,12 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
     const tr = vm.traps
     const loopText = vm.loops.filter(l => l.count).map(l => `${l.from} → ${l.to} ×${l.count}`).join(', ')
     const added = vm.states.filter(s => s.added)
+    const skipped = vm.states.filter(s => s.skipped)
     const stat = (label: string, value: string | number, detail: string, tone?: Tone) =>
       line([label.padEnd(11), 'dim'], [String(value).padEnd(4), tone, true], [detail, 'dim'])
     const box = [
+      ...(skipped.length ? [stat('skipped', skipped.length, skipped.map(s => s.id).join(', '), 'warn')] : []),
+      ...(vm.closed?.unchecked.length ? [stat('unchecked', vm.closed.unchecked.length, `${vm.closed.unchecked.join(', ')}: done, checks not run again`, 'warn')] : []),
       stat('loops', vm.loops.reduce((a, l) => a + l.count, 0), loopText),
       stat('stuck', tr.length, tr.map(x => `${x.state} s${x.step}–${x.end ?? '?'} (${x.pattern})`).join(', '), tr.length ? 'warn' : undefined),
       stat('asked you', c.asked, vm.asked.filter(a => a.kind === 'asked').map(a => a.text).join('; '), 'ask'),
@@ -299,7 +305,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       stat('tokens', shortCount(total), `${parts} · ${models || 'none counted'}`),
     ]
     return [
-      spread(line(['COMPLETE', 'ok', true]), line([`${vm.step} steps`, 'dim'])),
+      spread(line(vm.closed ? ['CLOSED BY YOU', 'warn', true] : ['COMPLETE', 'ok', true]), line([`${vm.step} steps`, 'dim'])),
       line(vm.title),
       rail(),
       gap(),

@@ -1,7 +1,7 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, mock, test as kitTest } from 'claude-code/testing'
 import type { Run } from '../types'
 import { DESCRIPTION } from '../hooks/register'
-import { act, addFlow, autoContinue, keepAdded, sourceText, dropFlow, emptyRun, flowOf, freshCount, heard, instructionOf, isTestFile, libraryOn, notYet, lockDraft, memberByFile, memberIn, memberOff, needsOf, observe, pathKey, relPath, snapWanted, startCheck, startClock, startMember, stopClock, summarize, tokenSplit, untested, withRules, withSnap, withWeight, type PlanInput } from '../hooks/core'
+import { act, lineNote, addFlow, autoContinue, keepAdded, sourceText, dropFlow, emptyRun, flowOf, freshCount, heard, instructionOf, isTestFile, libraryOn, notYet, lockDraft, memberByFile, memberIn, memberOff, needsOf, observe, pathKey, relPath, snapWanted, startCheck, startClock, startMember, stopClock, summarize, tokenSplit, untested, withRules, withSnap, withWeight, type PlanInput } from '../hooks/core'
 import { BUILTINS, BUILTIN_FLOWS } from '../hooks/builtins'
 import { renderBand, renderPane } from '../hooks/views'
 import type { FlowDef, InstructionDef, StateDef } from '../types'
@@ -34,7 +34,7 @@ function engine(on: any) {
   const reads: string[] = []
   // One result for every command, or one per command. `cut` stops before the exit line, as Esc does.
   // wait: the call answers once it settles. background on a check run: still going at the tool's timeout.
-  type Bash = { fail: boolean; text: string; quiet?: boolean; background?: boolean; cut?: boolean; deny?: string; wait?: Promise<unknown> }
+  type Bash = { fail: boolean; text: string; quiet?: boolean; background?: boolean | 'huge'; saved?: boolean | 'huge' | 'gone'; cut?: boolean; deny?: string; wait?: Promise<unknown> }
   let shell: Bash | ((command: string) => Bash) = { fail: false, text: 'ok' }
   const outs: Record<string, string> = {}
   let tasks = 0
@@ -123,13 +123,36 @@ function engine(on: any) {
     // A check run still going at the tool's timeout (`background`) goes on in the background, writing an output file,
     // kept by command in `outs`, where a test adds to it.
     if (e.command.endsWith('echo "[sentinel] exit $?"')) {
+      // 'huge': an output file too big to read whole, as the real read refuses over 4 MiB.
+      if (bash.background === 'huge') {
+        const id = `t${++tasks}`
+        outs[`C:/tmp/missing/tasks/${id}.output`] = `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\n`
+        return { result: { ...ok, backgroundTaskId: id }, text: `Command running in background with ID: ${id}. Output is being written to: C:\\tmp\\missing\\tasks\\${id}.output` }
+      }
       if (bash.background) {
         const id = `t${++tasks}`
         outs[e.command] = `C:/tmp/tasks/${id}.output`
         files[outs[e.command]!] = bash.text
         return { result: { ...ok, backgroundTaskId: id }, text: `Command running in background with ID: ${id}. Output is being written to: C:\\tmp\\tasks\\${id}.output` }
       }
+      // Over 30,000 characters the real tool answers with a preview and saves the whole output, exit line and all, to a
+      // file: `saved` 'huge' is one too big to read whole, 'gone' one that can't be read at all.
+      if (bash.saved) {
+        const path = `C:\\tmp\\${bash.saved === true ? '' : 'missing\\'}tool-results\\r${++tasks}.txt`
+        const whole = `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\n`
+        if (bash.saved === true) files[key(path)] = whole
+        else if (bash.saved === 'huge') outs[key(path)] = whole
+        return { result: { ...ok, stdout: bash.text.slice(0, 200), persistedOutputPath: path, persistedOutputSize: 40_000 }, text: `<persisted-output>\nOutput too large (39.1KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n${bash.text.slice(0, 200)}\n...\n</persisted-output>\nShell cwd was reset to ${ROOT}` }
+      }
       return { result: ok, text: bash.cut ? `${bash.text}\nInterrupted` : `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\nShell cwd was reset to ${ROOT}` }
+    }
+    // tail of a file too big to read: the real tool saves an answer over 30,000 characters too, so the exit line is lost.
+    const tailed = /^tail -c (\d+) '(.+)'$/.exec(e.command)
+    const whole = tailed && outs[tailed[2]!]
+    if (tailed && whole) {
+      return Number(tailed[1]) > 30_000
+        ? { result: ok, text: `<persisted-output>\nOutput too large. Full output saved to: C:\\tmp\\tool-results\\t${++tasks}.txt\n</persisted-output>` }
+        : { result: ok, text: whole.slice(-Number(tailed[1])) }
     }
     if (bash.background) return { result: { ...ok, backgroundTaskId: 'b1' }, text: 'Command running in background with ID: b1' }
     if (bash.fail && bash.quiet) return { result: { ...ok, returnCodeInterpretation: 'Condition is false' }, text: bash.text }
@@ -234,6 +257,9 @@ async function toService($: any, eng: ReturnType<typeof engine>) {
   return eng
 }
 
+// Tests on a mock clock can take seconds on a busy machine. The kit's 5 s limit made them fail at random, and only a real hang needs one.
+const test = (name: string, ...rest: any[]) => (rest.length === 2 ? kitTest(name, { timeoutMs: 30_000, ...rest[0] }, rest[1]) : kitTest(name, { timeoutMs: 30_000 }, rest[0]))
+
 test('the model gets the whole tool description', () => {
   expect(DESCRIPTION.length).toBeLessThanOrEqual(4096)
 })
@@ -246,8 +272,6 @@ test('define needs a sign-off; advance runs the check itself', async ($: any, on
   expect(String(approved.context)).toMatch(/action "define"/)
   expect(said(await plan(PLAN))).toMatch(/Locked "Partial refunds"/)
 
-  expect(said(await plan({ action: 'advance', to: 'service', evidence: 'x' }))).toMatch(/at least one read/)
-  await $.tool.call({ tool: 'Read', file_path: REFUND })
   expect(said(await plan({ action: 'advance', to: 'verify', evidence: 'x' }))).toMatch(/No edge explore → verify/)
   expect(said(await plan({ action: 'advance', to: 'service', evidence: 'found it' }))).toMatch(/Moved to service/)
 
@@ -451,6 +475,81 @@ test('questions are held unless a breaking change was declared, and then only on
   expect(said(await ask())).toMatch(/holds this question/)
 })
 
+const LOCKED = 'The Mac build machine is locked. Someone needs to unlock it.'
+const turnEnds = async ($: any, clock: any) => {
+  await $.turn.complete({ answer: 'Waiting.', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await clock.settle()
+}
+
+test('a blocked report opens at once and stops the nudges', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  const ask = () => $.tool.call({ tool: 'AskUserQuestion', questions: [{ question: 'Is it unlocked?', options: [] }] })
+  // It has to say what is needed. No recovery notes come first.
+  expect(said(await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked' }))).toMatch(/needs a reason/)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: LOCKED }))).toMatch(/End your turn/)
+  // Nothing pushes the turn on, however often it stops.
+  const sent = eng.submitted.length
+  for (let i = 0; i < 3; i++) await turnEnds($, clock)
+  expect(eng.submitted).toHaveLength(sent)
+  // It isn't a way into a question.
+  expect(said(await ask())).toMatch(/holds this question/)
+  // It shows as needing the user, everywhere.
+  await until(clock, () => eng.snap().blocked?.what === LOCKED)
+  expect(eng.statuses.at(-1)).toMatch(/needs you/)
+  expect(paneWords(eng.snap())).toContain('needs you')
+  // The user's reply ends it, and a stopped turn is pushed on again.
+  await typed($, 'It is unlocked now.')
+  await until(clock, () => eng.snap().blocked === undefined)
+  await turnEnds($, clock)
+  expect(eng.submitted.length).toBeGreaterThan(sent)
+})
+
+test('hands-free, a blocked report still waits', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  await $.command.run({ command: 'sentinel', args: 'hands-free' })
+  await clock.settle()
+  expect(said(await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: LOCKED }))).toMatch(/End your turn/)
+  const sent = eng.submitted.length
+  await turnEnds($, clock)
+  expect(eng.submitted).toHaveLength(sent)
+  await until(clock, () => eng.snap().blocked?.what === LOCKED)
+})
+
+test("It's ready on the dashboard ends a blocked report once", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  await openPage($, clock)
+  await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: LOCKED })
+  await until(clock, () => eng.snap().blocked?.what === LOCKED)
+  const at = eng.snap().blocked.at
+  const sent = eng.submitted.length
+  // A press from an older report, or for another state, does nothing.
+  eng.page({ kind: 'ready', state: 'service', at: at - 1 }, { kind: 'ready', state: 'explore', at })
+  await clock.advance(30)
+  expect(eng.submitted).toHaveLength(sent)
+  expect(eng.snap().blocked?.what).toBe(LOCKED)
+  eng.page({ kind: 'ready', state: 'service', at })
+  await clock.advance(30)
+  await until(clock, () => eng.snap().blocked === undefined)
+  await until(clock, () => eng.submitted.some(t => t.includes('The user says this is ready') && t.includes(LOCKED)))
+})
+
+test('a blocked report clears when Claude moves on, and has no place on a finished state', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: LOCKED })
+  await until(clock, () => eng.snap().blocked?.what === LOCKED)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'decide', topic: 'Machine', choice: 'Use the Linux runner', reason: 'It builds the same target' }))).not.toMatch(/refus/i)
+  await until(clock, () => eng.snap().blocked === undefined)
+})
+
+test('a blocked report means nothing without a live plan', async ($: any, on: any) => {
+  engine(on)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: LOCKED }))).toMatch(/No plan is locked/)
+})
+
 test('an edit and revert cycle on the same failure trips the detector at H 0.25', async ($: any, on: any) => {
   const eng = await toService($, engine(on))
   const edit = (to: string, file = REFUND) => $.tool.call({ tool: 'Edit', file_path: file, old_string: 'x', new_string: to })
@@ -496,7 +595,7 @@ test('a stopped turn is continued twice, then left alone until the state changes
   await stop()
   await stop()
   expect(eng.submitted).toHaveLength(2)
-  expect(eng.submitted[0]).toMatch(/not finished \(state service\)/)
+  expect(eng.submitted[0]).toMatch(/The plan is locked and not finished \(state service\)/)
   eng.setBash({ fail: false, text: 'ok' })
   await $.tool.call({ tool: 'Bash', command: 'npm test -- refund' })
   await $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
@@ -684,6 +783,7 @@ test('a plan already under way starts partway, with proof for what is done', asy
   expect(said(await define())).toMatch(/explore is listed as done but has no check/)
   eng.setBash({ fail: true, text: 'Tests: 1 failed\nexpected 49.99, received 50.00' })
   expect(said(await define('read in the first session'))).toMatch(/service is listed as done, but `npm test -- refund` fails now: expected 49.99/)
+  expect(said(await define('read in the first session'))).toContain('Tests: 1 failed\nexpected 49.99, received 50.00')
   eng.setBash({ fail: false, text: '14 passed' })
   const locked = said(await define('read in the first session'))
   expect(locked).toMatch(/Done before the lock: explore, service/)
@@ -721,6 +821,99 @@ test('worktree agents meet the same scope as the main checkout', async ($: any, 
   const edit = (file: string) => $.tool.call({ tool: 'Edit', file_path: file, old_string: 'a', new_string: 'b', agentId: 'builder' })
   expect(said(await edit('D:/proj-main/.claude/worktrees/agent-a1/src/lib/money.ts'))).toMatch(/src\/lib\/money\.ts is outside the files of state service/)
   expect(said(await edit(`${ROOT}/.claude/worktrees/agent-b2/src/refund.ts`))).toBe('ok')
+})
+
+const DRAFT_FILE = `${ROOT}/.sentinel/draft.json`
+// Writes are queued behind the call, so two more calls make sure the last one has landed.
+const landed = async ($: any) => {
+  for (let i = 0; i < 2; i++) await $.tool.call({ tool: TOOL, action: 'status' })
+}
+// A later session starts with nothing in memory and the files on disk.
+const restart = async ($: any, eng: ReturnType<typeof engine>) => {
+  await landed($)
+  const disk = { ...eng.files }
+  await $.command.run({ command: 'sentinel', args: 'reset' })
+  Object.assign(eng.files, disk)
+}
+
+test('a draft comes back after a restart', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  const sentinel = command(clock, $)
+  await sentinel('lock')
+  await $.tool.call({ tool: TOOL, ...PLAN })
+  await restart($, eng)
+  expect(await sentinel('resume')).toMatch(/^Brought back the draft "Partial refunds" from an earlier session\. Lock it with \/sentinel lock\./)
+  expect(eng.submitted.at(-1)).toMatch(/brought back the draft "Partial refunds" from an earlier session/)
+  expect(await sentinel('lock')).toMatch(/Locked "Partial refunds" at explore/)
+  // Locked, it lives in run.json: nothing is left to bring back.
+  await landed($)
+  expect(JSON.parse(eng.files[DRAFT_FILE]!)).toEqual({})
+})
+
+test('a sign-off comes back after a restart', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = (args: string) => $.command.run({ command: 'sentinel', args }).then(said)
+  await sentinel('lock')
+  await restart($, eng)
+  expect(await sentinel('resume')).toMatch(/^Brought back your sign-off from an earlier session\. Claude can send the plan now\./)
+  expect(said(await $.tool.call({ tool: TOOL, ...PLAN }))).not.toMatch(/No sign-off yet/)
+  expect(eng.snap().phase).toBe('draft')
+})
+
+test('a plan sent before the sign-off comes back after a restart', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = (args: string) => $.command.run({ command: 'sentinel', args }).then(said)
+  await $.tool.call({ tool: TOOL, ...PLAN })
+  await restart($, eng)
+  expect(await sentinel('resume')).toMatch(/^Brought back the plan Claude sent, "Partial refunds", from an earlier session\. Sign it off with \/sentinel lock\./)
+  expect(await sentinel('lock')).toMatch(/The plan the model sent before is the draft now/)
+})
+
+test("a draft never replaces an earlier session's plan", async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = (args: string) => $.command.run({ command: 'sentinel', args }).then(said)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...PLAN })
+  await restart($, eng)
+  const older = eng.files[`${ROOT}/.sentinel/run.json`]!
+  // A new session starts on something else: its draft goes apart from the plan on disk.
+  await sentinel('lock')
+  await $.tool.call({ tool: TOOL, ...PLAN, title: 'Newer idea' })
+  await landed($)
+  expect(eng.files[`${ROOT}/.sentinel/run.json`]).toBe(older)
+  expect(JSON.parse(eng.files[DRAFT_FILE]!).draft.plan.title).toBe('Newer idea')
+  // /sentinel resume goes to the plan, and the draft stays on disk for afterwards.
+  expect(await sentinel('resume')).toMatch(/Resumed "Partial refunds"/)
+  await landed($)
+  expect(JSON.parse(eng.files[DRAFT_FILE]!).draft.plan.title).toBe('Newer idea')
+})
+
+test('a draft in this session stays when resume is typed, and a cleared or damaged file is nothing to resume', async ($: any, on: any) => {
+  const eng = engine(on)
+  const sentinel = (args: string) => $.command.run({ command: 'sentinel', args }).then(said)
+  await sentinel('lock')
+  await $.tool.call({ tool: TOOL, ...PLAN })
+  await landed($)
+  eng.files[DRAFT_FILE] = JSON.stringify({ signedOff: true, draft: { ...emptyRun(), plan: { title: 'Older idea', states: [] } } })
+  expect(await sentinel('resume')).toMatch(/Nothing to resume/)
+  expect(eng.snap().title).toBe('Partial refunds')
+  await sentinel('reset')
+  expect(JSON.parse(eng.files[DRAFT_FILE]!)).toEqual({})
+  expect(await sentinel('resume')).toMatch(/Nothing to resume/)
+  eng.files[DRAFT_FILE] = 'not json'
+  expect(await sentinel('resume')).toMatch(/Nothing to resume/)
+})
+
+test('a new session says when the project holds a draft', async ($: any, on: any) => {
+  const eng = engine(on)
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('tool.register', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  eng.files[DRAFT_FILE] = JSON.stringify({ signedOff: true, review: true, draft: { ...emptyRun(), plan: { title: 'Older idea', states: [] } } })
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await landed($)
+  expect(eng.statuses.join(' | ')).toContain('"Older idea" draft kept · /sentinel resume')
 })
 
 test('a paused plan lets everything through; resume picks it up, also in a later session', async ($: any, on: any) => {
@@ -1451,12 +1644,14 @@ test('a passing member hands back a staged diff that is applied to the project',
   // Staged in the worktree, the state's files diffed, applied to the project, and the worktree goes.
   expect(git.map(x => [x.argv.slice(1).join(' '), x.cwd])).toEqual([
     ['add -A', wt],
-    ['diff --cached --name-only HEAD', wt],
     ['diff --cached --binary HEAD -- :(glob,icase)ui/**', wt],
+    ['add -A', wt],
+    ['diff --cached --binary HEAD -- :(glob,icase)ui/**', wt],
+    ['diff --cached --name-only HEAD', wt],
     ['apply --binary -', ROOT],
     [`worktree remove --force ${wt}`, ROOT],
   ])
-  expect(git[3]!.stdin).toBe(patch)
+  expect(git[5]!.stdin).toBe(patch)
   // Members make no commits.
   expect(eng.runs.some(x => x.argv[1] === 'commit')).toBe(false)
   const run = await savedRun($, eng)
@@ -1469,7 +1664,7 @@ test('a passing member hands back a staged diff that is applied to the project',
   expect(eng.submitted.at(-1)).toMatch(/ui is in: its member passed `npm test -- ui` in its worktree\. Sentinel applied its changes to the project: ui\/box\.tsx\./)
   // A late answer from the same agent changes nothing.
   await stopMember($, clock, 'm-1')
-  expect(eng.runs).toHaveLength(before + 5)
+  expect(eng.runs).toHaveLength(before + 7)
 })
 
 test('a member\'s changes outside its state stay in its worktree, which is kept and named', async ($: any, on: any) => {
@@ -1523,7 +1718,8 @@ test('a member whose background run still goes after 30 minutes is checked anywa
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
   eng.setBash({ fail: false, text: 'ok', background: true })
   await $.tool.call({ tool: 'Bash', command: 'npm run dev', run_in_background: true, agentId: 'm-1' })
-  eng.setBash({ fail: false, text: 'ok' })
+  let stoppedFirst = false
+  eng.setBash(c => ((stoppedFirst ||= c.includes('npm test -- ui') && eng.stops.length > 0), { fail: false, text: 'ok' }))
   eng.setAgents([{ ...eng.agents()[0]!, status: 'idle' }])
   const before = eng.commands.length
   await $.classic.SubagentStop({ hook_event_name: 'SubagentStop', session_id: 's', transcript_path: '', cwd: ROOT, stop_hook_active: false, agent_id: 'm-1', agent_transcript_path: '', agent_type: 'general-purpose', background_tasks: [{ id: 'b1', type: 'shell', status: 'running', description: 'npm run dev' }] })
@@ -1531,8 +1727,111 @@ test('a member whose background run still goes after 30 minutes is checked anywa
   await clock.advance(29 * 60_000)
   expect(eng.commands).toHaveLength(before)
   await clock.advance(2 * 60_000)
-  await until(clock, () => eng.submitted.some(t => /still going after 30 minutes/.test(t)))
+  await until(clock, () => eng.submitted.some(t => /still going after 30 minutes, so Sentinel stopped it/.test(t)))
   expect((await savedRun($, eng)).done).toContain('ui')
+  expect(stoppedFirst).toBe(true)
+})
+
+test("a helper's background run stops before the member's check", async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  const member = eng.agents()[0]!
+  eng.setAgents([member, { id: 'h-1', status: 'running', parentId: 'm-1' }])
+  eng.setBash({ fail: false, text: 'ok', background: true })
+  await $.tool.call({ tool: 'Bash', command: 'npm run watch', run_in_background: true, agentId: 'h-1' })
+  eng.setAgents([member, { id: 'h-1', status: 'completed', parentId: 'm-1' }])
+  let stoppedFirst = false
+  eng.setBash(c => ((stoppedFirst ||= c.includes('npm test -- ui') && eng.stops.length > 0), { fail: false, text: 'ok' }))
+  await stopMember($, clock, 'm-1', 'Added the search box.')
+  expect(stoppedFirst).toBe(true)
+})
+
+test("a member waits for its helper's helper, which stays inside the state's files", async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  const member = eng.agents()[0]!
+  const family = (g: string) => eng.setAgents([member, { id: 'h-1', status: 'completed', parentId: 'm-1' }, { id: 'g-1', status: g, parentId: 'h-1' }])
+  family('running')
+  expect(said(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/.claude/worktrees/m/lib/x.ts`, old_string: 'a', new_string: 'b', agentId: 'g-1' }))).toMatch(/You work on ui in/)
+  const before = runsOf(eng, 'npm test -- ui')
+  await stopMember($, clock, 'm-1', 'Added the search box.')
+  expect(runsOf(eng, 'npm test -- ui')).toBe(before)
+  family('completed')
+  await stopMember($, clock, 'g-1', 'Wrote the list.')
+  await until(clock, () => runsOf(eng, 'npm test -- ui') > before)
+  expect((await savedRun($, eng)).done).toContain('ui')
+})
+
+const BOX = (n: number) => `diff --git a/ui/box.tsx b/ui/box.tsx\n+box ${n}\n`
+test('files that change during the check are checked again, and what comes back is what passed', async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  eng.setPatch(BOX(1))
+  let changed = false
+  eng.setBash(c => {
+    if (c.includes('npm test -- ui') && !changed) {
+      changed = true
+      eng.setPatch(BOX(2))
+    }
+    return { fail: false, text: 'ok' }
+  })
+  const before = runsOf(eng, 'npm test -- ui')
+  await stopMember($, clock, 'm-1', 'Added the search box.')
+  await until(clock, () => eng.runs.some(r => r.argv.includes('apply')))
+  expect(runsOf(eng, 'npm test -- ui') - before).toBe(2)
+  expect(eng.runs.find(r => r.argv.includes('apply'))!.stdin).toBe(BOX(2))
+})
+
+test("files that keep changing don't come back", async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  let n = 0
+  eng.setPatch(BOX(n))
+  eng.setBash(c => {
+    if (c.includes('npm test -- ui')) eng.setPatch(BOX(++n))
+    return { fail: false, text: 'ok' }
+  })
+  await stopMember($, clock, 'm-1', 'Added the search box.')
+  await until(clock, () => eng.submitted.some(t => /changed each time it ran/.test(t)))
+  expect(n).toBe(3)
+  expect(eng.runs.some(r => r.argv.includes('apply'))).toBe(false)
+  expect(eng.runs.some(r => r.argv.includes('worktree') && r.argv.includes('remove'))).toBe(false)
+  const r = await savedRun($, eng)
+  expect(r.running?.ui).toBeUndefined()
+  expect(r.done).not.toContain('ui')
+})
+
+test('a path with dots is resolved before the file guard', async ($: any, on: any) => {
+  const root = 'D:/proj'
+  expect(relPath(root, `${root}/src/../secret.ts`)).toBe('secret.ts')
+  expect(relPath(root, `${root}/src/./a/../b.ts`)).toBe('src/b.ts')
+  expect(relPath(root, 'D:\\proj\\src\\..\\secret.ts')).toBe('secret.ts')
+  expect(relPath(root, '/d/../../proj/a.ts')).toBe('a.ts')
+  expect(relPath(root, 'src/../secret.ts')).toBe('secret.ts')
+  expect(relPath(root, './src/b.ts')).toBe('src/b.ts')
+  expect(relPath(root, `${root}/.claude/worktrees/w/ui/../secret.ts`)).toBe('secret.ts')
+  // Climbing out of the project leaves it, however the path starts.
+  expect(relPath(root, `${root}/../other/x.ts`)).toBeUndefined()
+  expect(relPath(root, `${root}/src/../../other/x.ts`)).toBeUndefined()
+  expect(relPath(root, '../x.ts')).toBeUndefined()
+  expect(relPath(root, 'a/../../x.ts')).toBeUndefined()
+  expect(relPath(root, '../../x.ts')).toBeUndefined()
+  // A folder keeps its slash, so a state's file list reads as written.
+  expect(relPath(root, 'ui/')).toBe('ui/')
+  // The written-files list still knows a file by one name.
+  expect(pathKey(root, 'D:/proj/a/../b.ts')).toBe(pathKey(root, 'b.ts'))
+  expect(pathKey(root, '../x.ts')).toBe('d:/x.ts')
+  // The guard itself.
+  engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, action: 'define', title: 'Dots', states: [
+    { id: 'a', label: 'a', check: 'npm test -- a', files: ['src/**'] },
+    { id: 'b', label: 'b', check: 'npm test -- b', files: ['lib/**'] },
+  ] })
+  const edit = (path: string) => $.tool.call({ tool: 'Edit', file_path: `${ROOT}/${path}`, old_string: 'a', new_string: 'b' }).then(said)
+  expect(await edit('src/../secret.ts')).toMatch(/outside the files/)
+  expect(await edit('src/../lib/x.ts')).toMatch(/outside the files/)
+  expect(await edit('lib/../src/x.ts')).toBe('ok')
 })
 
 test('a member is checked only once the helpers it started are in', async ($: any, on: any) => {
@@ -1589,7 +1888,7 @@ test('a member let go while its check runs brings nothing back', async ($: any, 
   eng.setDuring('Bash', () => $.tool.call({ tool: TOOL, action: 'advance', to: 'explore', evidence: 'the schema is wrong' }))
   const before = eng.runs.length
   await stopMember($, clock, 'm-1')
-  expect(eng.runs).toHaveLength(before)
+  expect(eng.runs.slice(before).some(r => r.argv.includes('apply'))).toBe(false)
   expect(eng.submitted.some(t => /ui is in/.test(t))).toBe(false)
   const run = await savedRun($, eng)
   expect(run).toMatchObject({ active: 'explore', running: {}, done: [] })
@@ -1970,6 +2269,118 @@ test('background work holds the push for 30 minutes at most, then the push names
   expect(pushes()[0]).toMatch(/Background work has run for over 30 minutes: npm run dev\. If it is a server or a watcher, carry on/)
 })
 
+test('sentinel finish closes the plan without a rerun', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  const ran = eng.commands.length
+  const text = said(await $.command.run({ command: 'sentinel', args: 'finish Skip the tests, just close it' }))
+  expect(text).toBe('Plan closed by the user, with no final checks. Not finished: s5. Done but not rechecked: s1, s2, s3, s4. Questions are open again.')
+  expect(eng.commands.length).toBe(ran)
+  expect(await savedRun($, eng)).toMatchObject({
+    active: 'done',
+    closed: { why: 'Skip the tests, just close it', unfinished: ['s5'], unchecked: ['s1', 's2', 's3', 's4'] },
+    skipped: { s5: 'Not finished: Skip the tests, just close it' },
+  })
+  // Claude hears it, and the plan is over for it too.
+  await until(clock, () => eng.submitted.some(t => t.includes('The user closed the plan with /sentinel finish')))
+  // An older prompt can reach Claude in the same turn: a real run got "continue with the next step" beside this one.
+  expect(eng.submitted.find(t => t.includes('The user closed the plan'))).toMatch(/says to continue is out of date/)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/The plan is complete/)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'status' }))).toMatch(/Plan closed by the user/)
+})
+
+test('sentinel finish stops a plan midway', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  // explore has no check, so there is nothing about it to recheck.
+  expect(said(await $.command.run({ command: 'sentinel', args: 'finish' }))).toBe('Plan closed by the user, with no final checks. Not finished: service, verify. Questions are open again.')
+  await until(clock, () => eng.snap().states?.find((s: any) => s.id === 'verify')?.skipped)
+  expect(eng.snap().states.find((s: any) => s.id === 'verify')).toMatchObject({ status: 'done', skipped: 'Not finished: The user closed the plan.' })
+  // A state left unfinished gets no tick: a real run read the ticks as work done.
+  expect(said(await $.tool.call({ tool: TOOL, action: 'status' }))).toMatch(/✓explore –service –verify/)
+  // Edits are free again.
+  expect((await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/anywhere/else.ts`, old_string: 'a', new_string: 'b' })).deny).toBeUndefined()
+})
+
+test('only the user closes a plan, hands-free or not', async ($: any, on: any) => {
+  const eng = await toService($, engine(on))
+  const plan = (i: object) => $.tool.call({ tool: TOOL, ...i })
+  const turn = () => $.turn.start({ text: '', turnId: 't' })
+  await turn()
+  await turn()
+  expect(said(await plan({ action: 'finish', reason: 'done enough' }))).toMatch(/^Only the user closes a plan/)
+  await $.command.run({ command: 'sentinel', args: 'hands-free' })
+  expect(said(await plan({ action: 'finish', reason: 'done enough' }))).toMatch(/^Only the user closes a plan/)
+  expect((await savedRun($, eng)).active).toBe('service')
+  // Asked for in the chat, it counts in the turn that takes it up.
+  await $.prompt.submit({ text: 'Stop this plan here.', origin: { kind: 'composer' } })
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await turn()
+  expect(said(await plan({ action: 'finish', reason: 'Stop this plan here.' }))).toMatch(/^Plan closed by the user/)
+})
+
+test('sentinel finish closes a paused plan and clears what waits on the user', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, action: 'define', title: 'Waits', states: [{ id: 'a', label: 'A', files: ['a/**'], wait: 'before' }] })
+  await $.tool.call({ tool: TOOL, action: 'propose', intent: 'Change a' })
+  await $.command.run({ command: 'sentinel', args: 'pause' })
+  expect(said(await $.command.run({ command: 'sentinel', args: 'finish' }))).toMatch(/^Plan closed by the user/)
+  const run = await savedRun($, eng)
+  expect(run).toMatchObject({ active: 'done' })
+  expect(run.paused).toBeUndefined()
+  expect(run.pending).toBeUndefined()
+})
+
+test('sentinel finish needs a locked plan', async ($: any, on: any) => {
+  engine(on)
+  expect(said(await $.command.run({ command: 'sentinel', args: 'finish' }))).toBe('No plan is locked.')
+})
+
+test('sentinel finish lets a running member go', async ($: any, on: any) => {
+  const { eng } = await parallelAtApi($, on)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the box.' }))).toMatch(/ui/)
+  expect(Object.keys((await savedRun($, eng)).running ?? {})).toEqual(['ui'])
+  expect(said(await $.command.run({ command: 'sentinel', args: 'finish' }))).toMatch(/^Plan closed by the user/)
+  expect((await savedRun($, eng)).running).toBeUndefined()
+})
+
+test('a finished plan says how many states it skipped', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  await $.command.run({ command: 'sentinel', args: 'skip s2 Not needed' })
+  await $.command.run({ command: 'sentinel', args: 'skip s3 Not needed' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete\. The user skipped s2, s3\./)
+  expect((await savedRun($, eng)).log.at(-1)!.text).toBe('Plan complete · 3/5 · 2 skipped')
+  await until(clock, () => eng.statuses.at(-1)?.startsWith('plan complete'))
+  expect(eng.statuses.at(-1)).toBe('plan complete · 2 skipped')
+  const words = paneWords(summarize(await savedRun($, eng)))
+  expect(words).toContain('COMPLETE')
+  expect(words).toContain('s2, s3')
+})
+
+test('a plan with nothing skipped reads as it did', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete/)
+  expect((await savedRun($, eng)).log.at(-1)!.text).toBe('Plan complete · 5/5')
+  await until(clock, () => eng.statuses.at(-1)?.startsWith('plan complete'))
+  expect(eng.statuses.at(-1)).toBe('plan complete')
+  expect(paneWords(summarize(await savedRun($, eng)))).not.toContain('skipped')
+})
+
+test('a closed plan shows as closed, with what it leaves unproven', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  await $.command.run({ command: 'sentinel', args: 'finish' })
+  expect((await savedRun($, eng)).log.at(-1)!.text).toBe('Plan closed by the user · 4/5 done')
+  await until(clock, () => eng.statuses.at(-1)?.startsWith('plan closed'))
+  expect(eng.statuses.at(-1)).toBe('plan closed · 1 skipped')
+  const words = paneWords(summarize(await savedRun($, eng)))
+  expect(words).toContain('CLOSED BY YOU')
+  expect(words).toContain('s1, s2, s3, s4: done, checks not run again')
+})
+
 test('/sentinel skip skips a later state for the user', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = await toService($, engine(on))
@@ -1992,9 +2403,10 @@ test('a fix to a done state is allowed, logged, and its check runs again before 
   expect(said(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/api/a.ts`, old_string: 'b', new_string: 'c' }))).toBe('ok')
   expect(said(await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/lib/x.ts`, old_string: 'b', new_string: 'c' }))).toMatch(/outside the files/)
   await until(clock, () => eng.snap().log?.some((l: any) => l.text === 'ui · fixing api'))
-  eng.setBash((c: string) => ({ fail: c.includes('-- api'), text: c.includes('-- api') ? 'FAIL api: expected 2' : 'ok' }))
+  eng.setBash((c: string) => ({ fail: c.includes('-- api'), text: c.includes('-- api') ? 'FAIL api: expected 2\nsee line 40' : 'ok' }))
   const refused = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done', outcome: 'UI done.' }))
   expect(refused).toMatch(/files of done states, and their checks fail now/)
+  expect(refused).toContain('see line 40')
   expect(refused).toMatch(/npm test -- api` \(api\)/)
   eng.setBash({ fail: false, text: 'ok' })
   expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done', outcome: 'UI done.' }))).toMatch(/Plan complete/)
@@ -2111,6 +2523,71 @@ test('a sweep check that passes on its second run, after a known pass of the for
   expect(runs).toBe(2)
 })
 
+test('a check over the output limit is read from its saved file', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'api', evidence: 'read it' }))).toMatch('Moved to api')
+  // A pass is a pass, however much it printed.
+  eng.setBash({ fail: false, text: 'all green', saved: true })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'ui' }))).toMatch('Moved to ui')
+  // A failure quotes the output, and never the end of the tool's preview.
+  eng.setBash({ fail: true, text: 'expected 3 rows', saved: true })
+  const refused = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' }))
+  expect(refused).toContain('expected 3 rows')
+  expect(refused).not.toContain('persisted-output')
+})
+
+test('a saved file too big to read is read by its end', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'api', evidence: 'read it' }))).toMatch('Moved to api')
+  eng.setBash({ fail: false, text: 'all green', saved: 'huge' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'ui' }))).toMatch('Moved to ui')
+  expect(eng.commands.some(c => c.startsWith('tail -c'))).toBe(true)
+})
+
+test('a final check over the output limit counts by its exit code, and is never called cut short', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  for (const to of ['api', 'ui', 'verify']) expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to, evidence: 'read it' }))).toMatch(`Moved to ${to}`)
+  // A failure reopens its state, as any other failure does.
+  eng.setBash(c => (c.includes('npm test -- api') ? { fail: true, text: 'expected 3 rows', saved: true } : { fail: false, text: 'ok' }))
+  const failed = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(failed).not.toContain('cut short')
+  expect(failed).toMatch(/Reopened: api/)
+  // A pass completes the plan.
+  eng.setBash(c => (c.includes('npm test -- api') ? { fail: false, text: 'all green', saved: true } : { fail: false, text: 'ok' }))
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete/)
+})
+
+test('a final check that left no exit code says so, and is never called cut short', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  for (const to of ['api', 'ui', 'verify']) expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to, evidence: 'read it' }))).toMatch(`Moved to ${to}`)
+  eng.setBash(c => (c.includes('npm test -- api') ? { fail: false, text: 'all green', saved: 'gone' } : { fail: false, text: 'ok' }))
+  const said1 = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(said1).toMatch(/^The final checks stopped: `npm test -- api` left no exit code that Sentinel could read\./)
+  expect(said1).not.toContain('cut short')
+})
+
+test('a check running in the background past the read limit still shows its end', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  await $.tool.call({ tool: 'Read', file_path: REFUND })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'api', evidence: 'read it' }))).toMatch('Moved to api')
+  eng.setBash({ fail: false, text: 'all green', background: 'huge' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'ui' }))).toMatch('Moved to ui')
+})
+
 test('a sweep run that is refused counts as no result, and one cut short stops the final checks and changes nothing', async ($: any, on: any) => {
   const eng = engine(on)
   await $.tool.call({ tool: 'ExitPlanMode' })
@@ -2144,6 +2621,144 @@ async function atLast($: any, eng: ReturnType<typeof engine>) {
 }
 const final = (n: string) => new RegExp(`&& check-${n}\\); echo`)
 
+const ONCE: PlanInput = { action: 'define', title: 'Moments', states: [
+  { id: 'push', label: 'Push the branch', check: 'git ls-remote origin feature', files: ['a/**'], once: true },
+  { id: 'build', label: 'Build', check: 'npm test -- build', files: ['b/**'] },
+  { id: 'last', label: 'Last', check: 'npm test', files: ['c/**'] },
+] }
+
+test('a check marked once is left out of the final checks', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...ONCE })
+  // It runs at its own advance, and a failure there still holds the state.
+  eng.setBash({ fail: true, text: 'no such branch' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'build' }))).not.toMatch('Moved to build')
+  eng.setBash({ fail: false, text: 'ok' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'build' }))).toMatch('Moved to build')
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'last' }))).toMatch('Moved to last')
+  const [once, others] = [runsOf(eng, 'git ls-remote origin feature'), runsOf(eng, 'npm test -- build')]
+  // Later it would fail, but nothing runs it again, and the completion says so.
+  eng.setBash(c => (c.includes('git ls-remote') ? { fail: true, text: 'no such branch' } : { fail: false, text: 'ok' }))
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete\. Not run again, marked once: push\./)
+  expect(runsOf(eng, 'git ls-remote origin feature')).toBe(once)
+  expect(runsOf(eng, 'npm test -- build')).toBeGreaterThan(others)
+})
+
+test('a check shared with a state not marked once still runs in the final checks', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, action: 'define', title: 'Shared', states: [
+    { id: 'a', label: 'A', check: 'npm test -- shared', files: ['a/**'], once: true },
+    { id: 'b', label: 'B', check: 'npm test -- shared', files: ['b/**'] },
+    { id: 'c', label: 'C', check: 'npm test', files: ['c/**'] },
+  ] })
+  for (const to of ['b', 'c']) await $.tool.call({ tool: TOOL, action: 'advance', to })
+  const runs = runsOf(eng, 'npm test -- shared')
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete/)
+  expect(runsOf(eng, 'npm test -- shared')).toBeGreaterThan(runs)
+})
+
+test('once needs a check, and must be true or false', async ($: any, on: any) => {
+  engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'define', title: 'x', states: [{ id: 'a', label: 'A', once: true }] }))).toMatch(/a has "once" but no check/)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'define', title: 'x', states: [{ id: 'a', label: 'A', check: 'npm test', once: 'yes' }] }))).toMatch(/"once" on a must be true or false/)
+})
+
+test('a check marked once does not run for a fix, for a start after it, or count as unchecked', async ($: any, on: any) => {
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  // Marked done before the lock: its moment has passed, so the lock doesn't run it.
+  const before = runsOf(eng, 'git ls-remote origin feature')
+  const states = ONCE.states!.map(st => (st.id === 'push' ? { ...st, evidence: 'Pushed in commit abc' } : st))
+  expect(said(await $.tool.call({ tool: TOOL, ...ONCE, states, start: 'build' }))).toMatch(/build/)
+  expect(runsOf(eng, 'git ls-remote origin feature')).toBe(before)
+  // A fix to its files doesn't run it either.
+  await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/a/x.ts`, old_string: 'a', new_string: 'b' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'last' }))).toMatch('Moved to last')
+  expect(runsOf(eng, 'git ls-remote origin feature')).toBe(before)
+  // Closing the plan doesn't list it as unrechecked: it was never going to run again.
+  const text = said(await $.command.run({ command: 'sentinel', args: 'finish' }))
+  expect(text).toContain('Done but not rechecked: build.')
+})
+
+test('the draft shows a check marked once', () => {
+  const drafted = act({ ...emptyRun(), signedOff: true, review: true }, ONCE, '09:00').run
+  const words = paneWords(summarize(drafted))
+  expect(words).toContain('runs at its advance, not again at the end')
+  expect(words.match(/not again at the end/g)).toHaveLength(1)
+})
+
+test('the final checks write one line per check', async ($: any, on: any) => {
+  const eng = await atLast($, engine(on))
+  const file = `${ROOT}/.sentinel/final-checks.log`
+  eng.setBash(c => (final('2').test(c) ? { fail: true, text: 'line one\nexpected 3 rows' } : { fail: false, text: 'ok' }))
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Reopened: s2/)
+  const log = eng.files[file]!
+  expect(log).toMatch(/final checks: 4 to run, 0 still hold/)
+  expect(log).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d/)
+  // check-2 fails again alone, so check-3 and check-4 never start.
+  for (const n of ['1', '2']) expect(log).toContain(`start  check-${n}\n`)
+  expect(log).not.toContain('start  check-3\n')
+  expect(log).toMatch(/passed +(?:under 1|\d+) s +check-1\n {4}ok\n/)
+  // Both runs of the failure show, each with the end of its output.
+  expect(log.match(/failed +(?:under 1|\d+) s +check-2\n {4}line one\n {4}expected 3 rows\n/g)).toHaveLength(2)
+  expect(log).not.toContain('[sentinel] exit')
+  // Earlier runs stay, and the file stops growing.
+  eng.files[file] = 'old line\n'.repeat(40_000)
+  eng.setBash({ fail: false, text: 'ok' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))).toMatch(/Plan complete/)
+  expect(eng.files[file]).toContain('old line')
+  expect(eng.files[file]!.length).toBeLessThanOrEqual(200_000)
+  expect(eng.files[file]!.slice(-600)).toMatch(/final checks: \d+ to run, \d+ still hold/)
+})
+
+test('the log says when a final check left no exit code or was cut short', async ($: any, on: any) => {
+  const eng = await atLast($, engine(on))
+  eng.setBash(c =>
+    final('3').test(c) ? { fail: false, text: 'all green', saved: 'gone' }
+    : final('4').test(c) ? { fail: true, text: 'half way', cut: true }
+    : { fail: false, text: 'ok' })
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  const log = eng.files[`${ROOT}/.sentinel/final-checks.log`]!
+  expect(log).toMatch(/no exit code +(?:under 1|\d+) s +check-3\b/)
+  expect(log).toMatch(/cut short +(?:under 1|\d+) s +check-4\n {4}half way\n/)
+})
+
+test('a check that took under a second says so, in place of 0 s', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'check-3': { gap: 1000, took: 350 } })
+  eng.setBash(c => (final('3').test(c) ? { fail: false, text: 'still going', background: true } : { fail: false, text: 'ok' }))
+  const runs = runsOf(eng, 'check-3')
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  await until(clock, () => runsOf(eng, 'check-3') > runs)
+  const file = outOf(eng, final('3'))!
+  for (let i = 0; i < 11; i++) {
+    eng.files[file] += '\n.'
+    await clock.advance(60_000)
+  }
+  expect(said(await done)).toMatch(/it took under 1 s at most before, and it is still going/)
+})
+
+test('a final check stopped as stuck leaves its last output in the log', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'check-3': { gap: 1000, took: 30_000 } })
+  eng.setBash(c => (final('3').test(c) ? { fail: false, text: 'database gone, retrying', background: true } : { fail: false, text: 'ok' }))
+  const runs = runsOf(eng, 'check-3')
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  await until(clock, () => runsOf(eng, 'check-3') > runs)
+  const file = outOf(eng, final('3'))!
+  for (let i = 0; i < 11; i++) {
+    eng.files[file] += '\n.'
+    await clock.advance(60_000)
+  }
+  await done
+  expect(eng.files[`${ROOT}/.sentinel/final-checks.log`]).toMatch(/stuck +\d+ min +check-3: it took 30 s at most before, and it is still going\n {4}database gone, retrying\n/)
+})
+
 test('the final checks run two at a time and show how far they are', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = await atLast($, engine(on))
@@ -2162,21 +2777,167 @@ test('the final checks run two at a time and show how far they are', async ($: a
   expect(eng.snap().sweep).toBeUndefined()
 })
 
-test('a failing final check that ran over two minutes runs once; a quick one runs twice', async ($: any, on: any) => {
+test('a failed final check runs again alone after the others', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  let open!: () => void
+  const gate = new Promise<void>(r => (open = r))
+  let going = 0
+  const log: string[] = []
+  // check-1 fails at first and holds nothing up; check-2 stays running until the gate opens. check-1 passes alone.
+  let oneRuns = 0
+  eng.setBash(c => {
+    if (final('1').test(c)) {
+      log.push(`one with ${going} running`)
+      return { fail: ++oneRuns === 1, text: oneRuns === 1 ? 'database gone' : 'all green' }
+    }
+    if (final('2').test(c)) return { fail: false, text: 'ok', wait: (going++, gate.then(() => void going--)) }
+    return { fail: false, text: 'ok' }
+  })
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  await until(clock, () => oneRuns === 1 && going === 1)
+  await clock.advance(30_000)
+  expect(oneRuns).toBe(1)
+  open()
+  // It passes alone, so nothing reopens.
+  expect(said(await done)).toMatch(/Plan complete/)
+  expect(oneRuns).toBe(2)
+  expect(log).toEqual(['one with 0 running', 'one with 0 running'])
+})
+
+test('a final check that fails again alone ends the run: the check beside it is stopped and the rest never start', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  const before = { 1: runsOf(eng, 'check-1'), 2: runsOf(eng, 'check-2'), 3: runsOf(eng, 'check-3'), 4: runsOf(eng, 'check-4') }
+  // check-2 has gone to the background and would keep going for as long as it is left.
+  eng.setBash(c => (final('1').test(c) ? { fail: true, text: 'expected 3 rows' } : final('2').test(c) ? { fail: false, text: 'running', background: true } : { fail: false, text: 'ok' }))
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  for (let i = 0; i < 5 && runsOf(eng, 'check-1') < before[1] + 2; i++) await clock.advance(10_000)
+  expect(said(await done)).toMatch(/Reopened: s1/)
+  expect(runsOf(eng, 'check-1')).toBe(before[1] + 2)
+  expect(runsOf(eng, 'check-2')).toBe(before[2] + 1)
+  expect(runsOf(eng, 'check-3')).toBe(before[3])
+  expect(runsOf(eng, 'check-4')).toBe(before[4])
+  expect(eng.stops).toContain(taskOf(outOf(eng, final('2'))!))
+  expect(eng.files[`${ROOT}/.sentinel/final-checks.log`]).toMatch(/stopped, another check failed +.+ +check-2\b/)
+  // Stopping it says nothing about the check, so its history stays clean.
+  expect(eng.files[`${ROOT}/.sentinel/checks.json`] ?? '').not.toMatch(/"check-2":\{[^}]*"stopped"/)
+})
+
+test('a final check that passes alone lets the stopped one start over, and the plan completes', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  let one = 0
+  let two = 0
+  eng.setBash(c => {
+    if (final('1').test(c)) return { fail: ++one === 1, text: one === 1 ? 'database gone' : 'all green' }
+    if (final('2').test(c)) return ++two === 1 ? { fail: false, text: 'running', background: true } : { fail: false, text: 'ok' }
+    return { fail: false, text: 'ok' }
+  })
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  await until(clock, () => one >= 1)
+  for (let i = 0; i < 3 && two < 2; i++) await clock.advance(10_000)
+  expect(said(await done)).toMatch(/Plan complete/)
+  expect([one, two]).toEqual([2, 2])
+  expect(eng.stops).toHaveLength(1)
+})
+
+test('with two final checks failing at once, the first confirmed ends the run and the other is left unjudged', async ($: any, on: any) => {
+  mock.clock(on)
+  const eng = await atLast($, engine(on))
+  const two = runsOf(eng, 'check-2')
+  const three = runsOf(eng, 'check-3')
+  eng.setBash(c => (final('[12]').test(c) ? { fail: true, text: 'expected 3 rows' } : { fail: false, text: 'ok' }))
+  const out = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(out).toMatch(/Reopened: s1/)
+  // Its one failure beside another check proves nothing, so it isn't called failed. It runs again next time.
+  expect(out).not.toMatch(/s2/)
+  expect(runsOf(eng, 'check-2')).toBe(two + 1)
+  expect(runsOf(eng, 'check-3')).toBe(three)
+})
+
+test('failed final checks run again one at a time, and only one that fails alone reopens', async ($: any, on: any) => {
+  mock.clock(on)
+  const eng = await atLast($, engine(on))
+  const runs: Record<string, number> = { 1: 0, 2: 0, 3: 0 }
+  let going = 0
+  let mostAlone = 0
+  eng.setBash(c => {
+    const n = ['1', '2', '3'].find(k => final(k).test(c))
+    if (!n) return { fail: false, text: 'ok' }
+    runs[n]!++
+    if (runs[n] === 1) return { fail: true, text: `first failure ${n}` }
+    mostAlone = Math.max(mostAlone, ++going)
+    return { fail: n === '3', text: n === '3' ? 'still wrong' : 'all green', wait: Promise.resolve().then(() => void going--) }
+  })
+  const out = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(runs).toEqual({ 1: 2, 2: 2, 3: 2 })
+  expect(mostAlone).toBe(1)
+  expect(out).toMatch(/Reopened: s3/)
+  expect(out).not.toMatch(/Reopened: s1|Reopened: s2/)
+})
+
+test('a slow failing final check runs again too, once the others are done', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = await atLast($, engine(on))
   let open!: () => void
   const gate = new Promise<void>(r => (open = r))
   let held = false
-  eng.setBash(c => (final('2').test(c) ? { fail: true, text: 'timed out', wait: ((held = true), gate) } : final('3').test(c) ? { fail: true, text: 'expected 3' } : { fail: false, text: 'ok' }))
-  const [two, three] = [runsOf(eng, 'check-2'), runsOf(eng, 'check-3')]
+  eng.setBash(c => (final('2').test(c) ? { fail: true, text: 'timed out', wait: ((held = true), gate) } : { fail: false, text: 'ok' }))
+  const two = runsOf(eng, 'check-2')
   const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
   await until(clock, () => held)
   await clock.advance(3 * 60_000)
   open()
   expect(said(await done)).toMatch(/Reopened: s2/)
+  expect(runsOf(eng, 'check-2') - two).toBe(2)
+})
+
+const NUMBERED = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join('\n')
+
+test('a failed check reports its last lines', async ($: any, on: any) => {
+  mock.clock(on)
+  const eng = await atLast($, engine(on))
+  eng.setBash(c => (final('2').test(c) ? { fail: true, text: `\x1b[31mFAIL\x1b[0m rows\n${NUMBERED}\nexpected 3 rows\n\x1b[31mgot 2\x1b[0m` } : { fail: false, text: 'ok' }))
+  const out = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(out).toContain('expected 3 rows\ngot 2\n')
+  expect(out).toContain('\nline 13\n')
+  expect(out).not.toContain('line 12\n')
+  expect(out).not.toContain('[sentinel] exit')
+  expect(out).not.toContain('\x1b[')
+  // Where the run's story is kept, the reason stays one line.
+  const trip = eng.snap().trips?.at(-1) ?? savedRun(eng).trips?.at(-1)
+  expect(trip.reason).not.toContain('line 30')
+})
+
+test('with many failed checks, the last lines come for the first three', async ($: any, on: any) => {
+  mock.clock(on)
+  const eng = engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, action: 'define', title: 'Wide', states: [1, 2, 3, 4, 5].map(i => ({ id: `s${i}`, label: `Part ${i}`, check: `check-${i}`, files: [`p${i}/**`] })) })
+  for (const to of ['s2', 's3', 's4', 's5']) await $.tool.call({ tool: TOOL, action: 'advance', to })
+  // The final checks end at the first confirmed failure, so several come back only from fixes to done states.
+  for (const i of [1, 2, 3, 4]) await $.tool.call({ tool: 'Edit', file_path: `${ROOT}/p${i}/a.ts`, old_string: 'a', new_string: 'b' })
+  eng.setBash(c => {
+    const n = /&& check-(\d)\); echo/.exec(c)?.[1]
+    return n && n !== '5' ? { fail: true, text: `FAIL ${n}\nwhy ${n}` } : { fail: false, text: 'ok' }
+  })
+  const out = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  const whys = ['1', '2', '3', '4'].filter(n => out.includes(`why ${n}`))
+  expect(whys).toHaveLength(3)
+  expect(['1', '2', '3', '4'].filter(n => out.includes(`FAIL ${n}`))).toEqual(['1', '2', '3', '4'])
+})
+
+test('a cut in the final checks leaves the failures so far without a second run', async ($: any, on: any) => {
+  mock.clock(on)
+  const eng = await atLast($, engine(on))
+  const two = runsOf(eng, 'check-2')
+  eng.setBash(c => (final('2').test(c) ? { fail: true, text: 'FAIL rows\nexpected 3 rows' } : final('1').test(c) ? { fail: true, text: 'half way', cut: true } : { fail: false, text: 'ok' }))
+  const out = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'done' }))
+  expect(out).toMatch(/^The final checks stopped: `check-1` was cut short/)
+  expect(out).toContain('Failing so far:\n`check-2`')
+  expect(out).toContain('expected 3 rows')
   expect(runsOf(eng, 'check-2') - two).toBe(1)
-  expect(runsOf(eng, 'check-3') - three).toBe(2)
 })
 
 // The output file of the latest run of a check, which a test writes to as the run goes on.
@@ -2190,14 +2951,18 @@ test('a final check is read from its output file until its exit line comes', asy
   const runs = runsOf(eng, 'check-3')
   const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
   await until(clock, () => runsOf(eng, 'check-3') > runs)
-  // Past two minutes a failing run counts at once, with no second try.
   await clock.advance(3 * 60_000)
+  eng.files[outOf(eng, final('3'))!] += '\n[sentinel] exit 1\n'
+  // It fails, so it runs again alone, and that run fails as well.
+  await clock.advance(10_000)
+  await until(clock, () => runsOf(eng, 'check-3') === runs + 2)
+  await clock.advance(10_000)
   eng.files[outOf(eng, final('3'))!] += '\n[sentinel] exit 1\n'
   await clock.advance(10_000)
   const out = said(await done)
   expect(out).toMatch(/`check-3` \(s3\)/)
   expect(out).toMatch(/Reopened: s3/)
-  expect(runsOf(eng, 'check-3')).toBe(runs + 1)
+  expect(runsOf(eng, 'check-3')).toBe(runs + 2)
 })
 
 test('a final check that keeps printing past an hour is no result, and the completion names it', async ($: any, on: any) => {
@@ -2243,7 +3008,7 @@ test('a running check shows on the status line and the band, and a slow one gets
 test('a check that goes quiet is stopped as stuck: nothing moves, Claude hears why, and the run shows stuck until a check runs again', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = await toService($, engine(on))
-  eng.setBash(c => (c.includes('npm test -- refund') ? { fail: false, text: 'Running tests...', background: true } : { fail: false, text: 'ok' }))
+  eng.setBash(c => (c.includes('npm test -- refund') ? { fail: false, text: 'Compiling...\nRunning tests...', background: true } : { fail: false, text: 'ok' }))
   const runs = runsOf(eng, 'npm test -- refund')
   const going = $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
   await until(clock, () => runsOf(eng, 'npm test -- refund') > runs)
@@ -2253,7 +3018,7 @@ test('a check that goes quiet is stopped as stuck: nothing moves, Claude hears w
   expect(eng.statuses.at(-1)).toMatch(/quieter than usual/)
   await clock.advance(9 * 60_000)
   const out = said(await going)
-  expect(out).toMatch(/^Sentinel stopped `npm test -- refund` after 10 min: no output for 10 min\. Its last output: Running tests\.\.\.\nNothing moved\./)
+  expect(out).toMatch(/^Sentinel stopped `npm test -- refund` after 10 min: no output for 10 min\. Its last output:\nCompiling\.\.\.\nRunning tests\.\.\.\nNothing moved\./)
   expect(eng.stops).toContain(taskOf(outOf(eng, /npm test -- refund/)!))
   const run = await savedRun($, eng)
   expect(run.active).toBe('service')
@@ -2264,6 +3029,83 @@ test('a check that goes quiet is stopped as stuck: nothing moves, Claude hears w
   eng.setBash({ fail: true, text: 'expected 49.99, received 50.00' })
   await $.tool.call({ tool: 'Bash', command: 'npm test -- refund' })
   expect(summarize(await savedRun($, eng)).trap).toBeUndefined()
+})
+
+test('a check that keeps printing past its usual time is stuck', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  const known = (took: number) => (eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'npm test -- refund': { gap: 1000, took } }))
+  eng.setBash(c => (c.includes('npm test -- refund') ? { fail: false, text: 'retrying', background: true } : { fail: false, text: 'ok' }))
+  const start = async () => {
+    const runs = runsOf(eng, 'npm test -- refund')
+    let settled = false
+    const going = $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
+    void going.then(() => (settled = true))
+    await until(clock, () => runsOf(eng, 'npm test -- refund') > runs)
+    return { going, isSettled: () => settled, file: outOf(eng, /npm test -- refund/)! }
+  }
+  const printFor = async (file: string, minutes: number) => {
+    for (let i = 0; i < minutes; i++) {
+      eng.files[file] += '.'
+      await clock.advance(60_000)
+    }
+  }
+  // Known to take a minute: five times that is under the floor, so it is stopped at ten minutes, printing or not.
+  known(60_000)
+  let run = await start()
+  await printFor(run.file, 9)
+  expect(run.isSettled()).toBe(false)
+  await printFor(run.file, 2)
+  const stopped = said(await run.going)
+  expect(stopped).toMatch(/it took 60 s at most before, and it is still going/)
+  expect(stopped).toMatch(/If it is only slow, advance again/)
+  expect(eng.stops).toContain(taskOf(run.file))
+  // The next run is left alone, as any check stopped once is, until it ends.
+  run = await start()
+  await printFor(run.file, 15)
+  expect(run.isSettled()).toBe(false)
+  eng.files[run.file] += '\n1 passing\n[sentinel] exit 0\n'
+  await clock.advance(10_000)
+  expect(said(await run.going)).toMatch(/Moved to verify/)
+})
+
+test('a check known to take long gets five times that before it counts as stuck', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await toService($, engine(on))
+  eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'npm test -- refund': { gap: 1000, took: 5 * 60_000 } })
+  eng.setBash(c => (c.includes('npm test -- refund') ? { fail: false, text: 'building', background: true } : { fail: false, text: 'ok' }))
+  const runs = runsOf(eng, 'npm test -- refund')
+  let settled = false
+  const going = $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
+  void going.then(() => (settled = true))
+  await until(clock, () => runsOf(eng, 'npm test -- refund') > runs)
+  const file = outOf(eng, /npm test -- refund/)!
+  for (let i = 0; i < 24; i++) {
+    eng.files[file] += '.'
+    await clock.advance(60_000)
+  }
+  expect(settled).toBe(false)
+  for (let i = 0; i < 2; i++) {
+    eng.files[file] += '.'
+    await clock.advance(60_000)
+  }
+  expect(said(await going)).toMatch(/it took 5 min at most before, and it is still going/)
+})
+
+test('a final check that keeps printing past its usual time stops the final checks and says why', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = await atLast($, engine(on))
+  eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'check-3': { gap: 1000, took: 30_000 } })
+  eng.setBash(c => (final('3').test(c) ? { fail: false, text: 'retrying', background: true } : { fail: false, text: 'ok' }))
+  const runs = runsOf(eng, 'check-3')
+  const done = $.tool.call({ tool: TOOL, action: 'advance', to: 'done' })
+  await until(clock, () => runsOf(eng, 'check-3') > runs)
+  const file = outOf(eng, final('3'))!
+  for (let i = 0; i < 11; i++) {
+    eng.files[file] += '.'
+    await clock.advance(60_000)
+  }
+  expect(said(await done)).toMatch(/^The final checks stopped: `check-3` was stopped as stuck: it took 30 s at most before, and it is still going\./)
 })
 
 test('Sentinel never stops the same check twice in a row, so a check that is only slow costs one stop', async ($: any, on: any) => {
@@ -2306,7 +3148,7 @@ test('a check that ends on a prompt is stuck at once, and one that went quiet fo
   let going = $.tool.call({ tool: TOOL, action: 'advance', to: 'verify' })
   await until(clock, () => runsOf(eng, 'npm test -- refund') > runs)
   await clock.advance(22_000)
-  expect(said(await going)).toMatch(/after 20 s: it waits on a prompt nobody can answer\. Its last output: Are you sure you want to continue connecting \(yes\/no\)\?/)
+  expect(said(await going)).toMatch(/after 20 s: it waits on a prompt nobody can answer\. Its last output:\nAre you sure you want to continue connecting \(yes\/no\)\?/)
   // It went quiet for 3 minutes before, so it gets 12 minutes of silence where a new check gets 5.
   eng.files[`${ROOT}/.sentinel/checks.json`] = JSON.stringify({ 'npm test -- refund': { gap: 180_000, took: 600_000 } })
   eng.setBash(c => (c.includes('npm test -- refund') ? { fail: false, text: 'RUN refund', background: true } : { fail: false, text: 'ok' }))
@@ -2389,6 +3231,131 @@ test('states that can run at the same time, with nothing that tests them togethe
   expect(untested(defs(GRAPH.states))).toEqual([])
   expect(untested(defs([...apart.states!, { id: 'survey', label: 'Read the logs', needs: ['explore'] }]))).toEqual([['api', 'ui']])
   expect(untested(defs(apart.states!.map(s => ({ ...s, check: s.check && 'npm test' }))))).toEqual([])
+})
+
+test('the pause reply says the session can close', async ($: any, on: any) => {
+  const eng = await toService($, engine(on))
+  const reply = said(await $.command.run({ command: 'sentinel', args: 'pause' }))
+  expect(reply).toMatch(/^Paused at service\./)
+  expect(reply).toMatch(/It's safe to close this session: the plan is saved, and \/sentinel resume picks it up in a later one\./)
+  expect(reply).not.toMatch(/Member agents/)
+  // It says so because it is true by the time the reply comes.
+  expect(JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!).paused).toBe(true)
+})
+
+test('the pause reply names the member agents that end with the session', async ($: any, on: any) => {
+  await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  expect(said(await $.command.run({ command: 'sentinel', args: 'pause' }))).toMatch(/Member agents end with the session: ui can be briefed again, and its worktree stays\./)
+})
+
+test('the overlap refusal says the other state waits on the user', async ($: any, on: any) => {
+  await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'amend', files: ['ui/shared.ts'], reason: 'a helper both need' })
+  await $.tool.call({ tool: TOOL, action: 'escalate', kind: 'blocked', reason: 'The staging keys are missing.' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })))
+    .toMatch(/ui may edit the same files as api, which is waiting on the user now\. Wait until they answer and api is done, then brief ui\./)
+})
+
+test('status shows whether parallel states are on', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  engine(on)
+  const status = () => $.tool.call({ tool: TOOL, action: 'status' }).then(said)
+  // Also before there is a plan, when it decides how the plan gets written.
+  expect(await status()).toMatch(/No plan is locked\.\nParallel states are off\. Only the user turns them on, with \/sentinel parallel on\./)
+  await command(clock, $)('parallel on')
+  expect(await status()).toMatch(/\nParallel states are on\.$/)
+})
+
+test('a state with no check needs evidence, and no read first', async ($: any, on: any) => {
+  engine(on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await $.tool.call({ tool: TOOL, ...PLAN })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'service' }))).toMatch(/needs evidence/)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'service', evidence: 'The user confirmed the rule.' }))).toMatch(/Moved to service/)
+})
+
+test('a draft with parallel on hears about it before planning', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  engine(on)
+  const sentinel = command(clock, $)
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }] }))
+  const section = async () => (await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })).sections.find((s: any) => s.id === 'sentinel:library')?.text ?? ''
+  const WORDS = 'Parallel states are on'
+  expect(await section()).not.toContain(WORDS)
+  await sentinel('parallel on')
+  const text = await section()
+  expect(text).toMatch(/While you draft a plan:[^]*Parallel states are on/)
+  expect(text).toContain('"needs"')
+  expect(text).toContain('tell the user why')
+  await sentinel('parallel off')
+  expect(await section()).not.toContain(WORDS)
+  await sentinel('parallel on')
+  // A draft can still change. Once it locks, the order is set.
+  await sentinel('lock')
+  await $.tool.call({ tool: TOOL, ...GRAPH })
+  expect(await section()).toContain(WORDS)
+  await sentinel('lock')
+  expect(await section()).not.toContain(WORDS)
+})
+
+const LINE: PlanInput = { action: 'define', title: 'In a line', states: [
+  { id: 'read', label: 'Reads only' },
+  { id: 'api', label: 'API', check: 'npm test -- api', files: ['api/**'] },
+  { id: 'ui', label: 'UI', check: 'npm test -- ui', files: ['ui/**'] },
+  { id: 'box', label: 'Box', check: 'npm test -- box', files: ['ui/box.tsx'] },
+  { id: 'look', label: 'A look', check: 'npm test -- look', files: ['look/**'], wait: 'after' },
+] }
+const IN_LINE = 'this plan runs in a line'
+
+test('a straight line with parallel on names the states that share no files', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  engine(on)
+  const sentinel = command(clock, $)
+  const draft = async (plan: PlanInput) => {
+    await sentinel('reset')
+    await sentinel('lock')
+    return notes(await $.tool.call({ tool: TOOL, ...plan }))
+  }
+  // Off, nothing can run together, so there is nothing to say.
+  expect(await draft(LINE)).not.toContain(IN_LINE)
+  await sentinel('parallel on')
+  const note = await draft(LINE)
+  // Only api and ui: read edits nothing, ui and box share a file, and look needs the user's OK.
+  expect(note).toContain(`${IN_LINE}. These neighbours share no files: api and ui.`)
+  expect(note).toContain('If the line is right, tell the user why.')
+  // Named again while it stays a line, and gone once it isn't.
+  expect(notes(await $.tool.call({ tool: TOOL, action: 'revise', order: LINE.states!.map(s => s.id), states: [{ ...LINE.states![1]!, label: 'The API' }] }))).toContain(IN_LINE)
+  expect(notes(await $.tool.call({ tool: TOOL, action: 'revise', order: LINE.states!.map(s => s.id), states: [{ ...LINE.states![2]!, needs: ['read'] }] }))).not.toContain(IN_LINE)
+  expect(await draft(GRAPH)).not.toContain(IN_LINE)
+  // A plan that locks at once can't change its order, so it hears nothing.
+  await sentinel('reset')
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(notes(await $.tool.call({ tool: TOOL, ...LINE }))).not.toContain(IN_LINE)
+})
+
+test('the line note reaches the user at the lock and when parallel turns on, and leaves out what is done', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  engine(on)
+  const sentinel = command(clock, $)
+  // A define sent before the sign-off becomes the draft at the lock.
+  await sentinel('parallel on')
+  await $.tool.call({ tool: TOOL, ...LINE })
+  expect(await sentinel('lock')).toContain(IN_LINE)
+  // Turned on with a draft waiting.
+  await sentinel('parallel off')
+  expect(await sentinel('parallel on')).toContain(IN_LINE)
+  // Not with a plan running: its order is set.
+  await sentinel('lock')
+  await sentinel('parallel off')
+  expect(await sentinel('parallel on')).not.toContain(IN_LINE)
+  // States before start are done, so they can't run beside anything.
+  const defs = (states: PlanInput['states']) => states!.map(s => ({ files: [], ...s })) as any
+  expect(lineNote(defs(LINE.states))).toContain('api and ui')
+  expect(lineNote(defs(LINE.states!.map(s => (s.id === 'api' ? { ...s, evidence: 'Done.' } : s))))).toBeUndefined()
+  // Long lists stay short.
+  const many = Array.from({ length: 7 }, (_, i) => ({ id: `s${i}`, label: `s${i}`, check: 'npm test', files: [`s${i}/**`] }))
+  expect(lineNote(defs(many))).toContain('s0 and s1; s1 and s2; s2 and s3; s3 and s4 and 2 more.')
 })
 
 test('a state amended onto files of a state beside it keeps that state from starting', async ($: any, on: any) => {

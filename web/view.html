@@ -1438,6 +1438,7 @@ function runKind() {
   if (vm.phase === 'complete') return 'done'
   if (vm.phase === 'draft') return 'draft'
   if (vm.paused) return 'paused'
+  if (vm.blocked) return 'blocked'
   if (vm.trap) return 'stuck'
   if (vm.waiting) return 'wait'
   if (vm.sweep) return 'sweep'
@@ -1449,11 +1450,17 @@ function sayLine(kind) {
   if (kind === 'ask') { const k = vm.ask.questions.length; return `Claude ${k > 1 ? `has ${k} questions` : 'asks'}${vm.ask.state ? ` about ${chip(vm.ask.state)}` : ''}. Answer ${where()}.` }
   if (kind === 'done') {
     const sk = tasks().filter(s => s.skipped).length
+    if (vm.closed) {
+      const [un, nc] = [vm.closed.unfinished.length, vm.closed.unchecked.length]
+      const left = [un && `${un} never finished`, nc && `${nc} did not run ${nc > 1 ? 'their checks' : 'its check'} again`].filter(Boolean)
+      return `You closed the plan with ${n - un} of ${n} states done.${left.length ? ` ${left.join(' and ')}.` : ''}`
+    }
     return `${sk ? `${n - sk} states passed and you skipped ${sk}` : `All ${n} states passed`}${par() ? '' : ` in ${vm.step} tool calls`}${vm.startedAt && vm.endedAt ? `, over ${fmtDur(tookMs())}` : ''}.`
   }
   if (kind === 'draft') return `Not locked yet. Check the ${n} states below, then ${online() ? 'lock the plan or ask Claude for changes' : `type ${code('/sentinel lock')} in the chat`}.`
   if (kind === 'paused') return `Paused at ${chip(a.id)}. Edits and questions go unchecked until you resume.`
   if (kind === 'stuck') { const same = vm.trap.sameRuns.length; return `The model is ${PATTERN[vm.trap.pattern]} on ${chip(a.id)}.${same > 1 ? ` The check failed the same way ${same} times.` : ''}` }
+  if (kind === 'blocked') return `${chip(a.id)} needs you: ${esc(vm.blocked.what)} Reply ${where()}.`
   if (kind === 'wait') return `${chip(a.id)} ${vm.waiting.kind === 'before' ? 'asks for your OK before Claude starts it' : 'is done and ready for your review'}. Answer ${where()}.`
   if (kind === 'sweep') { const s = vm.sweep; return `Running the checks of the done states again before the plan completes: ${s.passed} of ${s.total} passed${s.failed ? `, ${s.failed} failing` : ''}.${s.going.length ? ` Now: ${and(s.going.map(chip))}.` : ''}` }
   if (!a) return ''
@@ -1490,6 +1497,10 @@ function stub(kind, n, done) {
     return { k: 'Claude asks', h: esc(trunc(qs.length > 1 ? `${qs.length} questions` : qs[0].question, 120)), p: `Claude stopped${vm.ask.state ? ` on ${code(vm.ask.state)}` : ''} to ask. It waits for your answer before it goes on.`,
       acts: [['Answer below', 'arrow', 'pri', 'ans']], fine: 'Or reply in the chat. The first answer counts.' }
   }
+  if (kind === 'blocked') {
+    return { k: 'Needs you', h: esc(trunc(vm.blocked.what, 160)), p: `Claude stopped on ${code(a.id)} and waits for this. Sentinel won't push it on until you answer.`,
+      acts: [["It's ready, go on", 'check', 'pri', 'ready']], fine: 'Or reply in the chat, which also lets Claude go on.' }
+  }
   if (kind === 'wait') {
     const first = vm.waiting.kind === 'before', nx = after(a.id)
     return { k: first ? 'Your OK' : 'Your review', h: esc(a.title || a.label),
@@ -1510,6 +1521,7 @@ function stub(kind, n, done) {
   if (kind === 'paused') return { k: 'Paused', h: `Paused at ${esc(a.id)}`, p: 'Resume to hold Claude to the plan again. Nothing is lost while it is paused.',
     acts: [['Resume', 'play', 'pri', 'resume']], fine: `Or type ${code('/sentinel resume')} in the chat.` }
   if (n?.kind === 'flow') return { k: `Claude drafted ${isIns(vm.flowDraft) ? 'an instruction' : 'a flow'}`, h: esc(vm.flowDraft.name), p: 'Check it in the Library, then save it or discard it.', acts: [['Open it', 'arrow', 'pri', 'openflows']] }
+  if (kind === 'done' && vm.closed) return { k: vm.endedAt ? `Closed at ${hm(vm.endedAt)}` : 'Closed', h: 'You closed the plan', p: `The final checks did not run, so Claude works freely again. Reason: ${esc(vm.closed.why)}`, fine: 'This page keeps the run until you sign off the next plan.' }
   if (kind === 'done') return { k: vm.endedAt ? `Finished at ${hm(vm.endedAt)}` : 'Finished', h: 'Nothing left to do', p: 'The plan is closed, so Claude works freely again.', fine: 'This page keeps the finished run until you sign off the next plan.' }
   if (kind === 'sweep') {
     const s = vm.sweep
@@ -1533,7 +1545,7 @@ let sent = null, sendErr = null, slipShown = '', told = '', askAt = 0, slimOn = 
 
 function pass() {
   const kind = runKind(), n = online() ? need() : null
-  const ts = tasks(), d = ts.filter(s => s.status === 'done').length, count = `${d}/${ts.length}`
+  const ts = tasks(), d = ts.filter(s => s.status === 'done' && !s.skipped).length, count = `${d}/${ts.length}`
   const answered = !vm.ask && vm.answered && vm.answered.state === vm.active?.id ? vm.answered : null
   const done = n && sent?.key === n.key ? sent
     : !n && answered ? { q: answered.q, ans: answered.ans, stamp: 'Answered at ' + answered.t, where: (answered.by === 'chat' ? 'Answered in the chat, so the question here closed.' : 'Answered here.') + (vm.active ? ` Claude is back on ${vm.active.id}.` : '') }
@@ -1573,7 +1585,7 @@ function pass() {
 // The tab's icon gets a plate while Sentinel needs you: amber for an answer, red when stuck.
 const FAV = $('fav').getAttribute('href')
 function favicon(kind) {
-  const plate = kind === 'stuck' ? ['%23c42b1f', '%23fff'] : ['ask', 'wait', 'draft'].includes(kind) ? ['%23f4b223', '%2310161d'] : null
+  const plate = kind === 'stuck' ? ['%23c42b1f', '%23fff'] : ['ask', 'wait', 'blocked', 'draft'].includes(kind) ? ['%23f4b223', '%2310161d'] : null
   const href = plate ? FAV.replace(/<style>.*?<\/style>/, `<rect x='-130' y='-130' width='260' height='260' fill='${plate[0]}'/><style>g{color:${plate[1]}}</style>`) : FAV
   if ($('fav').getAttribute('href') !== href) $('fav').setAttribute('href', href)
 }
@@ -1589,6 +1601,7 @@ function need() {
   if (vm.phase === 'draft') return { kind: 'draft', key: 'draft ' + vm.draftKey }
   if (vm.phase !== 'live' || !vm.active) return flowNeed()
   if (vm.paused) return { kind: 'paused', key: 'paused ' + vm.active.id }
+  if (vm.blocked) return { kind: 'blocked', key: 'blocked ' + vm.blocked.at }
   if (vm.trap) return { kind: 'stuck', key: 'stuck ' + vm.trap.step }
   // A proposal or finished work waiting for your answer. Asking again (a new proposal, changed work) is a new need.
   if (vm.waiting) return { kind: 'wait', key: 'wait ' + vm.active.id + ' ' + vm.waiting.at }
@@ -1783,6 +1796,7 @@ function onAct(e) {
   if (act === 'approveall') return send({ kind: 'approve', state: a, all: true }, { q: titleOf(a), ans: 'Approved, hands-free', where: 'Claude makes the later calls itself.' })
   if (act === 'approve') return send({ kind: 'approve', state: a }, { q: titleOf(a), ans: 'Approved', where: vm.waiting?.kind === 'before' ? `Claude starts on ${a}.` : `Claude goes on after ${a}.` })
   if (act === 'sendchg') return send({ kind: 'changes', state: a, text: text('chg') }, { q: titleOf(a), ans: 'Changes asked for', where: 'Claude asks you again once they are in.' })
+  if (act === 'ready') return send({ kind: 'ready', state: a, at: vm.blocked.at }, { q: vm.blocked.what, ans: 'It is ready', where: 'Claude goes on.' })
   if (act === 'hint') return send({ kind: 'hint', state: a, trap: vm.trap.step, text: text('try') }, { q: `Claude is ${PATTERN[vm.trap.pattern]} on ${a}`, ans: 'Your note is with Claude', where: 'The run stays red until the check moves.' })
   if (act === 'lock') {
     const picked = (vm.depth ?? []).filter(x => depthPicked.has(x.id)).map(x => x.id)
@@ -1833,7 +1847,7 @@ function notifyNeed() {
   if (!n || n.key === told) { if (!n) told = ''; return }
   told = n.key
   if (!document.hidden || n.kind === 'paused' || !('Notification' in window) || Notification.permission !== 'granted') return
-  const body = { ask: () => vm.ask.questions[0].question, wait: () => vm.waiting.kind === 'before' ? `${vm.active.id} asks for your OK before it starts.` : `${vm.active.id} is ready for your review.`, stuck: () => `Claude is ${PATTERN[vm.trap.pattern]} on ${vm.active.id}.`, draft: () => 'The draft is ready for your check.', flow: () => `Claude drafted the ${isIns(vm.flowDraft) ? 'instruction' : 'flow'} ${vm.flowDraft.name}.` }[n.kind]()
+  const body = { ask: () => vm.ask.questions[0].question, wait: () => vm.waiting.kind === 'before' ? `${vm.active.id} asks for your OK before it starts.` : `${vm.active.id} is ready for your review.`, blocked: () => `${vm.active.id} needs you: ${vm.blocked.what}`, stuck: () => `Claude is ${PATTERN[vm.trap.pattern]} on ${vm.active.id}.`, draft: () => 'The draft is ready for your check.', flow: () => `Claude drafted the ${isIns(vm.flowDraft) ? 'instruction' : 'flow'} ${vm.flowDraft.name}.` }[n.kind]()
   const note = new Notification((vm.trap && n.kind === 'stuck' ? 'Stuck · ' : 'Needs you · ') + (vm.title || 'Sentinel'), { body, tag: 'sentinel' })
   note.onclick = () => { focus(); note.close() }
 }
@@ -1913,7 +1927,7 @@ const trailPins = new Map()
 const isOpen = (pins, g, k) => pins.has(gkey(g)) ? pins.get(gkey(g)) : !g.win && (k === 'live' || tasks().length <= 12)
 
 function tchip(s) {
-  const k = stOf(s), mine = { ask: 'You', wait: 'You', stuck: 'Stuck', paused: 'Paused' }[runKind()]
+  const k = stOf(s), mine = { ask: 'You', wait: 'You', blocked: 'You', stuck: 'Stuck', paused: 'Paused' }[runKind()]
   const mini = k === 'now' && mine ? `<span class="mini tone">${mine}</span>`
     : par() && (k === 'now' || k === 'run') ? `<span class="mini${k === 'run' ? ' run' : ''}">${k === 'run' ? 'Member' : 'Main'}</span>`
     : s.wait && k !== 'done' ? '<span class="mini">You</span>' : ''
@@ -2080,7 +2094,7 @@ const LHEAD = '<div class="lhead"><span></span><span>#</span><span>State</span><
 
 function lrow(s) {
   const k = stOf(s), ms = took(s), id = esc(s.id)
-  const ck = s.skipped ? '<span class="ck none">Skipped</span>' : s.wait ? `<span class="ck none">${waitTx(s)}</span>` : s.check ? `<span class="ck">${esc(s.check)}</span>` : '<span class="ck none quiet">Nothing to run</span>'
+  const ck = s.skipped ? '<span class="ck none">Skipped</span>' : s.wait ? `<span class="ck none">${waitTx(s)}</span>` : s.check ? `<span class="ck"${s.once ? ' title="Runs at its advance, not again at the end"' : ''}>${esc(s.check)}${s.once ? ' · once' : ''}</span>` : '<span class="ck none quiet">Nothing to run</span>'
   const aft = graph() && s.needs?.length ? `<span class="aft">after ${and(s.needs.map(esc))}</span>` : ''
   const who = par() && (k === 'now' || k === 'run') ? `<span class="mini${k === 'run' ? ' run' : ''}">${k === 'run' ? 'Member' : 'Main'}</span>` : ''
   const tail = `<span class="n">${String(ordOf(s)).padStart(2, '0')}</span><span class="id"><span>${id}</span>${who}</span><span class="tx">${esc(s.label)}${aft}</span>${ck}`
@@ -2216,7 +2230,7 @@ $('selbar').addEventListener('click', e => {
 function olOpen(n, reached, minW) {
   return `<div class="ol" style="min-width: ${minW}px; --n: ${n}; --f: ${vm.phase === 'complete' ? 1 : Math.max(0, reached) / (n - 1)}"><div class="track"><i></i></div>`
 }
-const hereWord = () => ({ ask: 'Waiting on you', wait: 'Waiting on you', stuck: 'Stuck here', paused: 'Paused here' })[runKind()] ?? 'Claude is here'
+const hereWord = () => ({ ask: 'Waiting on you', wait: 'Waiting on you', blocked: 'Waiting on you', stuck: 'Stuck here', paused: 'Paused here' })[runKind()] ?? 'Claude is here'
 function line() {
   const S = tasks(), fin = vm.phase === 'complete', top = longest(), cell = k => `<i class="${k}"></i>`
   const here = k => k === 'now' ? `<span class="here tag tone">${hereWord()}</span>` : ''
@@ -2290,10 +2304,10 @@ const backTitle = (from, to, n) => `<title>${esc(from)} can send the run back to
 
 function scard(s, u, pos, top) {
   const k = stOf(s), ms = took(s), id = esc(s.id)
-  const mine = { ask: 'You', wait: 'You', stuck: 'Stuck', paused: 'Paused' }[runKind()]
+  const mine = { ask: 'You', wait: 'You', blocked: 'You', stuck: 'Stuck', paused: 'Paused' }[runKind()]
   const mini = k === 'now' ? `<span class="mini tone">${mine ?? (par() ? 'Main' : 'Now')}</span>` : k === 'run' ? '<span class="mini run">Member</span>' : s.wait && k === 'ahead' ? '<span class="mini">You</span>' : ''
   const t3 = ms != null ? `<span class="num" data-clock="${id}">${fmtDur(ms, true)}</span><span class="dbar"><i data-bar="${id}" style="width: ${barPct(ms, top)}%"></i></span>${bk(backTo([s.id]))}`
-    : `<span>${s.skipped ? 'Skipped' : k === 'done' ? 'Done before the lock' : graph() && s.waits?.length ? `Waits for ${and(s.waits.map(esc))}` : s.wait === 'after' ? 'Ends on your OK' : s.wait ? 'Starts on your OK' : s.check ? 'Ends on its check' : 'No check to run'}</span>`
+    : `<span>${s.skipped ? 'Skipped' : k === 'done' ? 'Done before the lock' : graph() && s.waits?.length ? `Waits for ${and(s.waits.map(esc))}` : s.wait === 'after' ? 'Ends on your OK' : s.wait ? 'Starts on your OK' : s.once ? 'Its check runs once' : s.check ? 'Ends on its check' : 'No check to run'}</span>`
   return `<button type="button" class="mcard ${k}" data-task="${id}" data-u="${u}" style="${pos}" title="${esc(s.skipped ? `Skipped: ${s.skipped}` : s.label)}"><span class="t1"><span class="box ${k}"></span><span class="idt">${id}</span>${mini}</span>`
     + `<span class="lb">${esc(s.label)}</span><span class="t3">${t3}</span></button>`
 }
@@ -2697,7 +2711,7 @@ function nowSec() {
   }
   if (!a) return ''
   const s = byId(a.id) ?? a, t = vm.trap, h = vm.health
-  const word = { ask: 'Waiting on you', wait: 'Waiting on you', stuck: 'Stuck', paused: 'Paused', sweep: 'Final checks' }[runKind()] ?? 'Running'
+  const word = { ask: 'Waiting on you', wait: 'Waiting on you', blocked: 'Waiting on you', stuck: 'Stuck', paused: 'Paused', sweep: 'Final checks' }[runKind()] ?? 'Running'
   let html = `<div class="nowid"><span class="box now"></span>${esc(a.id)}</div><p class="nowtx">${esc(a.label)}</p>`
     + `<p class="nowgo"><button type="button" class="btn sm" data-task="${esc(a.id)}">Open the task page</button></p>`
   const beside = par() ? [] : S.filter(x => x.status === 'running')
@@ -3065,7 +3079,7 @@ function taskPage(s, i, T) {
   // The running task with a closed last visit is a paused one: its clock has stopped.
   const held = s.to != null && act?.id === s.id, open = !!s.since || held || s.to == null
   const word = s.skipped ? 'Skipped' : vm.phase === 'draft' ? 'Draft'
-    : { done: 'Done', run: 'Running', ahead: s.visits ? 'Waiting' : 'Not started', now: { ask: 'Waiting on you', wait: 'Waiting on you', stuck: 'Stuck', paused: 'Paused' }[kind] ?? 'Running' }[k]
+    : { done: 'Done', run: 'Running', ahead: s.visits ? 'Waiting' : 'Not started', now: { ask: 'Waiting on you', wait: 'Waiting on you', blocked: 'Waiting on you', stuck: 'Stuck', paused: 'Paused' }[kind] ?? 'Running' }[k]
   const stand = s.skipped ? `You skipped ${s.status === 'done' ? 'its check' : 'it'}. Reason: ${ticks(s.skipped)}` : vm.phase === 'draft' ? 'Waiting. The plan is a draft until you lock it.' : {
     done: s.wait === 'after' ? 'Done. You approved it.' : s.check ? 'Done. Sentinel ran the check and it passed.' : 'Done. It has no check, so it ended when Claude moved on.',
     run: 'In progress in a member agent, in a worktree of its own. Sentinel checks its work when it stops and brings it back.',
@@ -3073,6 +3087,7 @@ function taskPage(s, i, T) {
     now: {
       ask: 'Claude stopped here to ask you something. It waits for your answer.',
       wait: vm.waiting?.kind === 'before' ? 'Waiting for your OK before it starts.' : 'Waiting for your review. Claude goes on when you approve it.',
+      blocked: `Needs you: ${vm.blocked?.what}`,
       stuck: `Stuck: the model is ${PATTERN[vm.trap?.pattern] ?? 'making no progress'}. Sentinel is waiting on you.`,
       paused: 'Paused. Edits and questions go unchecked until you resume.',
     }[kind] ?? `In progress. ${plural(vm.visitCalls, 'tool call')} so far.`,
@@ -3100,7 +3115,7 @@ function taskPage(s, i, T) {
   const skip = vm.phase === 'live' && online() && !s.skipped && s.status !== 'running'
     ? `<div class="skip"><label class="label" for="skipWhy">${s.status === 'done' ? 'Skip its check' : 'Skip this state'}. Why? (optional)</label><div class="row"><input class="field" id="skipWhy" maxlength="500" placeholder="Claude sees this reason"><button type="button" class="btn" data-skip>${s.status === 'done' ? 'Skip its check' : 'Skip it'}</button></div>
       <p class="fine" id="skipSaid">${s.status === 'done' ? 'Its work stays. Its check no longer runs before the plan completes.' : 'Claude leaves it. It counts as done for the states that need it.'}</p></div>` : ''
-  const done = s.check ? `<code class="blk">${esc(s.check)}</code><p class="fine">Sentinel runs this when Claude says the state is done. Exit code 0 means it passed.</p>` : s.wait === 'after' ? '' : '<p>Claude says so. There is no check to run.</p>'
+  const done = s.check ? `<code class="blk">${esc(s.check)}</code><p class="fine">Sentinel runs this when Claude says the state is done. Exit code 0 means it passed.${s.once ? ' It is marked once, so it does not run again at the end of the plan.' : ''}</p>` : s.wait === 'after' ? '' : '<p>Claude says so. There is no check to run.</p>'
   const files = s.files || [], kick = [s.group && s.group.split('/').join(' / '), !vm.proof && s.ref && 'Plan: ' + s.ref].filter(Boolean).join(' · ')
   return `<div class="tp-bar"><button type="button" class="btn sm" id="tpBack">${icon('back')}Back to the plan</button><span class="sp"></span>
       <span class="pg">${i + 1} of ${T.length}</span><button type="button" class="btn sm" data-task="${esc(T[i - 1]?.id ?? '')}"${i ? '' : ' disabled'}>Previous</button><button type="button" class="btn sm" data-task="${esc(T[i + 1]?.id ?? '')}"${T[i + 1] ? '' : ' disabled'}>Next</button></div>
@@ -3386,7 +3401,7 @@ function flowsPage() {
 
 // The page tabs at the foot. Run carries a mark while the plan needs you, Library while Claude's draft waits.
 function navTabs() {
-  const needs = !!vm && (!!vm.ask || vm.phase === 'draft' || vm.phase === 'live' && !!(vm.trap || vm.waiting))
+  const needs = !!vm && (!!vm.ask || vm.phase === 'draft' || vm.phase === 'live' && !!(vm.trap || vm.waiting || vm.blocked))
   document.querySelectorAll('.nav [data-page]').forEach(b => {
     const cur = (b.dataset.page === 'flows') === (!!fview && fview !== 'source')
     if (cur) b.setAttribute('aria-current', 'page')

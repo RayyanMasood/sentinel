@@ -3,9 +3,9 @@ import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'clau
 import type { Checking, Depth, FlowDef, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PlanLibrary, Run, Source, StateDef, Switches, View, Weight } from '../types'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import {
-  AUTO_CAP, RETRIES, VIEWS, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
-  memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
-  answered as settled, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
+  AUTO_CAP, RETRIES, VIEWS, blockedOn, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
+  memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, lineNote, PARALLEL_DRAFT, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
+  answered as settled, lastLines, withTail, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
   instructionOf, libraryOn, withWeight, librarySection, toldHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine,
 } from './core'
@@ -39,8 +39,8 @@ const now = () => new Date().toTimeString().slice(0, 5)
 export const DESCRIPTION = `Sentinel holds a signed-off plan as a state machine and keeps you to it.
 
 After the user approves a plan (plan mode, or /sentinel lock), call action "define" before editing anything:
-- states, in order. Each has an id, a label, a check command that proves it done (bash, run from the project root; exit 0 means done) and the files it may edit (globs relative to the root). A state that only reads needs no check; one that only verifies lists no files. Write each check so it fails until the work is in: Sentinel runs it when the state starts and tells you if it passes already. Checks run again before the plan completes, so make them safe to repeat.
-- A state that hands over several branches or pull requests needs a check that tests them together, such as git merge-tree --write-tree <a> <b> per pair (exit 1 on a conflict); "mergeable" only compares with the base.
+- states, in order. Each has an id, a label, a check command that proves it done (bash, run from the project root; exit 0 means done) and the files it may edit (globs relative to the root). A state that only reads needs no check; one that only verifies lists no files. Write each check so it fails until the work is in: Sentinel runs it when the state starts and tells you if it passes already. Checks run again before the plan completes, so don't tie one to a branch or a temp file; if you must, set "once".
+- A state that hands over several branches or pull requests needs a check that tests them together, such as git merge-tree --write-tree <a> <b> per pair; "mergeable" only compares with the base.
 - loops: back edges you expect, such as ["verify", "service"] when a failing suite sends you back to fix code.
 - source: where the plan is written (file and section), and a "ref" on each state pointing to its details, so they survive compaction.
 - group: for more than about 8 states, a group name on each, such as "auth" or "marking/runs". Keep a group's states together.
@@ -48,18 +48,18 @@ After the user approves a plan (plan mode, or /sentinel lock), call action "defi
 - wait: "before" on a state the user OKs before you start (a design, a risky change): there, call "propose" with "intent" (what you will do), then stop your turn; edits open once they answer. "after" on a state they review when done: advance tells them, then stop your turn until they answer.
 - needs: the ids of the states a state builds on. Without it, a state needs the one listed before it. List every state after its needs. States where neither needs the other can run at the same time, so their files must not overlap.
 
-If part of the plan is already done, list the whole plan anyway: set "start" to the first unfinished state (Sentinel runs the checks before it and refuses the lock if one fails), give a finished state without a check "evidence" (a commit, a test run, what the user confirmed), and add the "decisions" already made (topic, choice, reason).
+If part of the plan is already done, list the whole plan anyway: set "start" to the first unfinished state (Sentinel runs the checks before it and refuses the lock if one fails), give a finished state without a check "evidence", and add the "decisions" already made (topic, choice, reason).
 After /sentinel lock, define saves a draft the user checks and locks; stop and wait. For changes, call "revise" with "order" (every state id) and "states" holding only the changed or new ones, each whole. States left out of order are dropped; other fields stay unless sent.
 
 While the plan runs:
-- "advance" runs the state's check and moves on only when it exits 0. Run the check with Bash as often as you like. Moving forward, give "outcome": what was done, in one or two plain sentences. Going back along a loop needs a reason in "evidence", and reopens that state and the states that need it.
+- "advance" runs the state's check and moves on only when it exits 0. Moving forward, give "outcome": what was done, in one or two plain sentences. Going back along a loop needs a reason in "evidence", and reopens that state and the states that need it.
 - Edits outside the active state's files are refused. Add files with "amend" (files, reason).
 - Don't ask the user about choices that aren't breaking. Pick what the codebase and common practice support, record it with "decide" (topic, choice, reason), and go on.
 - Breaking means: a public API or exported signature changes, a schema or data migration the plan didn't include, deleting user data, a new dependency, or auth, permissions, secrets, CI or deploy config. For those, call "escalate" with kind "breaking" and a reason, then ask the user one question.
 - You may fix files of done states; advance then runs their checks too.
-- Only the user skips a state: when they ask in the chat, call "skip" (to, reason).
-- If Sentinel says you are stuck, follow its note. "escalate" with kind "stuck" opens after two notes. "status" shows where you are.
-- With parallel states on, Sentinel names the states ready to run beside yours. Give each a "brief" (to, brief): Sentinel starts a member agent in a worktree of the project as it is then, which may edit only that state's files.
+- Only the user skips a state or closes the plan: when they ask in the chat, call "skip" (to, reason) or "finish" (reason; no final checks).
+- When stuck, follow Sentinel's note. "escalate" with kind "stuck" opens after two notes; "blocked" opens at once, for work waiting on something outside. "status" shows where you are.
+- With parallel states on, Sentinel names the states ready beside yours. Give each a "brief" (to, brief): Sentinel starts a member agent in a worktree of the project as it is then, editing only that state's files.
 
 When the user asks for a flow (states reused in plans), send action "flow" (name, description, states, when); they save it.`
 
@@ -68,7 +68,7 @@ const LOCK = `${TAG} The user signed off the plan we're working from. Call ${TOO
 const SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['define', 'revise', 'advance', 'brief', 'propose', 'skip', 'amend', 'decide', 'escalate', 'status', 'flow'] },
+    action: { type: 'string', enum: ['define', 'revise', 'advance', 'brief', 'propose', 'skip', 'finish', 'amend', 'decide', 'escalate', 'status', 'flow'] },
     order: { type: 'array', items: { type: 'string' }, description: 'revise: every state id of the plan, in order. While a plan runs, revise only adds states: send the new ones whole in states, placed after the active state in order.' },
     title: { type: 'string', description: 'define: the plan name' },
     states: {
@@ -89,6 +89,7 @@ const SCHEMA = {
           title: { type: 'string', description: 'a plain name for the task page, under 8 words' },
           problem: { type: 'string', description: 'what is wrong or needed, in one or two plain sentences for the task page' },
           approach: { type: 'string', description: 'what you will do about it, in one or two plain sentences for the task page' },
+          once: { type: 'boolean', description: "true for a check that holds only at this moment, such as one tied to a branch, a machine being online or a temp file. It runs at this state's advance and not again at the end. Prefer a check that stays true: the user sees this mark on the draft." },
           wait: { type: 'string', enum: ['before', 'after'], description: "the user's OK: before you start the state (you propose first), or after it is done (they review it)" },
           needs: { type: 'array', items: { type: 'string' }, description: 'the ids of the states this one builds on; leave it out to need the state listed before it' },
         },
@@ -137,10 +138,10 @@ const SCHEMA = {
       },
     },
     check: { type: 'string', description: 'amend: replace the active state check' },
-    reason: { type: 'string', description: 'amend, decide, escalate, skip: why' },
+    reason: { type: 'string', description: 'amend, decide, escalate, skip, finish: why' },
     topic: { type: 'string', description: 'decide: what was decided' },
     choice: { type: 'string', description: 'decide: the choice' },
-    kind: { type: 'string', enum: ['breaking', 'stuck'], description: 'escalate' },
+    kind: { type: 'string', enum: ['breaking', 'stuck', 'blocked'], description: 'escalate. blocked: the work waits on something outside, such as a locked machine or someone\'s reply; the reason names what is needed, and then you stop.' },
   },
   required: ['action'],
 }
@@ -150,16 +151,19 @@ export const register: Register = on => {
     await $.tool.register({ name: 'plan', description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
     await $.command.register({
       name: 'sentinel',
-      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, source (the saved source, with each quote marked), lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
-      argumentHint: '[focus|map|ledger|browser|source|lock|lock <depth ids>|pause|resume|skip <state>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
+      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, source (the saved source, with each quote marked), lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, finish [reason] (close the plan with no final checks), hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
+      argumentHint: '[focus|map|ledger|browser|source|lock|lock <depth ids>|pause|resume|skip <state>|finish|finish <reason>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
     })
     // Final checks and check runs a lost session left showing are over.
     await change($, r => (r.sweep || r.checking ? { ...r, sweep: undefined, checking: undefined } : r))
     void libraryView($).catch(() => undefined)
     // A new session starts empty; say so when the project holds an unfinished plan.
     void after($).then(async () => {
-      const s = (await read($, run)).plan ? undefined : await saved($)
+      const r = await read($, run)
+      const s = r.plan ? undefined : await saved($)
+      const k = s || r.plan || keptDraft(r) ? undefined : await savedDraft($)
       if (s) $.ui.status(`"${s.plan!.title}" unfinished · /sentinel resume`)
+      else if (k) $.ui.status(`${k.draft ? `"${k.draft.plan?.title}" draft` : k.held ? `"${k.held.title}" unsigned` : 'A sign-off'} kept · /sentinel resume`)
     })
     return next(e)
   })
@@ -177,7 +181,7 @@ export const register: Register = on => {
     // (claude -p), never run by the model or another plugin. The engine stamps every run's origin; only the test kit
     // leaves it out.
     const by = (e.origin as { kind?: string } | undefined)?.kind
-    if (/^(lock|reset|pause|resume|skip|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s|on\s|off\s|weight\s|trust\s|source)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
+    if (/^(lock|reset|pause|resume|skip|finish|hands-free|approve-all|parallel\s|add\s|drop\s|flow\s|on\s|off\s|weight\s|trust\s|source)/.test(arg) && by !== undefined && !['composer', 'bridge', 'sdk'].includes(by)) {
       return { text: `Only the user runs /sentinel ${arg.split(/\s/)[0]}, typed at the prompt.` }
     }
     if (arg === 'source') return { text: sourceText(summarize(await read($, run))) }
@@ -194,7 +198,7 @@ export const register: Register = on => {
       const held = r.held && !priorChecks(r.held).length ? await planCall($, r.held) : undefined
       if (held && held.deny === undefined) {
         const states = (await read($, run)).draft?.plan?.states
-        const apart = states && (await parallelOn($)) ? untestedNote(states)?.replace('[sentinel] ', '\n') : undefined
+        const apart = states && (await parallelOn($)) ? [untestedNote(states), lineNote(states)].flatMap(n => n?.replace('[sentinel] ', '\n') ?? []).join('') : undefined
         return { text: `Signed off. The plan the model sent before is the draft now. Review it from the band above the prompt or with /sentinel, then lock it.${apart ?? ''}` }
       }
       const why = held ? `\nThe define you sent before the sign-off was refused: ${held.deny}`
@@ -205,6 +209,8 @@ export const register: Register = on => {
     if (arg === 'reset') {
       await change($, () => emptyRun())
       await $.fs.write(await runFile($), JSON.stringify(emptyRun())).catch(() => undefined)
+      await $.fs.write(await draftFile($), '{}').catch(() => undefined)
+      lastDraft = undefined
       void after($)
       return { text: 'Sentinel plan cleared.' }
     }
@@ -220,6 +226,7 @@ export const register: Register = on => {
     if (arg === 'resume') return { text: await resume($) }
     if (arg === 'browser') return { text: await openBrowser($) }
     if (arg.startsWith('skip ')) return { text: await skipNow($, e.args.trim().slice(5).trim()) }
+    if (arg === 'finish' || arg.startsWith('finish ')) return { text: await finishNow($, e.args.trim().slice(6).trim()) }
     // flows is the list's older name.
     if (arg === 'library' || arg === 'flows') return { text: await libraryList($) }
     const sw = /^(on|off)\s+(\S+)(\s+personal)?$/.exec(arg)
@@ -509,6 +516,8 @@ const spoke = () => typedAt > 0 && typedAt >= lastTurnAt
 
 // Background work holds a push on, or a member's hand-back, for this long at most: a server or a watcher never ends.
 const HOLD_MS = 30 * 60_000
+// How many times a member's check runs while its files keep changing under it.
+const CHECK_RUNS = 3
 // A turn that ends within TALK_MS of the user's prompt most likely answered it: a question, or being told to stop.
 // Pushing on then would talk over them; a long stretch of work after their prompt still gets pushed on.
 const TALK_MS = 5 * 60_000
@@ -561,7 +570,7 @@ async function push($: $, busy: boolean, long: Flying[]) {
   void after($)
   const still = long.length ? ` Background work has run for over ${HOLD_MS / 60_000} minutes: ${long.map(t => t.what).join('; ')}. If it is a server or a watcher, carry on with the plan beside it.` : ''
   const how = free ? `${HANDS_FREE} Continue with the next step.` : 'Unless you need a breaking-change decision (escalate), continue with the next step.'
-  tell($, `${TAG} The plan is signed off and not finished (state ${state}). ${how}${still} Auto-continue ${n} of ${cap}.` )
+  tell($, `${TAG} The plan is locked and not finished (state ${state}). ${how}${still} Auto-continue ${n} of ${cap}.` )
 }
 
 // Hands-free on or off. Turned on while the conversation sits waiting, it wakes it.
@@ -570,6 +579,16 @@ async function setFree($: $, on: boolean) {
   if (on && !turning) later($, FREE)
 }
 const FREE = `${TAG} ${HANDS_FREE} Continue with the plan.`
+
+// The user's /sentinel finish.
+async function finishNow($: $, why: string): Promise<string> {
+  const ran = await planCall($, { action: 'finish', ...(why && { reason: why }) }, true)
+  if (ran.deny !== undefined) return ran.deny
+  const text = String(ran.result)
+  // Sentinel's earlier prompts may still wait in the queue and arrive in the same turn as this one.
+  later($, `${TAG} The user closed the plan with /sentinel finish. ${text} Any Sentinel message with this one that says to continue is out of date. Leave the plan's states as they are, and tell the user in a line or two where the work stands.`)
+  return text
+}
 
 // The user's /sentinel skip, or Skip on the dashboard.
 async function skipNow($: $, raw: string): Promise<string> {
@@ -632,7 +651,10 @@ async function pause($: $): Promise<string> {
   const r = await read($, run)
   if (!isLive(r)) return r.paused ? 'Sentinel is already paused.' : 'No plan is running.'
   await change($, x => ({ ...x, paused: true, log: [...x.log, { t: now(), icon: '‖', tone: 'warn' as const, text: 'Paused' }] }))
-  return `Paused at ${r.active}. Edits, questions and stopped turns go unchecked until /sentinel resume.`
+  await after($)
+  const members = Object.keys(r.running ?? {})
+  const end = members.length ? ` Member agents end with the session: ${members.join(', ')} can be briefed again, and ${members.length > 1 ? 'their worktrees stay' : 'its worktree stays'}.` : ''
+  return `Paused at ${r.active}. Edits, questions and stopped turns go unchecked until /sentinel resume. It's safe to close this session: the plan is saved, and /sentinel resume picks it up in a later one.${end}`
 }
 
 // Resumes a paused plan, or the unfinished plan an earlier session left in .sentinel/run.json.
@@ -640,7 +662,18 @@ async function resume($: $): Promise<string> {
   const cur = await read($, run)
   if (isLive(cur)) return 'The plan is already running.'
   const old = isUnfinished(cur) ? undefined : await saved($)
-  if (!isUnfinished(cur) && !old) return 'Nothing to resume: no unfinished plan in this session or in .sentinel/run.json.'
+  const k = isUnfinished(cur) || old || keptDraft(cur) ? undefined : await savedDraft($)
+  if (k) {
+    await change($, x => ({ ...x, ...freshCount(x, new Date().toISOString()), ...k }))
+    lastDraft = 'brought back'
+    void $.ui.open({ id: PANE, title: 'Sentinel' })
+    const what = k.draft ? `the draft "${k.draft.plan?.title}"` : k.held ? `the plan Claude sent, "${k.held.title}",` : 'your sign-off'
+    later($, `${TAG} The user brought back ${what.replace('your', 'their')} from an earlier session. Files may have changed since, so call ${TOOL} with action "status" first. A draft that starts partway needs sending again, as its earlier checks ran before the restart.`)
+    return `Brought back ${what} from an earlier session. ${k.draft ? 'Lock it with /sentinel lock.' : k.held ? 'Sign it off with /sentinel lock.' : 'Claude can send the plan now.'}`
+  }
+  if (!isUnfinished(cur) && !old) return 'Nothing to resume: no unfinished plan or draft in this session or in .sentinel.'
+  // The plan on disk takes over. A draft of this session stays on disk for afterwards.
+  if (old) lastDraft = undefined
   const from = old ? ' from an earlier session' : ''
   let r = cur
   await change($, x => {
@@ -668,6 +701,13 @@ const agents = ($: $) => $.agent.list().catch(() => [])
 const working = (a: { status: string }) => a.status === 'pending' || a.status === 'running' || a.status === 'waiting'
 
 const runFile = async ($: $) => `${await $.session.root()}/.sentinel/run.json`
+const draftFile = async ($: $) => `${await $.session.root()}/.sentinel/draft.json`
+// What a draft or a sign-off needs back after a restart. It goes apart from run.json, so it never replaces an earlier
+// session's plan. Typed messages stay out, as in run.json.
+type Kept = Pick<Run, 'draft' | 'held' | 'signedOff' | 'review' | 'sources'>
+const keptDraft = (r: Run): Kept | undefined => (!isUnfinished(r) && (r.draft || r.held || (r.signedOff && !r.plan)) ? { draft: r.draft, held: r.held, signedOff: r.signedOff, review: r.review, sources: r.sources } : undefined)
+const savedDraft = async ($: $): Promise<Kept | undefined> =>
+  keptDraft({ ...emptyRun(), ...(await $.fs.read(await draftFile($)).then(t => JSON.parse(String(t)) as Partial<Run>).catch(() => undefined)) })
 
 // Parallel states are an experimental switch, off by default. It is saved per project, apart from the plan, so a reset
 // or a new plan keeps it. Only /sentinel parallel writes it.
@@ -693,7 +733,7 @@ async function setParallel($: $, want: string): Promise<string> {
   if (want === 'off') return 'Parallel states are off. From now on states run one at a time in the listed order. States already started carry on as they are.'
   const r = await read($, run)
   const states = (r.draft ?? r).plan?.states
-  const apart = states && (r.draft || isLive(r)) ? untestedNote(states)?.replace('[sentinel] ', '\n') : undefined
+  const apart = states && (r.draft || isLive(r)) ? [untestedNote(states), r.draft ? lineNote(states) : undefined].flatMap(n => n?.replace('[sentinel] ', '\n') ?? []).join('') : undefined
   return `Parallel states are on (experimental). From now on each state starts as soon as the states it needs are done. States already started carry on as they are.${apart ?? ''}`
 }
 
@@ -746,7 +786,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
       const ran = await runCheck($, c)
       if ('deny' in ran) return record($, { deny: `Sentinel couldn't run \`${c}\`: ${ran.deny}` }, { kind: 'plan', label, denied: true })
       if (ran.stuck) return record($, { deny: stuckText(c, ran) }, { kind: 'plan', label, denied: true })
-      proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText }
+      proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText, tail: lastLines(ran.text) }
     }
   }
   // An advance (or a skip) that would complete the plan first runs the final checks. One cut short leaves the plan as
@@ -757,8 +797,8 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     if (act(now0, input, now(), {}, Date.now(), typed, without).event === 'complete') {
       const out = await finalChecks($, sweepChecks(now0, check).filter(c => !proofs[c]), proofs, signal)
       if (out.cut && !signal?.aborted) {
-        const fails = Object.entries(proofs).filter(([, p]) => !p.pass).map(([c, p]) => `\`${c}\`: ${p.sigText}`)
-        const deny = `The final checks stopped: \`${out.cut}\` ${out.stuck ? `was stopped as stuck: ${out.stuck}.` : 'was cut short before it finished.'} Nothing changed: ${now0.active} stays active and no state reopened.${fails.length ? `\nFailing so far:\n${fails.join('\n')}` : ''}\nAdvance again to finish them. The passes so far hold while nothing changes.`
+        const fails = Object.entries(proofs).filter(([, p]) => !p.pass).map(([c, p], k) => withTail(`\`${c}\`: ${p.sigText}`, p, k))
+        const deny = `The final checks stopped: \`${out.cut}\` ${out.stuck ? `was stopped as stuck: ${out.stuck}.` : out.lost ? 'left no exit code that Sentinel could read.' : 'was cut short before it finished.'} Nothing changed: ${now0.active} stays active and no state reopened.${fails.length ? `\nFailing so far:\n${fails.join('\n')}` : ''}\nAdvance again to finish them. The passes so far hold while nothing changes.`
         return record($, { deny }, { kind: 'plan', label, denied: true })
       }
       late = out.late
@@ -770,7 +810,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
       const ran = await runCheck($, c)
       if ('deny' in ran) return { deny: `Sentinel couldn't run \`${c}\`: ${ran.deny}` }
       if (ran.stuck) return { deny: stuckText(c, ran) }
-      proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText }
+      proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText, tail: lastLines(ran.text) }
     }
     const named = await namedFile($, keptSources(was), whole.source)
     if (named) input = { ...input, named }
@@ -795,7 +835,9 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   // A new plan or draft whose parallel states nothing tests together gets a warning, while it can still change.
   const plan = (a.run.draft ?? a.run).plan
   const apart = parallel && (input.action === 'define' || input.action === 'revise') && plan ? untestedNote(plan.states) : undefined
-  if (input.action === 'status') return attach(attach({ result: a.text }, warn), beside)
+  // Only a draft can still change its order.
+  const inLine = parallel && (input.action === 'define' || input.action === 'revise') && a.run.draft ? lineNote(a.run.draft.plan!.states) : undefined
+  if (input.action === 'status') return attach(attach({ result: `${a.text}\nParallel states are ${parallel ? 'on.' : 'off. Only the user turns them on, with /sentinel parallel on.'}` }, warn), beside)
   if (a.event === 'locked') {
     void $.ui.open({ id: PANE, title: 'Sentinel' })
     $.ui.toast(`Sentinel: plan locked, ${stateOf(a.run)?.id} is active`)
@@ -804,7 +846,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     void $.ui.open({ id: PANE, title: 'Sentinel' })
     $.ui.toast('Sentinel: draft ready. Review it from the band above the prompt')
   }
-  if (a.event === 'complete') $.ui.toast('Sentinel: plan complete')
+  if (a.event === 'complete') $.ui.toast(`Sentinel: plan ${a.run.closed ? 'closed' : 'complete'}`)
   const unrun = a.event === 'complete' && late.length
     ? `Not checked again before the plan completed, still running after ${WAIT_MS / 60_000} minutes, so Sentinel stopped it: ${late.map(c => `\`${c}\``).join(', ')}. Tell the user.`
     : undefined
@@ -814,7 +856,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const offered = a.event === 'drafted' && flowsSeen?.length
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
-  return attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), beside), apart), unrun), rules), offered)
+  return attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), beside), apart), inLine), unrun), rules), offered)
 }
 
 // What the sign-off adds while quote-the-source is on, so the first define can get it right.
@@ -991,7 +1033,7 @@ async function promptSection($: $): Promise<string> {
   const running = isUnfinished(r)
   const told = running ? r.library?.told ?? [] : planLibrary(await libraryNow($)).told
   const at = (m: InstructionAt) => told.filter(x => x.at === m)
-  return librarySection(at('always'), running ? [] : at('draft'))
+  return librarySection(at('always'), running ? [] : [...at('draft'), ...((await parallelOn($)) ? [PARALLEL_DRAFT] : [])])
 }
 
 // What a new plan is locked with: the weight, every item on, and the instructions on that Claude is told.
@@ -1194,7 +1236,13 @@ async function keepFlow($: $, scope: Scope): Promise<string> {
 async function memberOf($: $, r: Run, agent: string): Promise<string | undefined> {
   const own = memberByAgent(r, agent)
   if (own || !Object.keys(r.running ?? {}).length) return own
-  return memberByAgent(r, (await agents($)).find(a => a.id === agent)?.parentId)
+  return parentsOf(await agents($), agent).map(p => memberByAgent(r, p)).find(Boolean)
+}
+// An agent's parents, nearest first: a helper's helper works for the same member.
+function parentsOf(all: { id: string; parentId?: string }[], id: string): string[] {
+  const out: string[] = []
+  for (let p = all.find(a => a.id === id)?.parentId; p && !out.includes(p); p = all.find(a => a.id === p)?.parentId) out.push(p)
+  return out
 }
 
 // Parallel states: a ready state gets a worktree of the project as it is now, and one member agent working there.
@@ -1317,9 +1365,11 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
   // member until the last helper is in, or until the member stops again once its background work wakes it. Background
   // work holds it for HOLD_MS at most; then the work is checked and brought back. The member's list stays until its
   // next stop, since a helper coming in or the timer reads it again.
-  const bg = [...bgBy].filter(([, a]) => a === m.agent).map(([t]) => t)
-  const held = overdue || !bg.length ? [] : holding((inFlight.get(m.agent)?.tasks ?? []).filter(t => bg.includes(t.id)))
-  if (held.length || (await agents($)).some(a => a.parentId === m.agent && a.id !== ended && working(a))) {
+  const all = await agents($)
+  const bg = [...bgBy].filter(([, a]) => a === m.agent || parentsOf(all, a).includes(m.agent)).map(([t]) => t)
+  const flying = (inFlight.get(m.agent)?.tasks ?? []).filter(t => bg.includes(t.id))
+  const held = overdue ? [] : holding(flying)
+  if (held.length || all.some(a => a.id !== ended && working(a) && parentsOf(all, a.id).includes(m.agent))) {
     await change($, x => (x.running?.[id]?.agent === m.agent ? { ...x, running: { ...x.running, [id]: { ...x.running[id]!, answer } } } : x))
     if (held.length) {
       $.clock.after(Math.max(0, Math.max(...held.map(t => firstSeen.get(t.id)! + HOLD_MS)) - Date.now()) + 1000, () => void (async () => {
@@ -1340,8 +1390,23 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     const mine = async () => (await read($, run)).running?.[id]?.agent === m.agent
     const root = (await $.session.root()).replace(/\\/g, '/')
     const path = `${root}/.claude/worktrees/${m.name}`
+    // Work the member or its helpers left running stops here, or its worktree changes under the check and goes from under it.
+    for (const t of bg) {
+      await $.tool.call({ tool: 'TaskStop', task_id: t }).catch(() => undefined)
+      bgBy.delete(t)
+    }
+    // What would come back now. Everything is staged, since git add refuses a glob that matches no file; the diff takes
+    // the state's files.
+    const specs = st.files.map(g => `:(glob,icase)${g}`)
+    const stage = async () => {
+      await git($, path, ['add', '-A'])
+      return specs.length ? git($, path, ['diff', '--cached', '--binary', 'HEAD', '--', ...specs]) : ''
+    }
+    // The files that come back are the files that passed: a change during the check means it runs again.
+    let checked: string | undefined
     // ponytail: fails-without-change doesn't rerun a member's check yet. Its worktree's base is the snapshot to start from.
-    if (st.check) {
+    for (let n = 1; st.check; n++) {
+      const before = checked ?? (await stage().catch(() => undefined))
       const ran = await runCheck($, st.check, { dir: path })
       if (!(await mine())) return
       if ('deny' in ran || !ran.pass) {
@@ -1364,17 +1429,21 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
         }
         return
       }
+      checked = await stage().catch(() => undefined)
+      if (checked === before) break
+      if (n === CHECK_RUNS) {
+        await change($, x => (x.running?.[id]?.agent === m.agent ? memberOff(x, id, 'its files kept changing', now(), Date.now()) : x))
+        tell($, `${TAG} The member for ${id} passed \`${st.check}\`, but ${id}'s files changed each time it ran, ${CHECK_RUNS} runs in all. Something still writes to them, or the check itself does. Nothing came back: Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
+        return
+      }
     }
     // Only the state's files come back. What else the member changed stays in its worktree, which is kept for a look.
-    // Everything is staged, since git add refuses a glob that matches no file; the diff takes the state's files.
-    const specs = st.files.map(g => `:(glob,icase)${g}`)
     let files: string[] = []
     let left: string[] = []
     try {
-      await git($, path, ['add', '-A'])
+      const patch = checked ?? (await stage())
       left = (await git($, path, ['diff', '--cached', '--name-only', 'HEAD'])).split('\n').map(f => f.trim()).filter(Boolean)
       if (specs.length) {
-        const patch = await git($, path, ['diff', '--cached', '--binary', 'HEAD', '--', ...specs])
         if (!(await mine())) return
         if (patch.trim()) {
           // From here the project may hold the member's work.
@@ -1409,7 +1478,7 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     }
     const what = files.length ? `Sentinel applied its changes to the project: ${files.join(', ')}.` : "It changed none of the state's files."
     const beside = (await parallelOn($)) ? besideNote(landed) : undefined
-    const long = overdue ? `A background run the member started was still going after ${HOLD_MS / 60_000} minutes, so Sentinel brought its work back without waiting for it.` : undefined
+    const long = overdue || flying.length ? `A background run the member started was still going after ${HOLD_MS / 60_000} minutes, so Sentinel stopped it and checked the work without it.` : undefined
     tell($, [`${TAG} ${id} is in: its member passed${st.check ? ` \`${st.check}\`` : ''} in its worktree. ${what}`, long, kept, beside, 'Continue with the plan.'].filter(Boolean).join('\n') )
   } finally {
     bringing.delete(id)
@@ -1463,12 +1532,15 @@ const STOPPED = 'The user stopped this call before it finished. Nothing changed.
 // QUIET_STUCK, or four times its longest quiet stretch in earlier runs of the same command when that is longer. It is
 // quiet after QUIET_WARN of silence, or twice that stretch (WARN_FLOOR at least). History only ever gives more time: a
 // command that ran from a cache in a second can build for minutes in silence. Output that ends in a prompt and stays
-// PROMPT_MS, or four times that stretch, waits on input nobody gives: stuck at once. Sentinel never stops the same check twice in a row: the run after
-// a stop goes on to its end (WAIT_MS at most), so a check that is only slow costs one stop, and its end teaches how
-// quiet it gets.
+// PROMPT_MS, or four times that stretch, waits on input nobody gives: stuck at once. A check that keeps printing is
+// stuck past RUNAWAY times its longest earlier run, FIRST_MIN at least, as tests retrying a dead database do. With no
+// earlier run only WAIT_MS holds it. Sentinel never stops the same check twice in a row: the run after a stop goes on
+// to its end (WAIT_MS at most), so a check that is only slow costs one stop, and its end teaches how long it takes and
+// how quiet it gets.
 const QUIET_WARN = 3 * 60_000
 const QUIET_STUCK = 5 * 60_000
 const FIRST_MIN = 10 * 60_000
+const RUNAWAY = 5
 const WARN_FLOOR = 60_000
 const PROMPT_MS = 20_000
 const PROMPT = /(password|passphrase)[^\n]*:\s*$|\(yes\/no[^)]*\)\?\s*$|\[y\/n\]\s*$|press any key[^\n]*$/i
@@ -1476,12 +1548,12 @@ const EXIT = /\[sentinel\] exit \d+/
 // A check over LONG_MS gets the model a note on keeping checks to their state's own tests.
 const LONG_MS = 60_000
 const START_CAP = 60_000
-const span = (ms: number) => (ms < 90_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`)
+const span = (ms: number) => (ms < 1000 ? 'under 1 s' : ms < 90_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`)
 const lastLine = (text: string) => text.trimEnd().split(/\r?\n/).at(-1)?.trim().slice(0, 160) ?? ''
 
 // How each check ran before in this project, by command: its longest quiet stretch and its longest run, in ms, from
 // the runs that ended; and stopped, when Sentinel stopped its last run as stuck. Kept in .sentinel/checks.json, so later
-// plans start with it. took is kept for the user to read.
+// plans start with it.
 type Seen = Record<string, { gap?: number; took?: number; stopped?: true }>
 const seenFile = async ($: $) => `${await $.session.root()}/.sentinel/checks.json`
 const history = async ($: $): Promise<Seen> => $.fs.read(await seenFile($)).then(t => JSON.parse(String(t)) as Seen).catch(() => ({}))
@@ -1494,14 +1566,15 @@ async function learn($: $, check: string, run: { gap: number; took: number } | '
 }
 
 // Why a check still running looks stuck, if it does. silent: since its output last grew; all: since it started.
-function stuckWhy(text: string, silent: number, all: number, gap = 0): string | undefined {
+function stuckWhy(text: string, silent: number, all: number, gap = 0, took = 0): string | undefined {
   if (silent >= Math.max(PROMPT_MS, 4 * gap) && PROMPT.test(text.trimEnd())) return 'it waits on a prompt nobody can answer'
-  if (all < FIRST_MIN || silent < Math.max(QUIET_STUCK, 4 * gap)) return undefined
-  return `no output for ${span(silent)}${4 * gap > QUIET_STUCK ? `, where before it went quiet for ${span(gap)} at most` : ''}`
+  if (all < FIRST_MIN) return undefined
+  if (silent >= Math.max(QUIET_STUCK, 4 * gap)) return `no output for ${span(silent)}${4 * gap > QUIET_STUCK ? `, where before it went quiet for ${span(gap)} at most` : ''}`
+  return took && all >= RUNAWAY * took ? `it took ${span(took)} at most before, and it is still going` : undefined
 }
 
 const stuckText = (c: string, ran: Ran) =>
-  `Sentinel stopped \`${c}\` after ${span(ran.took)}: ${ran.stuck}. Its last output: ${lastLine(ran.text) || 'none'}\nNothing moved. Find out why it hangs, such as a prompt for input or a server it waits on, and fix the check or the code. If it is only slow, advance again: Sentinel never stops the same check twice in a row, so the next run goes on to its end, up to ${WAIT_MS / 60_000} minutes. Tell the user what you find.`
+  `Sentinel stopped \`${c}\` after ${span(ran.took)}: ${ran.stuck}. Its last output:\n${lastLines(ran.text) || 'none'}\nNothing moved. Find out why it hangs, such as a prompt for input or a server it waits on, and fix the check or the code. If it is only slow, advance again: Sentinel never stops the same check twice in a row, so the next run goes on to its end, up to ${WAIT_MS / 60_000} minutes. Tell the user what you find.`
 
 // One note per check, and none for the last state's: the full suite belongs there.
 const slowSaid = new Set<string>()
@@ -1540,10 +1613,10 @@ async function showing($: $, c: Checking, gone?: true): Promise<void> {
   })
 }
 
-type Ran = { pass: boolean; text: string; ended: boolean; took: number; late?: true; stuck?: string }
-// ended: false for a run cut short, stopped as stuck, stopped at its cap, or still going after WAIT_MS (late: no
-// result). A stuck check of the active state turns the run red until a check runs again; a member's or a capped one
-// doesn't.
+type Ran = { pass: boolean; text: string; ended: boolean; took: number; late?: true; stuck?: string; lost?: true }
+// ended: false for a run cut short, stopped as stuck, stopped at its cap, still going after WAIT_MS (late: no result),
+// or back from the tool with no exit line to read (lost). A stuck check of the active state turns the run red until a
+// check runs again; a member's or a capped one doesn't.
 async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSignal; cap?: number } = {}): Promise<{ deny: string } | Ran> {
   const quote = (p: string) => p.replace(/\\/g, '/').replace(/'/g, `'\\''`)
   const root = quote(o.dir ?? (await $.session.root()))
@@ -1565,8 +1638,13 @@ async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSi
     const file = task ? /written to: (.+?\.output)/.exec(ran.text ?? '')?.[1] : undefined
     const cut = !!(ran.result as { interrupted?: boolean } | undefined)?.interrupted
     if (task) ownTasks.add(task)
+    // ponytail: over 4 MiB a file can't be read whole, so its end comes from tail. 20 KB, since the tool saves an answer
+    // over 30,000 characters to a file of its own and the exit line would be out of sight again.
+    const tail = async (f: string) => (await $.tool.call({ tool: 'Bash', command: `tail -c 20000 '${quote(f)}'`, description: CHECK }).catch(() => undefined))?.text
+    // Over 30,000 characters the tool answers with a preview and saves the whole output, exit line and all, to a file.
+    const saved = (ran.result as { persistedOutputPath?: string } | undefined)?.persistedOutputPath
     // Without a file to read, the tool's answer is all there is.
-    let text = file ? '' : ran.text ?? ''
+    let text = file ? '' : (saved && (await $.fs.read(saved).then(String, () => tail(saved)))) || ran.text || ''
     let stuck: string | undefined
     let capped = false
     let now = await clock()
@@ -1579,11 +1657,11 @@ async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSi
       for (let first = true; ; first = false) {
         if (!first && !(await nap($, POLL_MS))) break
         now = await clock()
-        // ponytail: over 4 MiB the file can't be read whole, so its end comes from tail, every 30 s at most.
+        // A file too big to read whole gets its end read every 30 s at most.
         const out = await $.fs.read(file).then(String, async () => {
           if (now - tailed < 30_000) return undefined
           tailed = now
-          return (await $.tool.call({ tool: 'Bash', command: `tail -c 100000 '${quote(file)}'`, description: CHECK }).catch(() => undefined))?.text
+          return tail(file)
         })
         if (out !== undefined && out !== text) {
           if (!first) gap = Math.max(gap, now - heard)
@@ -1595,7 +1673,7 @@ async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSi
           capped = true
           break
         }
-        if (!seen?.stopped) stuck = stuckWhy(text, now - heard, now - t0, seen?.gap)
+        if (!seen?.stopped) stuck = stuckWhy(text, now - heard, now - t0, seen?.gap, seen?.took)
         if (stuck || now - t0 >= WAIT_MS) break
         const quiet = now - heard >= Math.max(seen?.gap === undefined ? QUIET_WARN : WARN_FLOOR, 2 * (seen?.gap ?? 0))
         // The page counts the time itself; the status line and the band hear each minute, and when it turns quiet.
@@ -1618,6 +1696,7 @@ async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSi
     return {
       pass: end?.[1] === '0', ended: !!end, took: now - t0, text: end ? text.slice(0, text.lastIndexOf(end[0]) + end[0].length) : text,
       ...(task && !end && !cut && !stuck && !capped && !o.signal?.aborted && { late: true as const }), ...(stuck && { stuck }),
+      ...(!task && !end && !cut && !o.signal?.aborted && { lost: true as const }),
     }
   } finally {
     if (!o.dir) await showing($, shown, true)
@@ -1625,13 +1704,36 @@ async function runCheck($: $, check: string, o: { dir?: string; signal?: AbortSi
 }
 
 // Before the plan completes, the done states' checks run again on the project as it is now, LANES at a time, shown on
-// the band, the status line and the page. A pass from earlier final checks holds while nothing has changed since. A
-// fail runs once more, unless the first run took over SLOW_MS. A refused run counts as no result, and so does a late
-// one, which the completion names. One cut short, as by Esc, or stopped as stuck stops them: cut names it, stuck says why.
+// the band, the status line and the page. A pass from earlier final checks holds while nothing has changed since.
+// Checks side by side can break each other, as test suites sharing a database do, so a failure stops the others and runs
+// again alone, and only that run's result stands. If it fails alone the final checks end there; if it passes, the stopped
+// checks start over. The engine can't stop a tool call, so a check beside the failure stops once it has gone to the
+// background, FG_MS at most. A refused run counts as no result, and so does a late one, which the completion names. One
+// cut short, as by Esc, or stopped as stuck stops them: cut names it, stuck says why.
 // ponytail: two at a time, since a test suite like go test already spreads over every core.
 const LANES = 2
-const SLOW_MS = 2 * 60_000
-async function finalChecks($: $, checks: string[], proofs: Proofs, signal?: AbortSignal): Promise<{ cut?: string; stuck?: string; late: string[] }> {
+
+// A record of each final run in .sentinel, which git ignores, so a stop can be traced once the run's output is gone: a
+// line when a check starts, so one that never ends still shows, and a line when it ends, with the end of its output.
+const LOG_KEEP = 200_000
+async function finalLog($: $): Promise<(line: string) => Promise<void>> {
+  const file = `${await $.session.root()}/.sentinel/final-checks.log`
+  let text = await $.fs.read(file).then(String, () => '')
+  let saving = Promise.resolve()
+  return line => {
+    text = `${text}${new Date().toISOString()}  ${line}\n`.slice(-LOG_KEEP)
+    const whole = text
+    return (saving = saving.then(() => $.fs.write(file, whole)).catch(() => undefined))
+  }
+}
+function howRan(c: string, ran: { deny: string } | Ran, stopped?: string): string {
+  if ('deny' in ran) return `refused  ${c}: ${ran.deny}`
+  const how = ran.ended ? (ran.pass ? 'passed' : 'failed') : ran.stuck ? 'stuck' : ran.late ? 'still running' : ran.lost ? 'no exit code' : stopped ?? 'cut short'
+  const lines = lastLines(ran.text, ran.ended && ran.pass ? 1 : 20).split(/\r?\n/).map(l => `    ${l}`).join('\n')
+  return `${how}  ${span(ran.took)}  ${c}${ran.stuck ? `: ${ran.stuck}` : ''}${lines.trim() ? `\n${lines}` : ''}`
+}
+
+async function finalChecks($: $, checks: string[], proofs: Proofs, signal?: AbortSignal): Promise<{ cut?: string; stuck?: string; lost?: true; late: string[] }> {
   const base = await read($, run)
   const ids = (c: string) => base.plan!.states.filter(s => s.check && sameText(s.check, c)).map(s => s.id)
   const queue: string[] = []
@@ -1642,39 +1744,78 @@ async function finalChecks($: $, checks: string[], proofs: Proofs, signal?: Abor
   const late: string[] = []
   let cut: string | undefined
   let stuck: string | undefined
+  let lost: true | undefined
   let over = false
   const show = async (f: (s: NonNullable<Run['sweep']>) => NonNullable<Run['sweep']>) => {
     if (over) return
     await change($, x => (x.sweep ? { ...x, sweep: f(x.sweep) } : x))
   }
   await change($, x => ({ ...x, sweep: { going: [], passed: checks.length - queue.length, failed: 0, total: checks.length } }))
+  const log = await finalLog($)
+  await log(`final checks: ${queue.length} to run, ${checks.length - queue.length} still hold`)
+  // Aborted by a failure, to stop the check beside it. Each round of side-by-side runs has its own.
+  let halt = new AbortController()
+  let confirmed = false
+  const logged = async (c: string) => {
+    await log(`start  ${c}`)
+    const ran = await runCheck($, c, { signal: signal ? AbortSignal.any([signal, halt.signal]) : halt.signal })
+    await log(howRan(c, ran, signal?.aborted ? 'stopped by the user' : halt.signal.aborted ? 'stopped, another check failed' : undefined))
+    return ran
+  }
+  const failing: string[] = []
+  // A run counted on the band and in the proofs. A failure stands until its run alone says otherwise.
+  const runOne = async (c: string, again: boolean) => {
+    const who = ids(c)
+    await show(s => ({ ...s, going: [...s.going, ...who] }))
+    const ran = await logged(c)
+    const pass = 'deny' in ran || !ran.ended ? undefined : ran.pass
+    await show(s => ({ ...s, going: s.going.filter(g => !who.includes(g)), passed: s.passed + (pass === true ? 1 : 0), failed: s.failed + (again ? (pass === true ? -1 : 0) : pass === false ? 1 : 0) }))
+    if ('deny' in ran) return
+    if (!ran.ended && halt.signal.aborted && !signal?.aborted) {
+      queue.push(c)
+      return
+    }
+    if (!ran.ended) {
+      if (ran.late) late.push(c)
+      else if (!cut) [cut, stuck, lost] = [c, ran.stuck, ran.lost]
+      return
+    }
+    proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText, tail: lastLines(ran.text) }
+    if (ran.pass) await change($, x => ({ ...x, swept: { ...x.swept, [c]: { step: base.step, touches: base.touches ?? 0 } } }))
+    else if (again) confirmed = true
+    else {
+      failing.push(c)
+      halt.abort()
+    }
+  }
   const lane = async () => {
-    for (let c = queue.shift(); c !== undefined && !cut && !signal?.aborted; c = queue.shift()) {
-      const who = ids(c)
-      await show(s => ({ ...s, going: [...s.going, ...who] }))
-      let ran = await runCheck($, c, { signal })
-      if (!('deny' in ran) && ran.ended && !ran.pass && !signal?.aborted && ran.took < SLOW_MS) ran = await runCheck($, c, { signal })
-      const pass = 'deny' in ran || !ran.ended ? undefined : ran.pass
-      await show(s => ({ ...s, going: s.going.filter(g => !who.includes(g)), passed: s.passed + (pass === true ? 1 : 0), failed: s.failed + (pass === false ? 1 : 0) }))
-      if ('deny' in ran) continue
-      if (!ran.ended) {
-        if (ran.late) late.push(c)
-        else if (!cut) [cut, stuck] = [c, ran.stuck]
-        continue
-      }
-      proofs[c] = { pass: ran.pass, sigText: failSig(ran.text).sigText }
-      if (ran.pass) await change($, x => ({ ...x, swept: { ...x.swept, [c]: { step: base.step, touches: base.touches ?? 0 } } }))
+    while (queue.length && !cut && !halt.signal.aborted && !signal?.aborted) await runOne(queue.shift()!, false)
+  }
+  const alone = async () => {
+    // These runs have nothing beside them to stop, and the round's abort must not reach them.
+    halt = new AbortController()
+    for (const c of failing.splice(0)) {
+      // A failure beside another check proves nothing, and it won't be run alone now, so it is left for the next time.
+      if (confirmed) delete proofs[c]
+      else if (!cut && !signal?.aborted) await runOne(c, true)
+    }
+  }
+  // Each round takes at least its failure off the queue for good, so this ends.
+  const rounds = async () => {
+    while (queue.length && !cut && !confirmed && !signal?.aborted) {
+      await Promise.all(Array.from({ length: Math.min(LANES, queue.length) }, lane))
+      await alone()
     }
   }
   // Esc ends the wait at once; the runs under way end with it, or stop in the background.
   const stop = new Promise<void>(res => signal?.addEventListener('abort', () => res(), { once: true }))
   try {
-    await Promise.race([Promise.all(Array.from({ length: Math.min(LANES, queue.length) }, lane)), stop])
+    await Promise.race([rounds(), stop])
   } finally {
     over = true
     await change($, x => ({ ...x, sweep: undefined }))
   }
-  return { cut, stuck, late }
+  return { cut, stuck, lost, late }
 }
 
 const passed = (ran: Result) =>
@@ -1742,6 +1883,9 @@ const IGNORE = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\
 
 let writing: Promise<void> = Promise.resolve()
 let ignored = false
+// ponytail: what this session last wrote to draft.json, in memory, so a reload mid-session leaves a draft that has since
+// locked on disk until the next one. It is only ever offered, so nothing acts on it unasked.
+let lastDraft: string | undefined
 
 // Whether the main conversation works now: in a turn with no question of its up, or between turns while background
 // work it started runs.
@@ -1767,8 +1911,9 @@ function after($: $): Promise<void> {
       await update($, run, x => clocked(x, atWork()))
       const r = await read($, run)
       $.ui.status(statusText(r))
+      const kept = keptDraft(r)
       // With the dashboard up, a question shows there even before there is a plan.
-      if (!r.plan && !r.draft && !serving) return
+      if (!r.plan && !r.draft && !kept && !lastDraft && !serving) return
       const dir = `${await $.session.root()}/.sentinel`
       if (!ignored) await $.fs.write(`${dir}/.gitignore`, IGNORE)
       ignored = true
@@ -1776,8 +1921,12 @@ function after($: $): Promise<void> {
       // show; watch the folders if that shows.
       if (serving) await libraryView($).catch(() => undefined)
       await $.fs.write(`${dir}/state.js`, snapshot(r, parallelSeen ?? (await parallelOn($))))
-      // Only a plan is saved for /sentinel resume, so a draft never replaces an earlier session's plan.
       if (r.plan) await $.fs.write(`${dir}/run.json`, JSON.stringify({ ...r, sweep: undefined, checking: undefined, savedAt: Date.now() }))
+      const keep = kept ? JSON.stringify(kept) : lastDraft && '{}'
+      if (keep && keep !== lastDraft) {
+        lastDraft = keep
+        await $.fs.write(`${dir}/draft.json`, keep)
+      }
     })
     .catch(() => undefined)
   return writing
@@ -1797,7 +1946,10 @@ function statusText(r: Run): string | undefined {
   // The engine puts the plugin's name in front of this line.
   if (r.draft) return 'draft waiting · /sentinel to review it'
   if (!r.plan) return r.signedOff ? 'signed off' : undefined
-  if (r.active === 'done') return 'plan complete'
+  if (r.active === 'done') {
+    const skipped = Object.keys(r.skipped ?? {}).length
+    return `plan ${r.closed ? 'closed' : 'complete'}${skipped ? ` · ${skipped} skipped` : ''}`
+  }
   if (r.sweep) return `final checks · ${sweepLine(r.sweep)}`
   const st = stateOf(r)
   const ids = r.plan.states.map(s => s.id)
@@ -1805,7 +1957,7 @@ function statusText(r: Run): string | undefined {
   const trap = openTrap(r)
   const h = last && last.step > r.enteredAt ? ` · H ${last.H.toFixed(2)} ${healthWord(last.H)}` : ''
   const going = r.checking?.at(-1)
-  const tail = r.paused ? ' · paused' : trap ? ` · stuck (${trap.pattern})` : r.hung?.state === r.active ? ' · stuck (a check hung)' : going ? ` · ${checkLine(going)}` : h
+  const tail = r.paused ? ' · paused' : blockedOn(r) ? ' · needs you' : trap ? ` · stuck (${trap.pattern})` : r.hung?.state === r.active ? ' · stuck (a check hung)' : going ? ` · ${checkLine(going)}` : h
   return `${st?.id} ${ids.indexOf(st?.id ?? '') + 1}/${ids.length + 1}${tail}`
 }
 
@@ -1973,6 +2125,14 @@ async function fromPage($: $, m: Record<string, unknown>) {
   if (!isLive(r) || !st || st.id !== m.state) return
   if (m.kind === 'pause') return void (await pause($))
   if (m.kind === 'ahead' && typeof m.on === 'boolean') return void (await setFree($, m.on))
+  if (m.kind === 'ready' && blockedOn(r)?.at === m.at) {
+    await change($, x => heard(x, Date.now()))
+    const h = `${TAG} The user says this is ready: ${r.blocked!.what} Carry on with ${st.id}.`
+    if (turning) hint = hint ? `${hint}\n${h}` : h
+    else tell($, h)
+    void after($)
+    return
+  }
   if (m.kind === 'hint' && text && (openTrap(r) ?? (r.hung?.state === st.id ? r.hung : undefined))?.step === m.trap) {
     await change($, x => heard(x, Date.now()))
     const h = `${TAG} The user sent a hint from the dashboard about ${st.id}: ${text}`

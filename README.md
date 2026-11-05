@@ -11,9 +11,9 @@ On a long task, an agent can drift from the plan, edit files nobody agreed to, s
 You approve a plan in plan mode, or agree on one in the chat and type `/sentinel lock`. Claude declares it as states. Each state names the files it may edit and a check command that exits 0 when the state is done. From then on:
 
 - **Edits stay in scope.** An edit to a file outside the active state's files is refused. Claude can widen the scope with `amend` and a reason, and every amendment is logged.
-- **Moving on takes proof.** `advance` runs the state's check from the project root, through the Bash tool and your permission rules, and moves on only when it exits 0. A refusal carries the end of the check's output, so Claude can fix the failure without running the check again to read it. A state without a check needs evidence and at least one read.
+- **Moving on takes proof.** `advance` runs the state's check from the project root, through the Bash tool and your permission rules, and moves on only when it exits 0. A refusal carries the end of the check's output, so Claude can fix the failure without running the check again to read it. A state without a check needs evidence.
 - **A check has to be able to fail.** When a state starts, Sentinel runs its check once before any edit. A check that already passes can't show the work got done, so Claude is told to make it stricter. This is the `fails-first` built-in, on at the Standard and Thorough weights (see [Library](#library)).
-- **Done means everything still passes.** Before the plan completes, Sentinel runs the checks of the done states again, two at a time, on the project as it is then. A check that fails twice reopens its state, and the plan goes back there.
+- **Done means everything still passes.** Before the plan completes, Sentinel runs the checks of the done states again, two at a time, on the project as it is then. A check that fails stops the others and runs once more on its own, in case it tripped over the other one. If it still fails, its state reopens and the plan goes back there, and the remaining checks wait for the next run. If it passes, the stopped checks start over. A check that keeps printing at five times the longest it has taken is stopped as stuck. Each run is written to `.sentinel/final-checks.log`. A check that holds only at one moment, such as one tied to a branch, can set `once`: it runs at its own advance and not again at the end, and the draft shows the mark.
 - **Stopping halfway is caught.** When a turn ends with the plan unfinished and nothing waiting on you or on background work, Sentinel tells Claude to continue, at most twice per state.
 
 ## Proof each state was asked for
@@ -35,6 +35,8 @@ Sentinel keeps its own copy of each source, so later edits to a file change noth
 A state can wait for you. With `wait: "before"` you approve the approach first, as for a design or a risky change: Claude calls `propose` and stops, and its edits there are refused until you answer. With `wait: "after"` you review the finished work, as before a publish. You answer in the chat or on the dashboard.
 
 Questions are held too. Claude can ask you something only after it declares a breaking change (a public API, an unplanned migration, deleting data, a new dependency, auth, secrets, CI or deploy), or when the active state waits for you. Everything else it decides itself and records with `decide`.
+
+When the work waits on something outside, such as a locked machine or someone's reply, Claude files a blocked report that names what is needed. It shows as "needs you" on the status line, the band and the dashboard, Sentinel stops telling Claude to continue (hands-free too), and questions stay held. Reply in the chat or press It's ready, go on in the dashboard, and Claude goes on.
 
 When you want to step away, go hands-free: type `/sentinel hands-free`, press Go hands-free in the dashboard, or press Approve and go hands-free on a state that waits for you. Claude then makes the calls that would have waited for you (a proposal, a review of its own work, a breaking change, a question), picks what it would recommend, and goes on. The dashboard lists each one under "Decided without asking you", and each task page shows its own. A state Claude is stuck in can be skipped and left for you, unless a later state builds on it; then the run stops and waits. `/sentinel hands-free off` or Turn off on the dashboard hands the calls back.
 
@@ -159,8 +161,9 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked |
 | `/sentinel source` | print the saved copy of what the plan quotes, with each quote marked |
 | `/sentinel hands-free`, `hands-free off` | let Claude make the calls that would wait for you, or take them back |
-| `/sentinel pause`, `resume` | stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan |
+| `/sentinel pause`, `resume` | stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan, draft or sign-off |
 | `/sentinel skip <state> [reason]` | skip a state: Claude leaves it, and its check no longer runs before the plan completes |
+| `/sentinel finish [reason]` | close the plan where it stands, without the final checks; the summary lists what never finished and what wasn't checked again |
 | `/sentinel reset` | drop the current plan |
 | `/sentinel parallel`, `parallel on`, `off` | say whether parallel states are on, or turn them on or off |
 | `/sentinel library` (or `flows`) | list the instructions and flows with their switches, and the weight |
@@ -173,9 +176,9 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 
 Commands that change the plan or your Library run only when you type them, send them through Remote Control, or run them headless with `claude -p`. Run by Claude or another plugin, they are refused.
 
-Only you skip a state, with the command, by asking Claude, or with Skip on the state's task page. The one exception is hands-free, as above. A skipped state counts as done for the states that need it.
+Only you skip a state, with the command, by asking Claude, or with Skip on the state's task page. The one exception is hands-free, as above. A skipped state counts as done for the states that need it. Only you close a plan early too, with the command or by asking Claude.
 
-The plan is saved to `.sentinel/run.json` on every change. A new session starts with no plan, and the status line says when the project has an unfinished one; `/sentinel resume` loads it. While paused, nothing is checked or recorded, and on resume Claude is told to read the plan's status first, since files may have changed.
+The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off and a plan Claude sent before the sign-off go to `.sentinel/draft.json`, so they can't replace an earlier session's plan. A new session starts empty, and the status line says when the project holds any of these; `/sentinel resume` loads it, an unfinished plan first. While paused, nothing is checked or recorded, it is safe to close the session, and on resume Claude is told to read the plan's status first, since files may have changed.
 
 ## The dashboard
 
@@ -210,7 +213,7 @@ Claude can give each state a `group`, such as `auth`, or `marking/runs` for a gr
 
 Each state can list the states it `needs`. Without `needs`, a state needs the one before it, so a plan is a straight line. `define` refuses a plan whose needs go round in a circle, or where two states that could run at the same time share files.
 
-Running states at the same time is off by default; only you turn it on, with `/sentinel parallel on`, saved per project. Then, when a state is done, Claude moves on to the next ready state and can brief the others. For each brief, Sentinel snapshots the project, uncommitted files included, into a git worktree under `.claude/worktrees/` and starts a member agent there, which may edit only its state's files. When the member stops, Sentinel runs the state's check in the worktree. A pass applies the diff of the state's files to the project with `git apply`, without committing; a failure goes back to the member, at most twice. The dashboard then shows who works on what, in a lane per agent.
+Running states at the same time is off by default; only you turn it on, with `/sentinel parallel on`, saved per project. While it is on and no plan is locked, Claude is told to give each state `needs` for only what it builds on. A draft that still comes out as a line gets a note naming the neighbouring states that share no files, and Claude tells you why if the line stays. Then, when a state is done, Claude moves on to the next ready state and can brief the others. For each brief, Sentinel snapshots the project, uncommitted files included, into a git worktree under `.claude/worktrees/` and starts a member agent there, which may edit only its state's files. When the member stops, Sentinel stops any background run it or its helpers left going, after holding up to 30 minutes for the member's own, then runs the state's check in the worktree. If the state's files change during the check, the check runs again, up to 3 runs, so what comes back is what passed; if they change every time, nothing comes back and the worktree stays. A pass applies the diff of the state's files to the project with `git apply`, without committing; a failure goes back to the member, at most twice. The dashboard then shows who works on what, in a lane per agent.
 
 States that run side by side each pass their own check, but nothing tests them together unless the plan does, so Sentinel warns about each pair that no later checked state builds on.
 
@@ -222,6 +225,8 @@ States that run side by side each pass their own check, but nothing tests them t
 - The start-of-state check costs one extra run per state. It catches a check that passes before the work, but not one that fails only because its test file doesn't exist yet.
 - Edits made outside Claude Code, `/rewind`, and background commands aren't seen, so Sentinel may reuse a pass that is out of date. Ask Claude to run the check again before it advances.
 - The final checks run two at a time, so checks that share a port, a database or files they write can trip over each other. A check that changes things, such as a migration, runs again then.
+- The final checks end at the first failure, so a second broken check shows up on the next run. A check running beside that failure can't be stopped during its first 60 seconds, so the reply can wait that long for it.
+- A check marked `once` proves its state only at its own advance, so later work can break it without anything saying so.
 - Plan mode sign-off locks straight away, so a flow goes into such a plan only by its rule. To place one by hand, use `/sentinel lock`.
 - Flow rules and `define` compare file globs as text, so two globs that could cover the same file without matching each other, such as `src/*.ts` and `src/a*`, don't count as overlapping.
 - Parallel states need a git repository with at least one commit, and snapshotting a large one is slow. Member agents end with the session that started them.

@@ -101,6 +101,9 @@ const VARIANTS = {
   proofRun: page(midRun),
   proofNone: page(drafting([{ id: 'x', label: 'x', added: WHY }]), { draftKey: 'p4' }),
   proofDone: page({ ...midRun, active: 'done' }),
+  onceDraft: page(act({ ...emptyRun(), signedOff: true, review: true }, { ...plan, states: plan.states.map(s => (s.id === 'perf' ? { ...s, once: true } : s)) }, '', {}, now).run),
+  blocked: page(act(act({ ...emptyRun(), signedOff: true }, plan, '', {}, now).run, { action: 'escalate', kind: 'blocked', reason: 'The Mac build machine is locked. Someone needs to unlock it.' }, '09:30', {}, now).run),
+  closedDone: page(act(midRun, { action: 'finish', reason: 'Enough for now' }, '09:40', {}, Date.now(), true).run),
   proofNoAdds: page({ ...quotedPlan(asks).run, active: 'done' }),
   noProof: page(act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Old', loops: [], states: [{ id: 'a', label: 'a', ref: 'plan.md, step 1' }] }, '09:01').run),
   graph: page(graph, { parallel: true }),
@@ -442,6 +445,32 @@ try {
   check(await p.locator('#side .sec', { hasText: 'Claude added along the way' }).count() === 0, 'finish: not while it runs')
   await p.context().close()
 
+  // A check marked once shows on the draft and on its task page, so the user sees it before the lock.
+  p = await open('onceDraft', '')
+  check((await p.locator('body').innerText()).includes('Its check runs once'), 'once: the draft card')
+  await p.context().close()
+  p = await open('onceDraft', '#task-perf')
+  check((await p.locator('body').innerText()).includes('does not run again at the end'), 'once: the task page')
+  await p.context().close()
+
+  // A blocked report says what is needed and offers the way out.
+  p = await open('blocked', '')
+  const blockedText = await p.locator('body').innerText()
+  check(blockedText.includes('The Mac build machine is locked'), 'blocked: what is needed')
+  check(blockedText.includes('Needs you'), 'blocked: who it waits on')
+  check(await p.getByRole('button', { name: "It's ready, go on" }).first().isVisible(), 'blocked: the button')
+  await p.getByRole('button', { name: "It's ready, go on" }).first().click()
+  await sent('the ready press', b => b.kind === 'ready' && typeof b.at === 'number')
+  await p.context().close()
+
+  // A plan the user closed says so, and how much of it stands unproven.
+  p = await open('closedDone', '')
+  const closedText = await p.locator('body').innerText()
+  check(closedText.includes('You closed the plan'), 'closed: the heading')
+  check(closedText.includes('Enough for now'), 'closed: the reason')
+  check(closedText.includes('never finished'), 'closed: what never finished')
+  await p.context().close()
+
   // A plan that doesn't compare quotes looks as it did.
   p = await open('noProof', '#task-a')
   check((await p.locator('.tp').innerText()).includes('Plan: plan.md, step 1'), 'no proof: the Plan: line stays')
@@ -486,6 +515,8 @@ try {
   await layout('proofRun', '#task-pkg', 'proof-added')
   await layout('proofRun', '#source-refund', 'proof-source')
   await layout('proofDone', '', 'proof-finish')
+  await layout('blocked', '', 'blocked')
+  await layout('closedDone', '', 'closed-finish')
 } finally {
   await browser.close()
   server.kill()

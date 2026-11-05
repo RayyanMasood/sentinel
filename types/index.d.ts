@@ -12,6 +12,8 @@ export type Wait = 'before' | 'after'
 export type StateDef = {
   id: string; label: string; check?: string; files: string[]; ref?: string; evidence?: string; group?: string
   title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]
+  // A check that holds only at this moment, such as one tied to a branch: it runs at this state's advance and never again.
+  once?: true
   // Where the state came from, while quote-the-source is on. asked: the words it quotes, compared with the sources.
   // added: Claude's reason, when nothing asked for it.
   asked?: string[]; added?: string
@@ -158,7 +160,7 @@ export type PlanInput = {
   title?: string
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
   // flow: the flow the model drafts for the user to save.
   name?: string
   description?: string
@@ -225,12 +227,17 @@ export type Run = {
   pending?: { state: string; at: number; step: number; kind: Wait; text?: string }
   // When the model last escalated (ms). Until the user answers, a stopped turn is not pushed on.
   escalatedAt?: number
+  // What a blocked report says the run waits for, outside Sentinel and Claude. It counts while the escalation of the same `at` waits.
+  blocked?: { what: string; at: number }
   // Hands-free: the user is away, so the calls that would wait for them (proposals, reviews, breaking changes,
   // questions) are Claude's to make, each recorded for them to check later.
   handsFree?: true
   // States the user skipped, with why. They count as done for the states that need them, and the final check leaves
   // them out.
   skipped?: Record<string, string>
+  // The user closed the plan with /sentinel finish: why, the states left unfinished, and the done states whose checks
+  // never ran again.
+  closed?: { why: string; unfinished: string[]; unchecked: string[] }
   // The output of the last failing check run, cut to its end, for the refusal that names it.
   lastFail?: { step: number; text: string }
   // Signed off with /sentinel lock: define saves `draft` and the user locks it with a second /sentinel lock.
