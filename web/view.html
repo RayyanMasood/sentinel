@@ -994,6 +994,276 @@ mark.q { padding: 2px 3px; border-radius: var(--r1); background: color-mix(in sr
 mark.q.on { background: color-mix(in srgb, var(--ink) 20%, transparent); box-shadow: 0 0 0 1px var(--ink-3); }
 .addl { display: grid; gap: var(--s2); font-size: 14.5px; line-height: 21px; color: var(--ink-2); overflow-wrap: anywhere; }
 
+/* The System page ---------------------------------------------- */
+/* A drawing board: a dotted sheet with the map on it, its key and title block under it, and the picked part beside it.
+   A part is a card. Its box says whether it is built, its foot says how well that is proved, in words. Dashed is planned,
+   solid is built, and a hatched foot is built with nothing to prove it. */
+.sy-grid { display: grid; grid-template-columns: minmax(0, 1fr) 368px; gap: var(--s4); align-items: start; }
+#sysp .sy-frame { display: flex; flex-direction: column; min-width: 0; }
+.mtool { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--hair); }
+.mtool .sp { flex: 1; }
+.mtool .seg button { padding: 0 10px; }
+.sy-sheet { font: 500 14.5px/32px var(--f-text); color: var(--ink); padding: 0 3px; }
+.seg .cnt { margin-left: 6px; padding: 1px 5px; border-radius: var(--r1); background: var(--ink); color: var(--panel); }
+
+.sysw { --pl: color-mix(in srgb, var(--ink) 3%, var(--panel)); position: relative; overflow: hidden; background: radial-gradient(color-mix(in srgb, var(--ink) 13%, transparent) 1px, transparent 1.2px) 0 0 / 16px 16px; }
+#sysp .ls { position: absolute; inset: 0; pointer-events: none; }
+#sysRest { z-index: 2; transition: opacity .2s; }
+#sysRest.quiet { opacity: .3; }
+#sysLn { z-index: 3; }
+#sysLbl { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+#sysp .lbl { position: absolute; transform: translate(-50%, -50%); white-space: nowrap; padding: 1px 6px; border-radius: var(--r1); background: var(--panel); box-shadow: var(--sh-lift); font: 500 12.5px/17px var(--f-text); color: var(--ink); animation: sy-in .24s .14s both; }
+#sysp .ln { fill: none; stroke: color-mix(in srgb, var(--ink) 30%, transparent); stroke-width: 1.25; }
+#sysp .ln.tr { stroke: color-mix(in srgb, var(--ink) 42%, transparent); stroke-width: 1.5; }
+#sysp .lt { fill: none; stroke: var(--ink); stroke-width: 1.75; }
+#sysp .lt.blue { stroke: var(--blue-fill); } #sysp .lt.red { stroke: var(--red); }
+#sysp .lt.new { animation: sy-draw .5s cubic-bezier(.3, .7, .2, 1) both; }
+.sy-mka { fill: color-mix(in srgb, var(--ink) 34%, transparent); } .sy-mkt { fill: var(--ink); } .sy-mkb { fill: var(--blue-fill); } .sy-mkr { fill: var(--red); }
+@keyframes sy-draw { from { stroke-dasharray: var(--len) var(--len); stroke-dashoffset: var(--len); } to { stroke-dasharray: var(--len) var(--len); stroke-dashoffset: 0; } }
+@keyframes sy-in { from { opacity: 0; transform: translate(-50%, -20%); } }
+@keyframes sy-glow { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--blue-fill) 0%, transparent); } 50% { box-shadow: 0 0 12px 1px color-mix(in srgb, var(--blue-fill) 42%, transparent); } }
+
+.msheet { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 30px; padding: var(--s5); }
+.mrow { display: flex; flex-wrap: wrap; gap: 30px var(--s5); align-items: stretch; }
+.msheet[data-level="overview"] .mrow { justify-content: center; }
+.msheet[data-level="overview"] .mrow > .pt { flex: 0 1 236px; }
+.msheet[data-level="overview"] .actor span { display: none; }
+.actor-w { display: flex; justify-content: center; flex: 1 1 0; min-width: 0; }
+#sysp .actor { display: inline-flex; align-items: center; gap: var(--s2); max-width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--hair-2); border-radius: var(--r4); background: var(--panel); color: var(--ink-2); font: 600 14px/1 var(--f-text); transition: border-color .15s, box-shadow .18s, opacity .2s; }
+#sysp .actor b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sysp .actor span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 13px; color: var(--ink-3); }
+#sysp .actor:hover { border-color: var(--ink-4); box-shadow: var(--sh-slant); }
+
+/* The part. */
+#sysp .pt { position: relative; display: flex; flex-direction: column; flex: 1 1 136px; min-width: 124px; padding: 0; border: 1px solid var(--hair-2); border-radius: var(--r1); background: var(--panel); color: var(--ink); text-align: left; overflow: hidden; transform-origin: 50% 0; transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s, opacity .2s; }
+#sysp .pt:hover { transform: perspective(600px) rotateX(4deg); box-shadow: var(--sh-slant); z-index: 2; }
+.pt-h { display: flex; align-items: flex-start; gap: 7px; padding: 8px 9px 0; }
+.pt-h .box { margin-top: 2px; }
+.pt-n { min-width: 0; font: 600 14px/18px var(--f-text); overflow-wrap: anywhere; }
+.pt-h .mini { margin-left: auto; }
+.pt-d { flex: 1; min-height: 7px; padding: 2px 9px 7px 30px; font-size: 13px; line-height: 17px; color: var(--ink-2); overflow-wrap: anywhere; }
+.pt-t { padding: 0 9px 7px 30px; margin-top: -3px; font: 500 12.5px/16px var(--f-disp); color: var(--ink-3); overflow-wrap: anywhere; }
+.pt-f { display: flex; align-items: center; min-height: 24px; padding: 2px 9px; border-top: 1px solid var(--hair); font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); }
+.pt-f > span { display: inline-flex; align-items: center; gap: 4px; }
+.pt-f .ic { width: 13px; height: 13px; stroke-width: 2.4; }
+/* The Tasks level: a tag on a part for each state that builds it, and a row above the map for the states that build none. */
+.pt-k { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 9px 7px; }
+.pt-k .mini { gap: 4px; max-width: 100%; }
+.pt-k .mini > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pt-k .box { width: 12px; height: 12px; }
+#sysMain[data-level="tasks"] .orow .pt-k { grid-column: 2 / -1; padding: 0 0 2px; }
+#sysMain[data-level="tasks"] .sg-h .pt-k { width: 100%; padding: 1px 0 2px; }
+.sy-loose { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding-bottom: var(--s4); border-bottom: 1px solid var(--hair); font: 500 13.5px/18px var(--f-disp); }
+#sysMain:not(.msheet) > .sy-loose { padding: var(--s3); background: var(--panel); }
+
+#sysp .pt:is(.k-planned, .k-dropped, .k-outside) { border-style: dashed; border-color: var(--ink-4); background: var(--pl); }
+#sysp .pt.k-outside { border-color: var(--ink-3); }
+#sysp .pt.k-outside.guess { border-style: dotted; border-width: 1.5px; }
+#sysp .pt:is(.k-planned, .k-dropped) .pt-n { color: var(--ink-2); font-weight: 500; }
+#sysp .pt:is(.k-planned, .k-dropped, .k-outside) .pt-d { color: var(--ink-3); }
+#sysp .pt:is(.k-planned, .k-dropped, .k-outside) .pt-f { border-top-style: dashed; border-color: var(--hair-2); }
+#sysp .pt.k-outside .pt-f { color: var(--ink-2); }
+#sysp .pt.k-dropped .pt-n { text-decoration: line-through; }
+#sysp .pt.k-change { border-color: var(--ink-3); }
+#sysp .pt.k-change .pt-f { color: var(--ink); }
+#sysp .pt.k-now { border-color: var(--blue-fill); outline: 1px solid var(--blue-fill); background: linear-gradient(var(--blue-soft), var(--blue-soft)), var(--panel); animation: sy-glow 2.6s ease-in-out infinite; }
+#sysp .pt.k-now .pt-n, #sysp .pt.k-now .pt-f { color: var(--blue); }
+#sysp .pt.k-now .pt-f { border-color: color-mix(in srgb, var(--blue-fill) 40%, transparent); }
+#sysp .pt:is(.k-untested, .k-changed) .pt-f { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 20%, transparent) 0 1.5px, transparent 1.5px 6px); }
+#sysp .pt:is(.k-untested, .k-changed) .pt-f > span { padding: 0 5px; margin-left: -5px; border-radius: var(--r1); background: var(--panel); color: var(--ink-2); }
+#sysp .pt.k-tested .pt-f { color: var(--green); }
+#sysp .pt.k-failing { border-color: var(--red); outline: 1px solid var(--red); background: linear-gradient(var(--red-soft), var(--red-soft)), var(--panel); }
+#sysp .pt.k-failing .pt-f { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+#sysp .pt.k-needs { border-color: var(--amber-fill); outline: 1px solid var(--amber-fill); background: linear-gradient(var(--amber-soft), var(--amber-soft)), var(--panel); }
+#sysp .pt.k-needs .pt-f { color: var(--amber); border-color: color-mix(in srgb, var(--amber-fill) 55%, transparent); }
+#sysp .pt.k-exists { border-color: var(--hair); background: var(--sunk); }
+#sysp .pt.k-exists .pt-n { font-weight: 500; color: var(--ink-2); }
+#sysp .pt.k-exists .pt-d { color: var(--ink-3); }
+
+/* The box on a part: built or not. Each status pairs its box with its own foot, so no two look alike in shape. */
+#sysp .box.xfail { background: var(--red-fill); box-shadow: none; }
+#sysp .box.xfail::after { content: ""; position: absolute; left: 3px; right: 3px; top: 6px; height: 2px; background: #fff; }
+#sysp .box.xneed { background: var(--amber-fill); box-shadow: none; }
+#sysp .box.xneed::after { content: ""; position: absolute; left: 6px; top: 3px; width: 2px; height: 8px; background: #10161d; }
+#sysp .box.ex { background: var(--grey-fill); box-shadow: inset 0 0 0 1.5px var(--hair-2); }
+#sysp .box.xdrop { background: linear-gradient(transparent 6px, var(--ink-3) 6px 8px, transparent 8px); box-shadow: none; outline: 1.5px dashed var(--ink-4); outline-offset: -1.5px; }
+#sysp .box.xout { background: none; box-shadow: none; outline: 1.5px dashed var(--ink-3); outline-offset: -1.5px; transform: rotate(45deg) scale(.78); }
+
+/* Parts within parts. Each level in is a step darker, because the washes stack. */
+#sysp .sg { position: relative; display: flex; flex-direction: column; min-width: 0; border-radius: var(--r2); background: color-mix(in srgb, var(--ink) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 13%, transparent); transition: opacity .2s, box-shadow .18s; }
+#sysp .sg-h, .sg-hd { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; width: 100%; min-height: 36px; padding: 5px 10px 3px 7px; border: 0; border-radius: var(--r2) var(--r2) 0 0; background: none; color: var(--ink); text-align: left; transition: opacity .2s; }
+#sysp .sg-h:focus-visible { outline-offset: -2px; }
+.sg-t { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+#sysp .sg-n { min-width: 0; padding: 2px 4px; border-radius: var(--r1); font: 700 14.5px/18px var(--f-text); overflow-wrap: anywhere; transition: background-color .12s; }
+#sysp .sg-h:hover .sg-n { background: color-mix(in srgb, var(--ink) 9%, transparent); }
+#sysp .sg-s { font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); }
+#sysp .sg:not(.fold) > .sg-h :is(.sg-n, .sg-s), .sg-hd .sg-n { paint-order: stroke fill; -webkit-text-stroke: 3px var(--ground); }
+.chv { width: 14px; height: 14px; flex: none; color: var(--ink-3); transition: transform .2s cubic-bezier(.2, .8, .2, 1); }
+.sg-ic { display: grid; place-items: center; flex: none; color: var(--ink-3); }
+.sg-ic .ic { width: 15px; height: 15px; }
+#sysp .sg-b { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 3px 10px 11px; }
+#sysp .sg-b > .sg { align-self: stretch; }
+#sysp .sg.g-red { outline: 1.5px solid var(--red); outline-offset: -1.5px; }
+#sysp .sg.g-amber { outline: 1.5px solid var(--amber-fill); outline-offset: -1.5px; }
+#sysp .sg.g-blue { outline: 1.5px solid var(--blue-fill); outline-offset: -1.5px; }
+#sysp .sg.g-dashed { background: none; box-shadow: none; outline: 1px dashed var(--ink-4); outline-offset: -1px; }
+#sysp .sg:is(.g-dashed, .g-plain) .sg-n { font-weight: 600; color: var(--ink-2); }
+#sysp .sg.g-out { background: none; box-shadow: none; outline: 1px dashed var(--ink-3); outline-offset: -1px; }
+#sysp .sg.g-red .sg-s { color: var(--red); } #sysp .sg.g-amber .sg-s { color: var(--amber); } #sysp .sg.g-blue .sg-s { color: var(--blue); } #sysp .sg.g-green .sg-s { color: var(--green); }
+.lens .sg.g-blue:not(.fold) { outline-color: transparent; }
+
+/* A closed block: one press opens it. Its line says how its parts stand. */
+#sysp .sg.fold { background: var(--panel); box-shadow: inset 0 0 0 1px var(--hair-2); transform-origin: 50% 0; transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s, opacity .2s; }
+#sysp .sg.fold:hover { transform: perspective(600px) rotateX(3deg); box-shadow: inset 0 0 0 1px var(--ink-4), var(--sh-slant); z-index: 2; }
+#sysp .sg.fold.g-dashed { background: var(--pl); box-shadow: none; }
+#sysp .sg.fold.g-plain { background: var(--sunk); box-shadow: inset 0 0 0 1px var(--hair); }
+#sysp .sg.fold.g-blue { background: linear-gradient(var(--blue-soft), var(--blue-soft)), var(--panel); box-shadow: none; outline-width: 2px; outline-offset: 0; }
+#sysp .sg.fold.g-red { background: linear-gradient(var(--red-soft), var(--red-soft)), var(--panel); box-shadow: none; outline-width: 2px; outline-offset: 0; }
+#sysp .sg.fold.g-amber { background: linear-gradient(var(--amber-soft), var(--amber-soft)), var(--panel); box-shadow: none; outline-width: 2px; outline-offset: 0; }
+.lens .sg.fold.g-blue { background: var(--panel); box-shadow: inset 0 0 0 1px var(--hair-2); outline-color: transparent; }
+#sysp .sg.fold > .sg-h { flex: 1; flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; padding: 5px 9px 8px 7px; border-radius: var(--r2); }
+#sysp .sg.fold .chv { transform: rotate(-90deg); }
+.sg-fd { padding: 0 0 3px 27px; font-size: 13px; line-height: 17px; color: var(--ink-2); overflow-wrap: anywhere; }
+.sg-ff { display: flex; align-items: flex-start; gap: 8px; margin-top: auto; padding: 4px 0 0 27px; }
+.sg-ff .cells { margin-top: 2px; }
+#sysp .sg.fold.g-dashed .sg-fd { color: var(--ink-3); }
+/* Overview: each block a tile. Status still rolls up into it, so a blue tile means Claude is inside. */
+#sysp .sg.blk { flex: 0 1 236px; min-height: 140px; }
+#sysp .sg.blk > .sg-h { padding: 14px 14px 12px 16px; }
+#sysp .sg.blk .sg-t { justify-content: space-between; }
+#sysp .sg.blk .sg-n { padding: 0; font-size: 16px; line-height: 20px; }
+#sysp .sg.blk .chv { order: 2; }
+#sysp .sg.blk .sg-fd { padding: 4px 0 10px; }
+#sysp .sg.blk .sg-ff { padding: 0; }
+#sysp .cells i.un { background: color-mix(in srgb, var(--ink) 42%, transparent); box-shadow: none; }
+#sysp .cells i.ex { background: color-mix(in srgb, var(--ink) 20%, transparent); box-shadow: none; }
+#sysp .cells i.fail { background: var(--red-fill); box-shadow: none; }
+#sysp .cells i.need { background: var(--amber-fill); box-shadow: none; }
+#sysp .cells i.run { box-shadow: 0 0 5px color-mix(in srgb, var(--blue-fill) 60%, transparent); }
+
+/* Picked, and what stays lit. An open block never fades as a whole, or the parts inside would fade with it. */
+#sysp :is(.pt, .actor)[aria-pressed="true"], #sysp .sg.picked { outline: 2px solid var(--ink); outline-offset: 1px; }
+#sysp .dim { opacity: .38; }
+#sysp .dimh > .sg-h { opacity: .45; }
+
+/* The update check: parts whose files changed since the map was drawn, the files no part holds, and the plans behind the map. */
+#sysDrift { margin-bottom: var(--s4); }
+#sysDrift[hidden], #sysPlans[hidden], #sysFirst[hidden] { display: none; }
+.sy-fold { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--s2); margin: var(--s2) 0 0; padding: 0; list-style: none; }
+.sy-fold li { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px; border: 1px solid var(--hair); border-radius: var(--r1); background: var(--sunk); min-width: 0; }
+.sy-fold b { font: 600 14px/18px var(--f-mono, monospace); overflow-wrap: anywhere; }
+.sy-fold span { font-size: 13px; line-height: 17px; color: var(--ink-3); }
+.sy-bh { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s4); padding: var(--s4) var(--s4) var(--s3); background: var(--amber-soft); }
+.sy-bh h3 { font: 700 18px/24px var(--f-text); }
+.sy-bh span { font-size: 13.5px; line-height: 19px; color: var(--ink-2); }
+.sy-dr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2) var(--s4); align-items: center; padding: var(--s3) var(--s4); border-top: 1px solid var(--hair); }
+.sy-dr b { font-weight: 600; overflow-wrap: anywhere; }
+.sy-dr p, .sy-note, .sy-leads { font-size: 14px; line-height: 20px; color: var(--ink-2); overflow-wrap: anywhere; }
+.sy-acts { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.sy-note { padding: var(--s3) var(--s4); border-top: 1px solid var(--hair); }
+.sy-leads { padding: var(--s3) var(--s4); border-top: 1px solid var(--hair); background: var(--sunk); }
+.sy-leads code { display: inline-block; margin: 2px var(--s2) 2px 0; }
+.sy-say { padding: 0 var(--s4) var(--s3); }
+.sy-say:empty { display: none; }
+#sysSide .sy-acts { margin-top: var(--s2); }
+#sysp .pt.drift { box-shadow: inset 0 0 0 2px var(--amber-fill); }
+#sysp .pt.gone { box-shadow: inset 0 0 0 2px var(--red); }
+.sy-plans { display: flex; flex-direction: column; gap: 2px; margin: var(--s2) 0 0; padding: 0; list-style: none; }
+.sy-plan { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r1); background: none; color: var(--ink); text-align: left; transition: background-color .12s; }
+.sy-plan:hover, .sy-plan:focus-visible { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.sy-plan b { font: 600 14.5px/19px var(--f-text); overflow-wrap: anywhere; }
+.sy-plan span { font-size: 13px; line-height: 17px; color: var(--ink-3); overflow-wrap: anywhere; }
+@keyframes sy-row { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: no-preference) { .sy-dr { animation: sy-row .26s both; } .sy-dr:nth-child(3) { animation-delay: .04s; } .sy-dr:nth-child(4) { animation-delay: .08s; } .sy-dr:nth-child(5) { animation-delay: .12s; } }
+@media (max-width: 640px) { .sy-dr { grid-template-columns: minmax(0, 1fr); } }
+
+/* Outline: the same map as an indented list, for narrow screens and anyone who would rather read. */
+.outl { padding: var(--s2) var(--s3) var(--s3); background: var(--panel); }
+.orow { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; width: 100%; min-height: 36px; padding: 4px 6px 4px calc(6px + var(--ind) * 20px); border: 0; border-bottom: 1px solid var(--hair); background: none; color: var(--ink); text-align: left; transition: background-color .12s, opacity .2s; }
+.orow:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.orow[aria-pressed="true"] { background: color-mix(in srgb, var(--ink) 9%, transparent); box-shadow: inset 2px 0 0 var(--ink); }
+.orow.k-now { background: var(--blue-soft); color: var(--blue); } .orow.k-failing { background: var(--red-soft); } .orow.k-needs { background: var(--amber-soft); }
+.orow b { min-width: 0; font: 500 14.5px/20px var(--f-text); overflow-wrap: anywhere; }
+.orow.g b { font-weight: 700; }
+.orow .sta { font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); text-align: right; }
+.orow.g .sta { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; text-align: left; }
+.orow .chv { justify-self: center; }
+.orow[aria-expanded="false"] .chv { transform: rotate(-90deg); }
+.orow.k-tested .sta { color: var(--green); } .orow.k-now .sta { color: var(--blue); } .orow.k-failing .sta { color: var(--red); } .orow.k-needs .sta { color: var(--amber); }
+.orow.hd { cursor: default; } .orow.hd:hover { background: none; }
+.orow .ic:not(.chv) { justify-self: center; color: var(--ink-3); }
+
+/* The key, and the drawing's title block. */
+.mfoot { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--s3) var(--s6); padding: var(--s3) var(--s4); border-top: 1px solid var(--hair); }
+.key { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--s4); min-width: 0; flex: 1 1 420px; }
+.key-i { display: inline-flex; align-items: center; gap: 6px; padding: 0; border: 0; background: none; color: var(--ink-2); font: 500 13.5px/18px var(--f-disp); }
+button.key-i:hover { color: var(--ink); }
+.key-i b { font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.swk { position: relative; width: 26px; height: 15px; flex: none; border: 1px solid var(--hair-2); border-radius: var(--r1); background: var(--panel); }
+.swk:is(.k-planned, .k-dropped) { border-style: dashed; border-color: var(--ink-4); background: none; }
+.swk.k-dropped { background: linear-gradient(transparent 45%, var(--ink-3) 45% 60%, transparent 60%); }
+.swk.k-outside { border-style: dashed; border-color: var(--ink-3); background: none; }
+.swk.k-change { border-color: var(--ink-3); }
+.swk.k-now { border-color: var(--blue-fill); background: var(--blue-soft); outline: 1px solid var(--blue-fill); }
+.swk:is(.k-untested, .k-changed) { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ink) 26%, transparent) 0 1.5px, var(--panel) 1.5px 5px); }
+.swk.k-changed::after { content: ""; position: absolute; inset: 0; background: var(--ink-2); -webkit-mask: linear-gradient(#000, #000) center / 10px 2px no-repeat; mask: linear-gradient(#000, #000) center / 10px 2px no-repeat; }
+.swk.k-tested::after { content: ""; position: absolute; inset: 0; background: var(--green); -webkit-mask: var(--tick) center / 9px no-repeat; mask: var(--tick) center / 9px no-repeat; }
+.swk.k-failing { background: var(--red-fill); border-color: var(--red-fill); }
+.swk.k-needs { background: var(--amber-fill); border-color: var(--amber-fill); }
+.swk.k-exists { background: var(--sunk); border-color: var(--hair); }
+.swl { width: 26px; height: 0; flex: none; border-top: 1.5px solid color-mix(in srgb, var(--ink) 45%, transparent); }
+.keysep { width: 1px; height: 16px; background: var(--hair-2); }
+.tb { display: flex; flex-wrap: wrap; border: 1px solid var(--hair-2); border-radius: var(--r1); }
+.tb div { padding: 3px 9px; border-left: 1px solid var(--hair-2); }
+.tb div:first-child { border-left: 0; }
+.tb dt { font: 500 12.5px/15px var(--f-disp); color: var(--ink-3); }
+.tb dd { font: 600 13px/17px var(--f-text); color: var(--ink); white-space: nowrap; }
+
+/* Beside the map: what the run leaves, the view's list, and the picked part with why it shows what it shows. */
+.pside { position: sticky; top: var(--s4); max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+#sysp .pd { padding: var(--s4) var(--s5) var(--s5); overflow-wrap: anywhere; }
+.pd-h { display: flex; align-items: flex-start; gap: var(--s2); }
+.pd-h .box { margin-top: 4px; }
+#sysp .pd h3 { font: 700 17px/22px var(--f-text); }
+.pd-p { margin-top: 2px; color: var(--ink-3); font: 500 13.5px/18px var(--f-disp); }
+#sysp .pd h4 { margin: var(--s4) 0 var(--s1); font: 600 13.5px/18px var(--f-disp); color: var(--ink-3); }
+#sysp .pd > p, #sysp .pd .qsrc { color: var(--ink-2); }
+#sysp .pd .qsrc { color: var(--ink-3); }
+.pd-d { margin-top: var(--s2); color: var(--ink-2); }
+.pd-m { margin-top: 2px; font: 500 13.5px/18px var(--f-disp); color: var(--ink-3); }
+#sysp .flp { display: block; font: 400 13px/20px var(--f-code); color: var(--ink-2); word-break: break-all; }
+#sysp .pd .hint { margin-top: var(--s2); }
+.statew { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--s2); padding: 2px 7px; border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink-2); font: 600 13px/18px var(--f-disp); }
+.statew.k-now { background: var(--blue-soft); color: var(--blue); }
+.statew.k-tested { background: var(--green-soft); color: var(--green); }
+.statew.k-failing { background: var(--red-soft); color: var(--red); }
+.statew.k-needs { background: var(--amber-soft); color: var(--amber); }
+.statew .ic { width: 13px; height: 13px; stroke-width: 2.4; }
+.sy-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+#sysp ul.lst li .box { margin-top: 3px; }
+#sysp ul.lst li .mini { margin-top: 1px; }
+.ts + .ts { margin-top: var(--s1); }
+#sysp .ts h4, #sysp .chg h4 { display: flex; align-items: center; gap: var(--s2); }
+.ts h4 .cnt { color: var(--ink); }
+.ts-r { display: grid; gap: 0 var(--s2); width: 100%; padding: 4px 6px; margin: 0 -6px; border: 0; border-radius: var(--r1); background: none; color: var(--ink-2); text-align: left; font-size: 14px; line-height: 20px; transition: background-color .12s; }
+.ts-r:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.ts-r b { color: var(--ink); font-weight: 600; } .ts-r span { font: 500 13px/18px var(--f-disp); color: var(--ink-3); overflow-wrap: anywhere; }
+.ts-r.row { grid-template-columns: auto minmax(0, 1fr); align-items: start; } .ts-r.row .box { margin-top: 3px; }
+#sysNotes:empty, #sysFinish:empty, #sysView:empty { display: none; }
+#sysNotes { margin-bottom: var(--s4); padding: var(--s3) var(--s5); }
+#sysNotes h3 { margin-bottom: 2px; font: 700 15px/22px var(--f-text); }
+@media (max-width: 1180px) {
+  .sy-grid { grid-template-columns: minmax(0, 1fr); }
+  .pside { position: static; max-height: none; }
+}
+@media (max-width: 860px) {
+  .mtool .seg { max-width: 100%; overflow-x: auto; }
+  .tb { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; } #sysp :is(.pt, .sg.fold):hover { transform: none; } }
+::view-transition-group(*) { animation-duration: .36s; animation-timing-function: cubic-bezier(.16, 1, .3, 1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .16s; }
+
 @media (max-width: 1180px) {
   .grid, .fgrid { grid-template-columns: minmax(0, 1fr); }
   .grid > .side { position: static; max-height: none; overflow: visible; }
@@ -1078,12 +1348,19 @@ mark.q.on { background: color-mix(in srgb, var(--ink) 20%, transparent); box-sha
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
   <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></symbol>
   <symbol id="i-told" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M15.5 5.5l3 3L8 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.6-3.8 3.4-6 7-6s6.4 2.2 7 6"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M7 18.5h10a4 4 0 0 0 .6-8 5.5 5.5 0 0 0-10.7-1A4.6 4.6 0 0 0 7 18.5z"/></symbol>
   <symbol id="i-checks" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M8.5 12.2l2.4 2.4 4.6-4.8"/></symbol>
   <defs>
     <marker id="mk-idle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk done" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-lp-idle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="mk lp" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-lp-used" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="mk used" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="sy-ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mka" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="sy-mt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mkt" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="sy-mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mkb" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="sy-mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mkr" d="M0,1L9,5L0,9z"/></marker>
   </defs>
 </svg>
 
@@ -1102,6 +1379,7 @@ mark.q.on { background: color-mix(in srgb, var(--ink) 20%, transparent); box-sha
 
 <nav class="nav" aria-label="Pages">
   <button type="button" data-page="run" aria-current="page">Run<span class="badge" id="navBadge" hidden></span></button>
+  <button type="button" data-page="system" id="navSys" hidden>System</button>
   <button type="button" data-page="flows">Library<span class="badge" id="navFlows" hidden></span></button>
 </nav>
 
@@ -1256,6 +1534,33 @@ mark.q.on { background: color-mix(in srgb, var(--ink) 20%, transparent); box-sha
  <div id="fed" hidden></div>
  <div id="ied" hidden></div>
  <div id="srcp" hidden></div>
+ <div id="sysp" hidden>
+  <div class="phead"><div><h1 class="caps">System</h1><p id="sysSum"></p></div></div>
+  <section class="panel empty" id="sysNone" hidden><h1>No system map</h1><p>This plan has no system map. Claude draws one with a plan that covers more than one part.</p></section>
+  <div id="sysMap">
+    <section class="panel" id="sysDrift" hidden><div id="sysDriftBody"></div><p class="hint sy-say" id="sysSay" role="status"></p></section>
+    <section class="panel" id="sysNotes"></section>
+    <div class="sy-grid">
+      <section class="panel sy-frame" aria-label="The system map">
+        <div class="mtool"><span class="sy-sheet">Whole system</span><span class="sp"></span><span class="seg" id="sysLevel" role="group" aria-label="Level"></span><span class="seg" id="sysViews" role="group" aria-label="View"></span><span class="seg" id="sysLay" role="group" aria-label="Layout"></span></div>
+        <div class="sysw" id="sysWrap">
+          <svg class="ls" id="sysRest" aria-hidden="true"></svg>
+          <div class="msheet" id="sysMain"></div>
+          <svg class="ls" id="sysLn" aria-hidden="true"></svg>
+          <div id="sysLbl" aria-hidden="true"></div>
+        </div>
+        <div class="mfoot" id="sysFoot"></div>
+      </section>
+      <aside class="pside" id="sysAside" aria-label="About the part picked">
+        <div id="sysFinish"></div>
+        <div id="sysView"></div>
+        <section class="panel pd" id="sysSide"></section>
+        <section class="panel pd" id="sysFirst" aria-label="Not on the map yet" hidden></section>
+        <section class="panel pd" id="sysPlans" aria-label="Past plans" hidden></section>
+      </aside>
+    </div>
+  </div>
+ </div>
 </div>
 
 </main>
@@ -1331,6 +1636,12 @@ $('bellBtn').onclick = () => { if (Notification.permission === 'default') Notifi
 
 let vm = null, view = { canvas: 'line', line: 'line', list: 'list' }[store.get('view')] ?? 'map', fold = store.get('fold') !== 'false'
 const railOpen = new Map(), mapPin = new Map(), sideOpen = new Map()
+// The System page: its level (remembered on this computer), view, the part picked, the blocks flipped from what the level
+// shows, the part the pointer is on, the key's swatch it is on, the layout and whether every line is out.
+const SY_LEVELS = [['overview', 'Overview', 0], ['areas', 'Areas', 1], ['parts', 'Parts', 99], ['tasks', 'Tasks', 99]]
+const SY_VIEWS = [['all', 'All'], ['testing', 'Testing'], ['changes', 'Changes']]
+let syLevel = SY_LEVELS.some(l => l[0] === store.get('sysLevel')) ? store.get('sysLevel') : 'areas', syView = 'all', syPick = '', syHover = '', syKey = '', syLayout = 'boxes', syEvery = false, syIdx = new Map(), syPlanAt = -1, sySayT = 0
+const syFlip = new Set()
 
 // ---- live updates: state.js calls window.__sentinel(vm) ----
 
@@ -1389,7 +1700,7 @@ function wallMs() {
 }
 
 function render(next) {
-  if (!vm || vm.title + vm.lockedAt !== next.title + next.lockedAt) { railOpen.clear(); trailPins.clear(); mapPin.clear(); sideOpen.clear() }
+  if (!vm || vm.title + vm.lockedAt !== next.title + next.lockedAt) { railOpen.clear(); trailPins.clear(); mapPin.clear(); sideOpen.clear(); syFlip.clear(); syPick = ''; syView = 'all'; syEvery = false }
   vm = next
   const none = vm.phase === 'none'
   $('empty').hidden = !none
@@ -1447,6 +1758,7 @@ function runKind() {
 
 function sayLine(kind) {
   const a = vm.active, n = tasks().length
+  if (kind === 'ask' && vm.ask.by === 'sentinel') return `Sentinel asks for your OK${vm.ask.state ? ` on ${chip(vm.ask.state)}` : ''}. Answer ${where()}.`
   if (kind === 'ask') { const k = vm.ask.questions.length; return `Claude ${k > 1 ? `has ${k} questions` : 'asks'}${vm.ask.state ? ` about ${chip(vm.ask.state)}` : ''}. Answer ${where()}.` }
   if (kind === 'done') {
     const sk = tasks().filter(s => s.skipped).length
@@ -1494,7 +1806,7 @@ function stub(kind, n, done) {
   if (done) return { k: esc(done.stamp), h: esc(trunc(done.ans, 90)), p: esc(done.where), fine: esc(trunc(done.q, 140)) }
   if (kind === 'ask') {
     const qs = vm.ask.questions
-    return { k: 'Claude asks', h: esc(trunc(qs.length > 1 ? `${qs.length} questions` : qs[0].question, 120)), p: `Claude stopped${vm.ask.state ? ` on ${code(vm.ask.state)}` : ''} to ask. It waits for your answer before it goes on.`,
+    return { k: vm.ask.by === 'sentinel' ? 'Sentinel asks' : 'Claude asks', h: esc(trunc(qs.length > 1 ? `${qs.length} questions` : qs[0].question, 120)), p: vm.ask.by === 'sentinel' ? `Claude waits${vm.ask.state ? ` on ${code(vm.ask.state)}` : ''} for your answer. It goes on when you give one.` : `Claude stopped${vm.ask.state ? ` on ${code(vm.ask.state)}` : ''} to ask. It waits for your answer before it goes on.`,
       acts: [['Answer below', 'arrow', 'pri', 'ans']], fine: 'Or reply in the chat. The first answer counts.' }
   }
   if (kind === 'blocked') {
@@ -1506,7 +1818,7 @@ function stub(kind, n, done) {
     return { k: first ? 'Your OK' : 'Your review', h: esc(a.title || a.label),
       p: first ? `Claude waits for your OK before it starts on ${code(a.id)}.` : `Claude waits for your review before it goes on${nx && nx.id !== 'done' ? ` to ${code(nx.id)}` : ''}.`,
       acts: [[first ? 'Approve and start' : 'Approve and go on', 'check', 'pri', 'approve'], ['Ask for changes', null, '', 'changes'], ['Approve and go hands-free', null, '', 'approveall']],
-      fine: 'Hands-free, Claude makes the later calls that would wait for you, and lists them for you to check. Or reply in the chat; the first answer counts.' }
+      fine: 'Hands-free, Claude makes the later calls that would wait for you, and lists them for you to check. Or answer in the terminal, where the question box asks (Esc closes it, and the band above the prompt then has an Answer button). Words you type in the chat do not count as an OK.' }
   }
   const owed = kind === 'draft' ? unanswered() : []
   if (owed.length) {
@@ -1636,7 +1948,7 @@ const SLIP = {
   ask() {
     const a = vm.ask, qs = a.questions, many = qs.length > 1, on = a.state ? ` while on ${code(a.state)}` : ''
     const pick = q => q.multiSelect ? 'pick any that apply' : 'pick one'
-    return `<div class="slip-h"><h2>${many ? `${qs.length} questions from Claude` : esc(qs[0].question)}</h2><span class="quiet">Claude asked at ${esc(a.t)}${on}${many ? '' : ` · ${pick(qs[0])}`}</span></div>`
+    return `<div class="slip-h"><h2>${many ? `${qs.length} questions from Claude` : esc(qs[0].question)}</h2><span class="quiet">${a.by === 'sentinel' ? 'Sentinel' : 'Claude'} asked at ${esc(a.t)}${on}${many ? '' : ` · ${pick(qs[0])}`}</span></div>`
       + `<div class="slip-b"><div>${many ? `<span class="seg qtabs">${qs.map((q, i) => `<button type="button" data-tab="${i}" aria-pressed="false"><span class="box"></span>${esc(q.header || 'Question ' + (i + 1))}</button>`).join('')}</span>` : ''}`
       + qs.map((q, i) => `<div data-panel="${i}">${many ? `<h3 class="q">${esc(q.question)}</h3><p class="hint">Question ${i + 1} of ${qs.length} · ${pick(q)}</p>` : ''}`
         + `<fieldset class="opts"><legend class="vh">${esc(q.question)}</legend>${(q.options ?? []).map(o => pickOpt('q' + i, o, q.multiSelect)).join('')}`
@@ -3059,11 +3371,11 @@ function renderDetail() {
 }
 
 // What asked for this state, in its source's own words, or why Claude added it. The rest of the page is Claude's description.
-function askedFor(s) {
+function askedFor(s, h = 'h3') {
   const p = vm.proof, asks = s.asks ?? []
   if (!p || (!asks.length && !s.added)) return ''
   const owed = vm.phase === 'draft' && s.added && !s.okAt
-  return '<h3>Asked for</h3>'
+  return `<${h}>Asked for</${h}>`
     + (s.added ? `<p><span class="mini${owed ? ' need' : ''}">Claude added</span> Nothing asked for this. Claude's reason: “${esc(s.added)}”</p>`
       + (s.okAt ? `<p class="qsrc">You kept it on the draft at ${esc(s.okAt)}.</p>` : owed ? '<p class="qsrc">Keep it or take it out on the draft card.</p>' : '')
       + (s.look ? `<p class="qsrc">It asks you first, because it could involve ${esc(s.look)}.</p>` : '') : '')
@@ -3372,7 +3684,7 @@ function go(hash) {
 }
 function route() {
   const was = fview, h = location.hash
-  fview = h === '#library' || h === '#flows' ? 'lib' : /^#flow-./.test(h) ? 'edit' : /^#ins-./.test(h) ? 'iedit' : /^#source(-.+)?$/.test(h) ? 'source' : null
+  fview = h === '#library' || h === '#flows' ? 'lib' : h === '#system' ? 'system' : /^#flow-./.test(h) ? 'edit' : /^#ins-./.test(h) ? 'iedit' : /^#source(-.+)?$/.test(h) ? 'source' : null
   if (fview === 'lib') libTab = h === '#flows' ? 'flows' : 'ins'
   if (fview !== 'edit' || ed?.hash !== h) { ed = null; $('fed').replaceChildren() }
   if (fview !== 'iedit' || ie?.hash !== h) { ie = null; $('ied').replaceChildren() }
@@ -3393,7 +3705,9 @@ function flowsPage() {
   $('fed').hidden = fview !== 'edit'
   $('ied').hidden = fview !== 'iedit'
   $('srcp').hidden = fview !== 'source'
-  if (fview === 'lib') renderLib()
+  $('sysp').hidden = fview !== 'system'
+  if (fview === 'system') renderSys()
+  else if (fview === 'lib') renderLib()
   else if (fview === 'edit') renderEd()
   else if (fview === 'source') renderSrc()
   else renderIe()
@@ -3402,11 +3716,12 @@ function flowsPage() {
 // The page tabs at the foot. Run carries a mark while the plan needs you, Library while Claude's draft waits.
 function navTabs() {
   const needs = !!vm && (!!vm.ask || vm.phase === 'draft' || vm.phase === 'live' && !!(vm.trap || vm.waiting || vm.blocked))
+  const here = fview === 'system' ? 'system' : fview && fview !== 'source' ? 'flows' : 'run'
   document.querySelectorAll('.nav [data-page]').forEach(b => {
-    const cur = (b.dataset.page === 'flows') === (!!fview && fview !== 'source')
-    if (cur) b.setAttribute('aria-current', 'page')
+    if (b.dataset.page === here) b.setAttribute('aria-current', 'page')
     else b.removeAttribute('aria-current')
   })
+  $('navSys').hidden = !vm?.system
   $('navBadge').hidden = !needs
   $('navBadge').textContent = '1'
   $('navBadge').title = 'Needs you'
@@ -3415,8 +3730,616 @@ function navTabs() {
 }
 document.querySelector('.nav').addEventListener('click', e => {
   const b = e.target.closest('[data-page]')
-  if (b) go(b.dataset.page === 'flows' ? '#library' : '')
+  if (b) go(b.dataset.page === 'flows' ? '#library' : b.dataset.page === 'system' ? '#system' : '')
 })
+
+// ---- the System page ----
+
+// The words are the terminal pane's (PART, TAG and EVIDENCE in hooks/views.tsx). The page says what the pane says.
+const SY_PART = { planned: 'Not built', exists: 'Already there', change: 'Will change', now: 'Claude is here', tested: 'Tested', changed: 'Changed since test', untested: 'Untested', failing: 'Check failing', needs: 'Needs you', outside: 'Outside the project', dropped: 'Dropped' }
+const SY_TAG = { skipped: 'Skipped by you', 'not-finished': 'Not finished', 'not-rechecked': 'Not rechecked', once: 'Checked once', reopened: 'Reopened by the final checks', 'no-git': 'No git here, so changes cannot be detected', 'no-files': 'No files to check', 'changed-since-drawn': 'Changed since drawn', 'files-gone': 'Files gone' }
+const SY_WHY = { seen: 'seen in ', said: 'said by you: ', guess: 'guessed: ' }
+const SY_TEST = ['failing', 'needs', 'changed', 'untested', 'now', 'tested', 'planned', 'change', 'exists']
+// A part's box says whether it is built; its foot says how well that is proved. The pair differs for every status.
+const SY_BOX = { planned: 'ahead', dropped: 'xdrop', now: 'run', untested: 'done', tested: 'done', changed: 'done', failing: 'xfail', needs: 'xneed', exists: 'ex', change: 'ex', outside: 'xout' }
+const SY_FOOT = { tested: 'check', failing: 'warn', changed: 'pen', change: 'pen', needs: 'bell' }
+const SY_CELL = { tested: 'done', untested: 'un', changed: 'un', now: 'run', failing: 'fail', needs: 'need', exists: 'ex', change: 'ex' }
+const SY_KEY = ['planned', 'now', 'untested', 'changed', 'tested', 'failing', 'needs', 'exists', 'change', 'dropped', 'outside']
+const syPlural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+// A group's line: "2 parts · 1 Not built · 1 Claude is here".
+const syRoll = r => [syPlural(r.total, 'part'), ...Object.keys(SY_PART).filter(k => k !== 'outside' && k !== 'dropped' && r.counts[k]).map(k => `${r.counts[k]} ${SY_PART[k]}`)].join(' · ')
+const syLeaves = n => n.kids.length ? n.kids.flatMap(syLeaves) : [n]
+const syDepth = () => SY_LEVELS.find(l => l[0] === syLevel)[2]
+// A block is open when it sits above the level, unless the user flipped it.
+const syOpen = (id, depth) => (depth < syDepth()) !== syFlip.has(id)
+const syName = id => syIdx.get(id)?.n?.name ?? syIdx.get(id)?.actor?.name ?? id
+const syInside = (x, h) => { for (let i = x; i; i = syIdx.get(i)?.parent) if (i === h) return true; return false }
+const syChain = id => { const out = []; for (let c = id; c; c = syIdx.get(c)?.parent) out.unshift(c); return out }
+const syTags = st => st.tags.map(g => g === 'shares-file' ? `Shares a file with ${(st.shares || []).map(syName).join(', ')}` : SY_TAG[g] || g)
+const syNarrow = matchMedia('(max-width: 860px)')
+const syOutline = () => syNarrow.matches || syLayout === 'outline'
+const syTask = id => tasks().find(t => t.id === id)
+// Claude's addition: every state that builds the part quotes nothing.
+const syAdded = n => n.builtBy.length > 0 && n.builtBy.every(b => syTask(b)?.added)
+// With nothing picked, the panel and the lines follow Claude.
+const syPicked = () => syPick || (vm.system?.here.find(h => syIdx.has(h.id))?.id ?? '')
+const syCells = n => `<span class="cells" aria-hidden="true">${syLeaves(n).filter(l => !l.outside && l.status.status !== 'dropped').map(l => `<i class="${SY_CELL[l.status.status] || ''}"></i>`).join('')}</span>`
+const syProof = p => p ? `${p.check || 'a check'}${p.weight ? ` (${p.weight})` : ''}${p.at ? ` at ${p.at}` : ''}` : ''
+const syFootOf = k => `<span class="pt-f"><span>${SY_FOOT[k] ? icon(SY_FOOT[k]) : ''}${SY_PART[k]}</span></span>`
+// The width a block asks for: one share per part it shows, a little more for a closed block.
+const syUnits = (n, d) => !n.kids.length ? 1 : !syOpen(n.id, d) ? 1.45 : Math.max(1, n.kids.reduce((a, k) => a + syUnits(k, d + 1), 0))
+const syVt = id => `view-transition-name: sy${syIdx.get(id)?.vt ?? 0}`
+// The Tasks level: a tag for each state that builds the part, with its short name. The full name is the tag's title.
+const syBuilt = n => syLevel !== 'tasks' || !n.builtBy.length ? '' : `<span class="pt-k">${n.builtBy.map(b => {
+  const t = syTask(b), c = t ? stOf(t) : 'ahead', w = titleOf(b)
+  return `<span class="mini" title="${esc(w)}"><span class="box ${c}"></span><span>${esc(trunc(w, 20))}</span></span>`
+}).join('')}</span>`
+// The states that build no part, such as the full suite, stay in a row above the map.
+function syLoose() {
+  const used = new Set([...syIdx.values()].flatMap(v => v.n?.builtBy ?? []))
+  const ts = tasks().filter(t => !used.has(t.id))
+  return ts.length ? `<div class="sy-loose"><span class="quiet">Tied to no part</span>${ts.map(t => { const c = stOf(t), w = titleOf(t.id); return `<button type="button" class="tc ${c}" data-task="${esc(t.id)}" title="${esc(w)}"><span class="box ${c}"></span>${esc(trunc(w, 20))}</button>` }).join('')}</div>` : ''
+}
+
+function syCard(n) {
+  const st = n.status, k = st.status
+  const why = n.outside ? SY_WHY[n.outside.kind] + trunc(n.outside.why, 80) : ''
+  const notes = [why, ...syTags(st)].filter(Boolean)
+  return `<button type="button" class="pt k-${k}${n.outside?.kind === 'guess' ? ' guess' : ''}${st.tags.includes('changed-since-drawn') ? ' drift' : st.tags.includes('files-gone') ? ' gone' : ''}" data-id="${esc(n.id)}" style="${syVt(n.id)}">`
+    + `<span class="pt-h"><span class="box ${SY_BOX[k]}"></span><b class="pt-n">${esc(n.name)}</b>${syAdded(n) ? '<span class="mini">Claude added</span>' : ''}</span>`
+    + `<span class="pt-d">${esc(n.desc || '')}</span>${notes.map(t => `<span class="pt-t">${esc(t)}</span>`).join('')}${syBuilt(n)}${syFootOf(k)}</button>`
+}
+function syNode(n, depth) {
+  if (!n.kids.length) return syCard(n)
+  const open = syOpen(n.id, depth), tone = `g-${n.roll.tone}`, roll = `<span class="sg-s">${syRoll(n.roll)}</span>`
+  const head = inner => `<button type="button" class="sg-h" data-tog="${esc(n.id)}" aria-expanded="${open}">${inner}${syBuilt(n)}</button>`
+  if (open) return `<section class="sg ${tone}" data-id="${esc(n.id)}" style="flex: ${syUnits(n, depth)} 1 ${Math.round(syUnits(n, depth) * 136)}px; ${syVt(n.id)}">`
+    + head(`${icon('chev', 'ic chv')}<span class="sg-n">${esc(n.name)}</span>${syCells(n)}${roll}`) + `<div class="sg-b">${n.kids.map(k => syNode(k, depth + 1)).join('')}</div></section>`
+  const tile = syDepth() === 0 && depth === 0
+  return `<section class="sg fold ${tone}${tile ? ' blk' : ''}" data-id="${esc(n.id)}" style="${tile ? '' : 'flex: 1.45 1 197px; '}${syVt(n.id)}">`
+    + head(`<span class="sg-t">${icon('chev', 'ic chv')}<span class="sg-n">${esc(n.name)}</span></span>${n.desc ? `<span class="sg-fd">${esc(n.desc)}</span>` : ''}<span class="sg-ff">${syCells(n)}${roll}</span>`) + '</section>'
+}
+// The blocks people use come first, so the lines from the people above run straight down to them.
+function syInsideTop(s) {
+  const used = new Set(s.links.filter(l => s.actors.some(a => a.id === l.from || a.id === l.to)).flatMap(l => [syChain(l.from)[0], syChain(l.to)[0]]))
+  return s.tree.filter(n => !n.outside).sort((a, b) => used.has(b.id) - used.has(a.id))
+}
+function syBoxes(s) {
+  const inside = syInsideTop(s), outer = s.tree.filter(n => n.outside)
+  const people = s.actors.length ? `<div class="mrow">${s.actors.map(a => `<div class="actor-w"><button type="button" class="actor" data-id="${esc(a.id)}" style="${syVt(a.id)}">${icon('user')}<b>${esc(a.name)}</b>${a.desc ? `<span>${esc(a.desc)}</span>` : ''}</button></div>`).join('')}</div>` : ''
+  const out = outer.length ? `<section class="sg g-out" style="flex: ${outer.length} 1 ${outer.length * 136}px"><div class="sg-hd"><span class="sg-ic">${icon('cloud')}</span><span class="sg-n">Outside the project</span><span class="sg-s">${syPlural(outer.length, 'part')}</span></div><div class="sg-b">${outer.map(syCard).join('')}</div></section>` : ''
+  // Outside parts get a row of their own at the foot, as the mock-up draws its outside services.
+  return people + `<div class="mrow">${inside.map(n => syNode(n, 0)).join('')}</div>${out ? `<div class="mrow">${out}</div>` : ''}`
+}
+function syRows(ns, d) {
+  return ns.map(n => {
+    if (!n.kids.length) return `<button type="button" class="orow k-${n.status.status}" data-id="${esc(n.id)}" style="--ind: ${d}"><span class="box ${SY_BOX[n.status.status]}"></span><b>${esc(n.name)}</b><span class="sta">${SY_PART[n.status.status]}${n.status.tags.includes('changed-since-drawn') ? ' · Changed since drawn' : ''}</span>${syBuilt(n)}</button>`
+    const open = syOpen(n.id, d)
+    return `<button type="button" class="orow g" data-id="${esc(n.id)}" data-tog="${esc(n.id)}" aria-expanded="${open}" style="--ind: ${d}">${icon('chev', 'ic chv')}<b>${esc(n.name)}</b><span class="sta">${syCells(n)}<span class="sg-s">${syRoll(n.roll)}</span></span>${syBuilt(n)}</button>${open ? syRows(n.kids, d + 1) : ''}`
+  }).join('')
+}
+function syOutl(s) {
+  const outer = s.tree.filter(n => n.outside)
+  return `<div class="outl">${s.actors.map(a => `<button type="button" class="orow" data-id="${esc(a.id)}" style="--ind: 0">${icon('user')}<b>${esc(a.name)}</b><span class="sta">${esc(trunc(a.desc || '', 40))}</span></button>`).join('')}`
+    + syRows(syInsideTop(s), 0)
+    + (outer.length ? `<div class="orow g hd" style="--ind: 0">${icon('cloud')}<b>Outside the project</b><span class="sta">${syPlural(outer.length, 'part')}</span></div>${syRows(outer, 1)}` : '') + '</div>'
+}
+
+// Testing: the parts by how well they are proved, worst first. Outside parts are not tested, so they are not here.
+function syTesting(s) {
+  const by = {}
+  for (const n of s.tree.flatMap(syLeaves)) if (!n.outside) (by[n.status.status] ||= []).push(n)
+  const row = n => {
+    const where = (syIdx.get(n.id)?.path || []).join(', '), proof = syProof(n.status.proof)
+    return `<li><button type="button" class="ts-r" data-id="${esc(n.id)}"><b>${esc(n.name)}</b>${where ? `<span>${esc(where)}</span>` : ''}${proof ? `<span>${esc(proof)}</span>` : ''}</button></li>`
+  }
+  return `<section class="panel pd"><h3>Testing</h3><p class="pd-p">Worst first. Outside parts can't be tested here, so they are left out.</p>`
+    + SY_TEST.filter(k => by[k]).map(k => `<section class="ts k-${k}" data-st="${k}"><h4><span class="swk k-${k}"></span>${SY_PART[k]}<span class="cnt">${by[k].length}</span></h4><ul>${by[k].map(row).join('')}</ul></section>`).join('') + '</section>'
+}
+const syChangeCount = c => c.added.length + c.dropped.length + c.edited.length + c.linesAdded.length + c.linesDropped.length
+// Changes: the map as it stands against the copy kept when the plan was signed off.
+function syChanges(s) {
+  const c = s.changes
+  if (!syChangeCount(c)) return '<section class="panel pd"><h3>What changed</h3><p class="pd-d">Nothing has changed since you signed off.</p></section>'
+  const li = (w, body) => `<li><span class="mini">${w}</span><span>${body}</span></li>`
+  const line = l => `<b>${esc(syName(l.from))}</b> to <b>${esc(syName(l.to))}</b>: ${esc(l.says)}`
+  return `<section class="panel pd chg"><h3>What changed</h3><p class="pd-p">Compared with the map you signed off.</p><ul class="lst">`
+    + c.added.map(p => li('Added', `<b>${esc(p.name)}</b>`)).join('') + c.dropped.map(p => li('Dropped', `<b>${esc(p.name)}</b>`)).join('')
+    + c.edited.map(p => li('Changed', `<b>${esc(p.name)}</b>: ${esc(p.what.join(', '))}`)).join('')
+    + c.linesAdded.map(l => li('Line added', line(l))).join('') + c.linesDropped.map(l => li('Line dropped', line(l))).join('') + '</ul></section>'
+}
+// A finished plan lists what it leaves: parts not finished, parts whose state was not rechecked, parts never tested.
+function syFinish(s) {
+  if (vm.phase !== 'complete') return ''
+  const ls = s.tree.flatMap(syLeaves).filter(n => !n.outside)
+  const sec = ([k, h, f]) => { const ns = ls.filter(f); return ns.length ? `<section data-fin="${k}"><h4>${h}</h4><ul>${ns.map(n => `<li><button type="button" class="ts-r row" data-id="${esc(n.id)}"><span class="box ${SY_BOX[n.status.status]}"></span><b>${esc(n.name)}</b></button></li>`).join('')}</ul></section>` : '' }
+  const body = [['not-finished', 'Not finished', n => n.status.tags.includes('not-finished')], ['not-rechecked', 'Not rechecked', n => n.status.tags.includes('not-rechecked')], ['untested', 'Untested', n => n.status.status === 'untested']].map(sec).join('')
+  return `<section class="panel pd"><h3>${body ? 'Left as it stands' : 'Nothing is left over'}</h3>${body ? '<p class="pd-p">The plan is finished. These parts stay as they are.</p>' + body : '<p class="pd-d">Every part was finished and tested.</p>'}</section>`
+}
+// ---- history: the update check and the plans behind the map ----
+const SY_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// "3 Nov 2026", in UTC so every machine reads a plan's day the same way (the terminal pane does too).
+const syDay = at => { const d = new Date(at); return isNaN(d) ? String(at).slice(0, 10) : `${d.getUTCDate()} ${SY_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}` }
+const SY_DRIFT_ROWS = 5, SY_LOOSE_SHOWN = 5
+const syWhyDrift = id => vm.system.drift?.why[id] || ''
+const syMarked = n => syLeaves(n).filter(l => syWhyDrift(l.id))
+const syBtns = id => `<div class="sy-acts"><button type="button" class="btn sm pri" data-redraw="${esc(id)}">Redraw this area</button><button type="button" class="btn sm ghost" data-fine="${esc(id)}">It's fine</button></div>`
+// The banner: a row for each part that changed, with git's reason, and the files no part holds. With no git it says
+// nothing could be compared, so a quiet map is never read as an unchanged one.
+function syDrift(s) {
+  const d = s.drift
+  if (!d) return ''
+  if (d.noGit) return `<div class="sy-bh"><h3>Nothing to compare with</h3></div><p class="sy-note">No git here, so Sentinel can't tell what changed since the map was drawn.</p>`
+  const marked = s.tree.flatMap(syLeaves).filter(n => d.why[n.id])
+  if (!marked.length && !d.loose.length) return ''
+  const row = n => `<div class="sy-dr" data-drift="${esc(n.id)}"><div><b>${esc(n.name)}</b><p>${esc(d.why[n.id])}</p></div>${syBtns(n.id)}</div>`
+  const more = marked.length - SY_DRIFT_ROWS
+  const loose = d.loose.length ? `<div class="sy-leads"><b>Files in no part</b> ` + d.loose.slice(0, SY_LOOSE_SHOWN).map(f => `<code>${esc(f)}</code>`).join('')
+    + (d.loose.length > SY_LOOSE_SHOWN ? `and ${d.loose.length - SY_LOOSE_SHOWN} more. ` : '') + 'Ask Claude to put them on the map.</div>' : ''
+  return `<div class="sy-bh"><h3>${marked.length ? `${syPlural(marked.length, 'part')} changed since the map was drawn` : `${syPlural(d.loose.length, 'file')} in no part of the map`}</h3><span>Checked with git. Nothing was redrawn.</span></div>`
+    + marked.slice(0, SY_DRIFT_ROWS).map(row).join('') + (more > 0 ? `<p class="sy-note">and ${more} more. Pick a part on the map to see why it changed.</p>` : '') + loose
+}
+// The panel: the reason, and the two things the user can do, for a part marked or an area that holds one.
+function syDriftSide(n) {
+  const m = syMarked(n)
+  if (!m.length) return ''
+  return `<h4>Changed since drawn</h4><p>${n.kids.length ? `${esc(syPlural(m.length, 'part'))} inside changed since the map was drawn.` : esc(syWhyDrift(n.id))}</p>${syBtns(n.id)}`
+}
+// Past plans, newest first. Pointing at one lights up the parts it built.
+function syPlans(s) {
+  if (!s.plans?.length) return ''
+  const li = (p, i) => {
+    const built = p.parts.map(syName).join(', ')
+    return `<li><button type="button" class="sy-plan" data-plan="${i}"><b>${esc(p.title)}</b><span>${p.ended === 'complete' ? 'finished' : 'closed early'} ${esc(syDay(p.at))}</span>${built ? `<span>${esc(built)}</span>` : ''}</button></li>`
+  }
+  return `<h3>Past plans</h3><p class="pd-p">Point at one to light up what it built.</p><ul class="sy-plans">${s.plans.map(li).join('')}</ul>`
+}
+// The first map: folders no part reaches, as plain boxes with their file counts, and the endpoint keys nothing names.
+function syFirst(s) {
+  const u = s.unmapped, l = s.leads
+  if (!u && !l) return ''
+  const folders = u ? `<h3>Not mapped yet</h3><p class="pd-p">Each plan adds the folders it touches to the map.</p><ul class="sy-fold">${u.rows.map(f => `<li data-folder="${esc(f.path)}"><b>${esc(f.path)}/</b><span>${esc(syPlural(f.files, 'file'))}</span></li>`).join('')}</ul>`
+    + (u.more ? `<p class="sy-note">and ${u.more} more ${u.more === 1 ? 'folder' : 'folders'}</p>` : '') : ''
+  const leads = l ? `<h3>Not placed yet</h3><p class="pd-p">From .env.example. Nothing is drawn from them until you or Claude name them.</p><p class="sy-leads">${l.keys.map(k => `<code>${esc(k)}</code>`).join('')}${l.more ? ` and ${l.more} more` : ''}</p>` : ''
+  return folders + leads
+}
+// What a plan built, as the ids to keep lit: an area it built lights everything inside.
+function syPlanKeep() {
+  const p = vm.system.plans?.[syPlanAt]
+  if (!p) return null
+  const keep = new Set()
+  for (const id of p.parts) { keep.add(id); const n = syIdx.get(id)?.n; if (n?.kids.length) syLeaves(n).forEach(l => keep.add(l.id)) }
+  return keep
+}
+// A button on the banner or the panel: the page sends the message, and says what it asked for.
+async function syAct(kind, id) {
+  const say = $('sysSay'), name = syName(id)
+  const ok = await post({ kind, id })
+  say.textContent = !ok ? LOST : kind === 'redraw' ? `Asked Claude to redraw ${name}. When it sends the drawing, the question about keeping it comes up here and in the terminal.` : `Marked ${name} as fine. The mark comes back if its files change again.`
+  $('sysDrift').hidden = false
+  clearTimeout(sySayT)
+  sySayT = setTimeout(() => { say.textContent = ''; if (!$('sysDriftBody').innerHTML) $('sysDrift').hidden = true }, 9000)
+}
+
+function syNotes(s) {
+  if (!s.warnings.length && !s.guessed.length) return ''
+  return `<h3>Drawing notes</h3><ul class="lst">${s.warnings.map(w => `<li class="m-warn">${icon('warn')}<span>${esc(w)}</span></li>`).join('')}${s.guessed.length ? `<li class="m-warn">${icon('warn')}<span><b>Guessed:</b> ${esc(s.guessed.map(syName).join(', '))}. The draft asks you to confirm or remove them.</span></li>` : ''}</ul>`
+}
+function syConn(id) {
+  const ls = vm.system.links.filter(l => syInside(l.from, id) !== syInside(l.to, id))
+  if (!ls.length) return ''
+  return `<h4>Connects to</h4><ul class="lst">${ls.map(l => { const out = syInside(l.from, id); return `<li>${icon(out ? 'arrow' : 'back')}<span><b>${esc(syName(out ? l.to : l.from))}</b>: ${esc(l.says)}</span></li>` }).join('')}</ul><p class="hint">Lines are Claude's drawing. Nothing checks them against the code.</p>`
+}
+// Why a part shows what it shows, from its status and the states that build it.
+function syWhy(n) {
+  const st = n.status, p = st.proof, by = n.builtBy.map(chip).join(', '), chk = p?.check || n.builtBy.map(b => syTask(b)?.check).find(Boolean)
+  return {
+    planned: by ? `Not started. ${by} builds it.` : 'Not started, and no state builds it yet.',
+    now: `Claude is working on it${by ? ` in ${by}` : ''}.`,
+    untested: `Built${by ? ` in ${by}` : ''}, and no check has proved it yet.`,
+    tested: `${chk ? code(chk) : 'Its check'} passed after its last edit${p?.at ? `, at ${esc(p.at)}` : ''}.`,
+    changed: `${chk ? code(chk) : 'Its check'} passed${p?.at ? ` at ${esc(p.at)}` : ''}, and its files changed after that, so that pass no longer counts. A new pass brings the tick back.`,
+    failing: `${chk ? code(chk) : 'Its check'} failed on its last run.`,
+    needs: `Claude needs you${by ? ` in ${by}` : ''} before it can go on.`,
+    exists: 'Already in the project. This plan leaves it alone.',
+    change: `Already in the project. ${by ? `${by} will change it.` : 'This plan will change it.'}`,
+    dropped: 'Taken out of the plan. It stays on the record.',
+    outside: 'It runs outside this project, so nothing here can build or test it.',
+  }[st.status] || ''
+}
+function sySide(s) {
+  const h = syIdx.get(syPicked())
+  if (!h) return '<h3>Nothing picked</h3><p class="pd-d">Point at a part to bring out its lines. Pick one to see why it shows what it shows.</p>'
+  if (h.actor) return `<div class="pd-h">${icon('user')}<h3>${esc(h.actor.name)}</h3></div>${h.actor.desc ? `<p class="pd-d">People who ${esc(h.actor.desc)}</p>` : ''}${syConn(h.actor.id)}`
+  const n = h.n, where = h.path.join(', ')
+  const head = mark => `<div class="pd-h">${mark}<h3>${esc(n.name)}</h3></div><p class="pd-p">${where ? esc(where) : 'Top of the system'}</p>${n.desc ? `<p class="pd-d">${esc(n.desc)}</p>` : ''}`
+  if (n.kids.length) return head('') + `<div class="statew">${syCells(n)}<span>${esc(syRoll(n.roll))}</span></div>${syDriftSide(n)}<h4>Parts inside</h4><ul>${n.kids.map(k => `<li><button type="button" class="ts-r row" data-id="${esc(k.id)}"><span class="box ${k.kids.length ? 'ex' : SY_BOX[k.status.status]}"></span><span><b>${esc(k.name)}</b>: ${esc(k.kids.length ? syRoll(k.roll) : SY_PART[k.status.status])}</span></button></li>`).join('')}</ul>${syConn(n.id)}`
+  const st = n.status, k = st.status, p = st.proof
+  const shared = st.tags.includes('shares-file') ? '<p class="hint">These parts share a file, so they change together: an edit there marks them all Changed since test, and the final checks clear them.</p>' : ''
+  const ev = n.outside ? `<h4>Where it runs</h4><p>${esc(n.outside.where || 'Not said')}</p><h4>Why it is on the map</h4><p>${esc(SY_WHY[n.outside.kind] + n.outside.why)}</p>` : ''
+  const ask = n.builtBy.map(syTask).filter(Boolean).map(t => askedFor(t, 'h4')).find(Boolean) || ''
+  const by = n.builtBy.length ? `<h4>Built by</h4><div class="sy-chips">${n.builtBy.map(b => { const t = syTask(b), c = t ? stOf(t) : 'ahead'; return `<button type="button" class="tc ${c}" data-task="${esc(b)}"><span class="box ${c}"></span>${esc(b)}</button>` }).join('')}</div>` : ''
+  const proved = p ? `<h4>Tested by</h4><span class="flp">${esc(p.check || 'a check')}</span>${p.weight || p.at ? `<p class="pd-m">${esc([p.weight ? `On the ${p.weight} weight` : '', p.at ? `${p.weight ? 'at' : 'At'} ${p.at}` : ''].filter(Boolean).join(', '))}</p>` : ''}` : ''
+  const files = n.files?.length ? `<h4>Files</h4>${n.files.map(f => `<span class="flp">${esc(f)}</span>`).join('')}` : ''
+  return head(`<span class="box ${SY_BOX[k]}"></span>`) + `<div class="statew k-${k}">${SY_FOOT[k] ? icon(SY_FOOT[k]) : ''}${SY_PART[k]}</div>`
+    + syTags(st).map(t => `<p class="hint">${esc(t)}</p>`).join('') + (st.note ? `<p class="hint">${esc(st.note)}</p>` : '') + shared + syDriftSide(n)
+    + ask + ev + (k === 'outside' ? '' : `<h4>Why it shows that</h4><p>${syWhy(n)}</p>`) + by + proved + files + syConn(n.id)
+}
+function syFoot(s) {
+  const ls = s.tree.flatMap(syLeaves), n = {}
+  ls.forEach(l => { n[l.status.status] = (n[l.status.status] || 0) + 1 })
+  const added = ls.filter(syAdded).length
+  const keys = SY_KEY.filter(k => n[k]).map(k => `<button type="button" class="key-i" data-key="${k}"><span class="swk k-${k}"></span>${SY_PART[k]}${k === 'outside' ? '' : ` <b>${n[k]}</b>`}</button>`).join('')
+    + (added ? `<button type="button" class="key-i" data-key="added"><span class="mini">Claude added</span> <b>${added}</b></button>` : '')
+  const lines = s.links.length && !syOutline() ? `<span class="keysep"></span><span class="key-i"><span class="swl"></span>Line Claude drew</span><button type="button" class="btn sm" data-every aria-pressed="${syEvery}">${syEvery ? 'Show main lines' : 'Show every line'}</button>` : ''
+  const rev = vm.phase === 'draft' ? 'First draft' : syChangeCount(s.changes) ? 'Changed since sign-off' : 'As signed off'
+  return `<div class="key">${keys}${lines}</div><dl class="tb"><div><dt>Sheet</dt><dd>Whole system</dd></div><div><dt>Drawn by</dt><dd>Claude</dd></div><div><dt>Marks set by</dt><dd>Sentinel</dd></div><div><dt>Revision</dt><dd>${rev}</dd></div></dl>`
+}
+
+function renderSys() {
+  const s = vm.system
+  $('sysNone').hidden = !!s
+  $('sysMap').hidden = !s
+  if (!s) { $('sysSum').textContent = ''; for (const id of ['sysLevel', 'sysViews', 'sysLay', 'sysMain']) put($(id), ''); return }
+  syIdx = new Map()
+  let i = 0
+  const walk = (ns, path, parent) => ns.forEach(n => { syIdx.set(n.id, { n, path, parent, vt: i++ }); walk(n.kids, [...path, n.name], n.id) })
+  walk(s.tree, [], undefined)
+  s.actors.forEach(a => syIdx.set(a.id, { actor: a, path: [], vt: i++ }))
+  if (syPick && !syIdx.has(syPick)) syPick = ''
+  if (syHover && !syIdx.has(syHover)) syHover = ''
+  const t = s.tally, near = s.here.map(h => h.name)
+  const where = near.length ? ` · Claude is in ${near.length > 2 ? `${near.slice(0, 2).join(', ')} and ${near.length - 2} more` : near.join(' and ')}` : ''
+  const nc = syChangeCount(s.changes), outl = syOutline()
+  const main = (syLevel === 'tasks' ? syLoose() : '') + (outl ? syOutl(s) : syBoxes(s))
+  const go = () => {
+    // Focus stays on the control that had it, even when the map is drawn again.
+    const f = document.activeElement, back = f && $('sysp').contains(f) ? (f.dataset.tog ? `[data-tog="${CSS.escape(f.dataset.tog)}"]` : f.dataset.id ? `[data-id="${CSS.escape(f.dataset.id)}"]` : '') : ''
+    $('sysSum').textContent = `${s.name} · ${syPlural(t.total, 'part')} · ${t.built} built · ${t.untestedOrChanged} to test${where}`
+    put($('sysLevel'), SY_LEVELS.map(([k, w]) => `<button type="button" data-lv="${k}" aria-pressed="${syLevel === k}">${w}</button>`).join(''))
+    put($('sysViews'), SY_VIEWS.map(([k, w]) => `<button type="button" data-sv="${k}" aria-pressed="${syView === k}">${w}${k === 'changes' && nc ? `<span class="cnt">${nc}</span>` : ''}</button>`).join(''))
+    put($('sysLay'), syNarrow.matches ? '' : [['boxes', 'Boxes'], ['outline', 'Outline']].map(([k, w]) => `<button type="button" data-lay="${k}" aria-pressed="${syLayout === k}">${w}</button>`).join(''))
+    $('sysLay').hidden = syNarrow.matches
+    const drift = syDrift(s)
+    put($('sysDriftBody'), drift)
+    $('sysDrift').hidden = !drift && !$('sysSay').textContent
+    put($('sysNotes'), syNotes(s))
+    const first = syFirst(s)
+    put($('sysFirst'), first)
+    $('sysFirst').hidden = !first
+    put($('sysPlans'), syPlans(s))
+    $('sysPlans').hidden = !s.plans?.length
+    put($('sysFinish'), syFinish(s))
+    put($('sysView'), syView === 'testing' ? syTesting(s) : syView === 'changes' ? syChanges(s) : '')
+    $('sysMain').className = outl ? '' : 'msheet'
+    $('sysMain').dataset.level = syLevel
+    put($('sysMain'), main)
+    put($('sysFoot'), syFoot(s))
+    put($('sysSide'), sySide(s))
+    $('sysWrap').classList.toggle('lens', syView !== 'all')
+    syMarkPick()
+    syLines()
+    syDim()
+    if (back && !$('sysp').contains(document.activeElement)) $('sysp').querySelector(back)?.focus({ preventScroll: true })
+  }
+  // A changed map moves into place; the same map with a new pick or view changes in place.
+  const moved = $('sysMain')._h && $('sysMain')._h !== main
+  if (moved && document.startViewTransition && !reduce.matches && !$('sysp').hidden) document.startViewTransition(go)
+  else go()
+}
+// The pick is marked in place, so the map's markup never depends on it and a pick never redraws the map.
+function syMarkPick() {
+  const id = syPicked()
+  $('sysMain').querySelectorAll('button[data-id]').forEach(b => b.setAttribute('aria-pressed', b.dataset.id === id))
+  $('sysMain').querySelectorAll('[data-tog]').forEach(b => { if (!b.dataset.id) b.setAttribute('aria-pressed', b.dataset.tog === id) })
+  $('sysMain').querySelectorAll('.sg[data-id]').forEach(g => g.classList.toggle('picked', g.dataset.id === id))
+}
+
+// ---- the System page's lines ----
+// At rest one line stands for all the links between two top-level blocks; pointing at or picking a part brings out its
+// own links, with what they carry. Every line runs at right angles through the gaps, so none passes under a box. A part
+// inside a closed block is reached through the block that holds it.
+let syRes = [], syTrunks = [], syBox = {}, syHeads = {}, syExtra = [], syUsed = null, syDrawn = new Set()
+function syLines() {
+  const wrap = $('sysWrap'), rest = $('sysRest'), s = vm?.system
+  syRes = []; syTrunks = []; syBox = {}
+  if (!s || $('sysp').hidden || syOutline()) { rest.innerHTML = $('sysLn').innerHTML = $('sysLbl').innerHTML = ''; syDrawn = new Set(); return }
+  const R = wrap.getBoundingClientRect(), els = {}
+  const rectOf = e => { const b = e.getBoundingClientRect(); return { x: Math.round(b.left - R.left), y: Math.round(b.top - R.top), w: Math.round(b.width), h: Math.round(b.height) } }
+  $('sysMain').querySelectorAll('[data-id]').forEach(e => { els[e.dataset.id] = e })
+  syHeads = {}; syUsed = { h: new Map(), v: new Map() }
+  for (const id in els) {
+    syBox[id] = rectOf(els[id])
+    if (els[id].matches('.sg:not(.fold)')) syHeads[id] = [...els[id].querySelector(':scope > .sg-h').children].map(rectOf)
+  }
+  syExtra = [...$('sysMain').querySelectorAll('.sg-hd > *, .sy-loose')].map(rectOf)
+  const vis = id => { for (let c = id; c; c = syIdx.get(c)?.parent) if (els[c]) return c; return null }
+  const pairs = {}
+  for (const l of s.links) {
+    if (!syIdx.has(l.from) || !syIdx.has(l.to)) continue
+    const a = vis(l.from), b = vis(l.to)
+    if (!a || !b || a === b || syInside(a, b) || syInside(b, a)) continue
+    const p = pairs[a + '\n' + b] ??= { a, b, labels: [], src: [] }
+    p.labels.push(l.says); p.src.push([l.from, l.to])
+  }
+  syRes = Object.values(pairs)
+  const trunks = {}
+  for (const r of syRes) {
+    const a = syChain(r.a)[0], b = syChain(r.b)[0]
+    if (a === b || !syBox[a] || !syBox[b]) continue
+    const t = trunks[a + '\n' + b] || trunks[b + '\n' + a] || (trunks[a + '\n' + b] = { a, b, trunk: true, labels: [], src: [] })
+    t.labels.push(...r.labels); t.src.push(...r.src)
+    if (t.a !== a) t.both = true
+  }
+  syTrunks = Object.values(trunks)
+  const w = wrap.offsetWidth, h = wrap.offsetHeight
+  for (const g of [rest, $('sysLn')]) { g.setAttribute('width', w); g.setAttribute('height', h); g.setAttribute('viewBox', `0 0 ${w} ${h}`) }
+  rest.innerHTML = (syEvery ? syRes : syTrunks).map(r => syPathTag(r, `ln${r.trunk ? ' tr' : ''}`, 'sy-ma')).join('')
+  syFocus()
+}
+const syPathTag = (r, cls, mk) => `<path class="${cls}" d="${syPath(r).d}" data-a="${esc(r.a)}" data-b="${esc(r.b)}" marker-end="url(#${mk})"${r.both ? ` marker-start="url(#${mk})"` : ''}/>`
+const syTops = () => [...vm.system.actors.map(a => a.id), ...vm.system.tree.map(n => n.id)].filter(id => syBox[id])
+// What a line has to go round. A block that holds neither end is a wall, so a line never wanders through a block it has
+// nothing to do with. Inside a block that holds an end, the walls are its parts and its header.
+function syWalls(a, b, all) {
+  const out = [...syExtra]
+  const walk = id => {
+    const n = syIdx.get(id)?.n
+    if (n?.kids.length && syHeads[id] && (all || syInside(a, id) || syInside(b, id))) { out.push(...syHeads[id]); n.kids.forEach(k => { if (syBox[k.id]) walk(k.id) }) }
+    else out.push(syBox[id])
+  }
+  syTops().forEach(walk)
+  return out
+}
+function syPath(r) {
+  if (r.path) return r.path
+  const A = syBox[r.a], B = syBox[r.b]
+  const walls = r.trunk ? [...syTops().map(id => syBox[id]), ...syExtra] : syWalls(r.a, r.b)
+  let pts = syRoute(A, B, walls, true) || syRoute(A, B, walls) || syRoute(A, B, syWalls(r.a, r.b, true))
+  if (!pts) pts = [[A.x + A.w / 2, A.y + A.h], [B.x + B.w / 2, B.y]]
+  return r.path = { pts, d: syRound(pts) }
+}
+// The cheapest path over a grid made from the edges of every wall. Bends cost extra, hugging a box costs a little, and
+// running along a line already drawn costs less, so lines share a trunk instead of sitting a pixel apart. One box above
+// another joins bottom to top and side by side joins side to side.
+// ponytail: a fresh grid per line, fine for the 60-odd boxes a map holds. Cache the grid if a map ever gets far bigger.
+function syRoute(A, B, walls, strict) {
+  // STUB is the run every line keeps at each end: 14px straight plus the 6px a rounded corner takes, so an arrowhead never
+  // sits in a corner.
+  const M = 5, STUB = 20, HUG = 6, BEND = 30, PORT = 60, DX = [0, 0, -1, 1], DY = [-1, 1, 0, 0], BACK = [1, 0, 3, 2]
+  const across = (a, al, b, bl) => { const lo = Math.max(a, b), hi = Math.min(a + al, b + bl); return hi - lo >= 12 ? Math.round((lo + hi) / 2) : null }
+  const px = across(A.x, A.w, B.x, B.w), py = across(A.y, A.h, B.y, B.h)
+  // The arrow end faces the line. A box wholly above or below the other is entered through its top or bottom; a side
+  // takes a line only from a box beside it, or when no route reaches the top or bottom (strict is off).
+  const ports = (b, cost, end) => {
+    const x = px ?? Math.round(b.x + b.w / 2), y = py ?? Math.round(b.y + b.h / 2)
+    // The edge that faces away from the other box costs twice as much again, so a line does not loop round to come in from
+    // behind.
+    const o = b === A ? B : A, away = o.y >= b.y + b.h ? 0 : o.y + o.h <= b.y ? 1 : -1
+    const extra = d => ((py === null ? d >= 2 : d < 2 && px === null) ? cost : 0) + (d === away ? cost * 2 : 0)
+    // A wide box also takes lines at points along its top and bottom, so a line that has to go round something, or past a
+    // header sitting over part of the box, can still come in from above.
+    const qs = b.w >= 90 ? [...[.15, .3, .5, .7, .85].map(f => Math.round(b.x + b.w * f)), b.x + 18, b.x + b.w - 18].filter(q => q !== x) : []
+    return [[x, b.y, 0, 0], [x, b.y + b.h, 1, 0], [b.x, y, 2, 0], [b.x + b.w, y, 3, 0], ...qs.flatMap(q => [[q, b.y, 0, 10], [q, b.y + b.h, 1, 10]])]
+      .filter(([, , d]) => !(end && strict && py === null && d >= 2))
+      .map(([x, y, d, off]) => ({ x, y, d, extra: extra(d) + off, nx: x + DX[d] * STUB, ny: y + DY[d] * STUB }))
+  }
+  // Two boxes that face each other across a clear gap take one straight line, however short the gap.
+  const clear = (x1, y1, x2, y2) => walls.every(w => w === A || w === B || Math.max(x1, x2) <= w.x - M || Math.min(x1, x2) >= w.x + w.w + M || Math.max(y1, y2) <= w.y - M || Math.min(y1, y2) >= w.y + w.h + M)
+  if (px !== null && B.y >= A.y + A.h && clear(px, A.y + A.h, px, B.y)) return [[px, A.y + A.h], [px, B.y]]
+  if (px !== null && A.y >= B.y + B.h && clear(px, A.y, px, B.y + B.h)) return [[px, A.y], [px, B.y + B.h]]
+  if (py !== null && B.x >= A.x + A.w && clear(A.x + A.w, py, B.x, py)) return [[A.x + A.w, py], [B.x, py]]
+  if (py !== null && A.x >= B.x + B.w && clear(A.x, py, B.x + B.w, py)) return [[A.x, py], [B.x + B.w, py]]
+  const from = ports(A, PORT), to = ports(B, PORT * 2.5, true)
+  const axis = vals => {
+    const v = [...new Set(vals)].sort((p, q) => p - q), out = []
+    v.forEach((c, i) => { out.push(c); if (v[i + 1] - c >= 20) out.push(Math.round((c + v[i + 1]) / 2)) })
+    return out
+  }
+  const xs = axis([...walls.flatMap(w => [w.x - M, w.x + w.w + M]), ...from.map(p => p.nx), ...to.map(p => p.nx), ...syUsed.v.keys()])
+  const ys = axis([...walls.flatMap(w => [w.y - M, w.y + w.h + M]), ...from.map(p => p.ny), ...to.map(p => p.ny), ...syUsed.h.keys()])
+  const nx = xs.length, ny = ys.length, ix = new Map(xs.map((v, i) => [v, i])), iy = new Map(ys.map((v, i) => [v, i]))
+  const seen = new Uint8Array(nx * ny)
+  const kind = (i, j) => { // 1 clear, 2 close to a box, 3 blocked
+    const k = i + j * nx
+    if (seen[k]) return seen[k]
+    let out = 1
+    for (const w of walls) {
+      const gap = Math.max(w.x - xs[i], xs[i] - w.x - w.w, w.y - ys[j], ys[j] - w.y - w.h)
+      if (gap < M) { out = 3; break }
+      if (gap < M + HUG) out = 2
+    }
+    return seen[k] = out
+  }
+  const shared = (x1, y1, x2, y2) => {
+    const flat = y1 === y2, mid = flat ? (x1 + x2) / 2 : (y1 + y2) / 2
+    return syUsed[flat ? 'h' : 'v'].get(flat ? y1 : x1)?.some(([lo, hi]) => mid > lo && mid < hi)
+  }
+  const size = nx * ny * 4, dist = new Float64Array(size).fill(Infinity), prev = new Int32Array(size).fill(-1)
+  const goals = new Map(to.filter(p => ix.has(p.nx) && iy.has(p.ny)).map(p => [ix.get(p.nx) + iy.get(p.ny) * nx, p]))
+  const h = (i, j) => .7 * (Math.max(B.x - xs[i], 0, xs[i] - B.x - B.w) + Math.max(B.y - ys[j], 0, ys[j] - B.y - B.h))
+  const buckets = []
+  const push = (k, g, i, j, floor = 0) => { if (g >= dist[k]) return false; dist[k] = g; (buckets[Math.max(floor, Math.round(g + h(i, j)))] ||= []).push(k); return true }
+  from.forEach(p => { const i = ix.get(p.nx), j = iy.get(p.ny); if (kind(i, j) !== 3) push((i + j * nx) * 4 + p.d, p.extra, i, j) })
+  let best = Infinity, end = -1, endPort = null
+  for (let c = 0; c < buckets.length && c <= best; c++) {
+    const b = buckets[c]
+    while (b?.length) {
+      const k = b.pop(), d = k % 4, n = (k - d) / 4, i = n % nx, j = (n - i) / nx, g = dist[k]
+      const goal = goals.get(n)
+      // A line ends only by running straight into the card, so it meets the edge head-on: one that comes down from above
+      // enters through the top, and a side is used only when the last run is level and has room.
+      if (goal && d === BACK[goal.d]) {
+        const total = g + goal.extra
+        if (total < best) { best = total; end = k; endPort = goal }
+      }
+      for (let nd = 0; nd < 4; nd++) {
+        if (nd === BACK[d]) continue
+        const ni = i + DX[nd], nj = j + DY[nd]
+        if (ni < 0 || nj < 0 || ni >= nx || nj >= ny) continue
+        const type = kind(ni, nj)
+        if (type === 3) continue
+        const len = Math.abs(xs[ni] - xs[i]) + Math.abs(ys[nj] - ys[j])
+        const nk = (ni + nj * nx) * 4 + nd
+        const cost = len * (type === 2 ? 1.3 : 1) * (shared(xs[i], ys[j], xs[ni], ys[nj]) ? .7 : 1) + (nd === d ? 0 : BEND)
+        if (push(nk, g + cost, ni, nj, c)) prev[nk] = k
+      }
+    }
+  }
+  if (end < 0) return null
+  const nodes = []
+  for (let k = end; k >= 0; k = prev[k]) { const n = (k - k % 4) / 4, i = n % nx; nodes.unshift([xs[i], ys[(n - i) / nx]]) }
+  const first = from.find(p => p.nx === nodes[0][0] && p.ny === nodes[0][1])
+  const pts = [[first.x, first.y], ...nodes, [endPort.x, endPort.y]].filter((p, i, a) => {
+    const q = a[i - 1], r = a[i + 1]
+    return !(q && r && ((q[0] === p[0] && p[0] === r[0]) || (q[1] === p[1] && p[1] === r[1])))
+  })
+  pts.slice(1).forEach((q, i) => {
+    const p = pts[i], flat = p[1] === q[1], m = syUsed[flat ? 'h' : 'v'], c = flat ? p[1] : p[0], lo = Math.min(flat ? p[0] : p[1], flat ? q[0] : q[1]), hi = Math.max(flat ? p[0] : p[1], flat ? q[0] : q[1])
+    m.set(c, [...(m.get(c) || []), [lo, hi]])
+  })
+  return pts
+}
+function syRound(pts) {
+  let d = `M${pts[0]}`
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [ax, ay] = pts[i - 1], [x, y] = pts[i], [bx, by] = pts[i + 1]
+    const r = Math.min(6, (Math.abs(x - ax) + Math.abs(y - ay)) / 2, (Math.abs(bx - x) + Math.abs(by - y)) / 2)
+    d += `L${x - Math.sign(x - ax) * r},${y - Math.sign(y - ay) * r}Q${x},${y} ${x + Math.sign(bx - x) * r},${y + Math.sign(by - y) * r}`
+  }
+  return d + `L${pts.at(-1)}`
+}
+// A top-level block answers with its main lines. A part answers with its own links; links wholly inside a block stay out.
+function syFocusLines(id) {
+  if (!id) return []
+  if (syIdx.get(id)?.n?.kids.length && syTrunks.some(t => t.a === id || t.b === id)) return syTrunks.filter(t => t.a === id || t.b === id)
+  return syRes.filter(r => r.a === id || r.b === id || r.src.some(([p, q]) => syInside(p, id) !== syInside(q, id)))
+}
+// Spots along a line for its label: long flat runs near the far end first, where lines from one part have split apart.
+function sySpots(pts, w) {
+  return pts.slice(1).map((q, i) => ({ p: pts[i], q, i, long: Math.abs(q[0] - pts[i][0]) + Math.abs(q[1] - pts[i][1]) >= 40, flat: q[1] === pts[i][1] }))
+    .sort((a, b) => b.long - a.long || b.flat - a.flat || b.i - a.i)
+    .flatMap(s => [.5, .35, .65, .2, .8].flatMap(t => {
+      const x = s.p[0] + (s.q[0] - s.p[0]) * t, y = s.p[1] + (s.q[1] - s.p[1]) * t
+      return s.flat ? [[x, y]] : [[x, y], [x - w / 2 + 8, y], [x + w / 2 - 8, y]]
+    }))
+}
+function syFocus() {
+  const top = $('sysLn'), lbl = $('sysLbl'), id = syHover || syPicked()
+  const ls = vm?.system && !syOutline() && !$('sysp').hidden && syIdx.has(id) ? syFocusLines(id) : []
+  if (!ls.length) { top.innerHTML = lbl.innerHTML = ''; syDrawn = new Set(); return }
+  const st = syIdx.get(id).n?.status?.status
+  const [tone, mk] = st === 'now' ? ['blue', 'sy-mb'] : st === 'failing' ? ['red', 'sy-mr'] : ['', 'sy-mt']
+  const keyOf = r => r.a + '\n' + r.b
+  // Only a line that wasn't out already draws itself in.
+  top.innerHTML = ls.map(r => syPathTag(r, `lt ${tone}${syDrawn.has(keyOf(r)) ? '' : ' new'}`, mk)).join('')
+  top.querySelectorAll('.lt.new').forEach(p => p.style.setProperty('--len', p.getTotalLength().toFixed(1)))
+  syDrawn = new Set(ls.map(keyOf))
+  // Each label takes the first spot along its line that covers no box and no other label, else the first that covers no
+  // other label. The side panel lists every link too.
+  const R = $('sysWrap').getBoundingClientRect()
+  const boxes = [...$('sysMain').querySelectorAll('.pt, .sg.fold, .actor, .sg-n, .sg-s, .sg-hd')].map(e => { const b = e.getBoundingClientRect(); return { x: b.left - R.left, y: b.top - R.top, w: b.width, h: b.height } })
+  const labels = []
+  const probe = lbl.appendChild(document.createElement('span'))
+  probe.className = 'lbl'; probe.style.visibility = 'hidden'
+  const hit = (os, x, y, w, h) => os.some(o => x + w / 2 > o.x && x - w / 2 < o.x + o.w && y + h / 2 > o.y && y - h / 2 < o.y + o.h)
+  const html = ls.map(r => {
+    let text = r.labels[0], used = 1
+    while (used < r.labels.length && text.length + r.labels[used].length <= 30) text += ', ' + r.labels[used++]
+    if (used < r.labels.length) text += `, ${r.labels.length - used} more`
+    probe.textContent = text
+    const w = probe.offsetWidth, h = probe.offsetHeight
+    const spots = sySpots(r.path.pts, w).map(([x, y]) => [Math.max(w / 2 + 4, Math.min(R.width - w / 2 - 4, x)), y])
+    const at = spots.find(([x, y]) => !hit(boxes, x, y, w, h) && !hit(labels, x, y, w, h)) || spots.find(([x, y]) => !hit(labels, x, y, w, h))
+    if (!at) return ''
+    labels.push({ x: at[0] - w / 2, y: at[1] - h / 2, w, h })
+    return `<span class="lbl" style="left: ${at[0]}px; top: ${at[1]}px">${esc(text)}</span>`
+  }).join('')
+  lbl.innerHTML = html
+}
+
+// What stays lit: the part pointed at and what its lines reach, the parts the key's swatch names, or the view's parts.
+function syKeep() {
+  const leaves = () => vm.system.tree.flatMap(syLeaves)
+  if (syHover) {
+    const keep = new Set()
+    const add = i => { keep.add(i); const n = syIdx.get(i)?.n; if (n?.kids.length) syLeaves(n).forEach(l => keep.add(l.id)) }
+    add(syHover)
+    syFocusLines(syHover).forEach(r => { add(r.a); add(r.b) })
+    return keep
+  }
+  const planned = syPlanKeep()
+  if (planned) return planned
+  if (syKey === 'added') return new Set(leaves().filter(syAdded).map(n => n.id))
+  if (syKey) return new Set(leaves().filter(n => n.status.status === syKey).map(n => n.id))
+  if (syView === 'testing') return new Set(leaves().filter(n => ['failing', 'needs', 'changed', 'untested'].includes(n.status.status)).map(n => n.id))
+  if (syView === 'changes') { const c = vm.system.changes; return new Set([...c.added, ...c.edited].map(p => p.id).concat(leaves().filter(n => n.status.status === 'dropped').map(n => n.id))) }
+  return null
+}
+function syDim() {
+  if (!vm?.system) return
+  const keep = syKeep()
+  $('sysMain').querySelectorAll('[data-id]').forEach(el => {
+    const id = el.dataset.id, n = syIdx.get(id)?.n, open = el.matches('.sg:not(.fold)')
+    const on = !keep || keep.has(id) || !!n?.kids.length && syLeaves(n).some(l => keep.has(l.id))
+    el.classList.toggle('dim', !on && !open)
+    el.classList.toggle('dimh', !on && open)
+  })
+  $('sysRest').classList.toggle('quiet', !!(syHover || syKey))
+}
+const syRefresh = () => { syMarkPick(); syFocus(); syDim() }
+
+$('sysp').addEventListener('click', e => {
+  const t = e.target, lv = t.closest('[data-lv]'), sv = t.closest('[data-sv]'), lay = t.closest('[data-lay]'), task = t.closest('[data-task]'), src = t.closest('[data-src]')
+  const redo = t.closest('[data-redraw]'), fine = t.closest('[data-fine]')
+  if (redo || fine) return syAct(redo ? 'redraw' : 'fine', (redo || fine).dataset[redo ? 'redraw' : 'fine'])
+  if (lv) { syLevel = lv.dataset.lv; syFlip.clear(); store.set('sysLevel', syLevel); return renderSys() }
+  if (sv) { syView = sv.dataset.sv; return renderSys() }
+  if (lay) { syLayout = lay.dataset.lay; return renderSys() }
+  if (t.closest('[data-every]')) { syEvery = !syEvery; return renderSys() }
+  if (src) return openSource(src.dataset.src)
+  if (task) {
+    history.pushState({ task: task.dataset.task, pushed: true }, '', '#task-' + task.dataset.task)
+    route()
+    return showTask(task.dataset.task)
+  }
+  const tog = t.closest('[data-tog]')
+  if (tog) {
+    const id = tog.dataset.tog
+    syFlip.has(id) ? syFlip.delete(id) : syFlip.add(id)
+    syPick = id
+    return renderSys()
+  }
+  const part = t.closest('[data-id]')
+  if (part && !part.classList.contains('sg')) {
+    syPick = part.dataset.id
+    put($('sysSide'), sySide(vm.system))
+    syRefresh()
+    if (matchMedia('(max-width: 1180px)').matches) $('sysSide').scrollIntoView({ block: 'nearest', behavior: reduce.matches ? 'auto' : 'smooth' })
+  }
+})
+// Pointing inside an open block means the part under the pointer, not the block, unless it is on the block's header.
+const syPoint = e => {
+  const t = e.target, key = t.closest?.('[data-key]')?.dataset.key || ''
+  const tog = t.closest?.('#sysMain [data-tog]'), el = t.closest?.('#sysMain [data-id]')
+  const id = tog?.dataset.tog || (el && !el.matches('.sg:not(.fold)') ? el.dataset.id : '') || ''
+  if (id === syHover && key === syKey) return
+  syHover = id; syKey = key
+  syFocus(); syDim()
+}
+for (const ev of ['pointerover', 'focusin']) { $('sysWrap').addEventListener(ev, syPoint); $('sysFoot').addEventListener(ev, syPoint) }
+const syLeave = () => { if (syHover || syKey) { syHover = syKey = ''; syFocus(); syDim() } }
+$('sysWrap').addEventListener('pointerleave', syLeave)
+$('sysFoot').addEventListener('pointerleave', syLeave)
+for (const id of ['sysWrap', 'sysFoot']) $(id).addEventListener('focusout', e => { if (!$(id).contains(e.relatedTarget)) syLeave() })
+// Pointing at or focusing a past plan keeps its parts lit, until the pointer or the focus leaves the list.
+const syPlanTo = at => { if (at !== syPlanAt) { syPlanAt = at; syDim() } }
+for (const ev of ['pointerover', 'focusin']) $('sysPlans').addEventListener(ev, e => { const b = e.target.closest?.('[data-plan]'); if (b) syPlanTo(+b.dataset.plan) })
+$('sysPlans').addEventListener('pointerleave', () => syPlanTo(-1))
+$('sysPlans').addEventListener('focusout', e => { if (!$('sysPlans').contains(e.relatedTarget)) syPlanTo(-1) })
+new ResizeObserver(() => { if (fview === 'system' && vm?.system) syLines() }).observe($('sysWrap'))
+syNarrow.addEventListener('change', () => { if (fview === 'system' && vm?.system) renderSys() })
+document.fonts?.ready.then(() => { if (fview === 'system' && vm?.system) syLines() })
 
 // ---- the Library ----
 

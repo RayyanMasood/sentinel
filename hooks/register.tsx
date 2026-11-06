@@ -1,13 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { Checking, Depth, FlowDef, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PlanLibrary, Run, Source, StateDef, Switches, View, Weight } from '../types'
+import type { Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight } from '../types'
+import { areaOf, changesOf, driftOf, dropParts, envLeads, fingerprint, formatSystem, mergeDrawing, outlineOf, parseMarks, parsePlans, parseSystem, partsInside, unmappedFolders, verifyEvidence, withBase, withDrawn, withoutFine, withPlan, withProof, type Git } from './system'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import {
-  AUTO_CAP, RETRIES, VIEWS, blockedOn, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
+  AUTO_CAP, RETRIES, VIEWS, blockedOn, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, forwardState, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, lineNote, PARALLEL_DRAFT, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, lastLines, withTail, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
-  instructionOf, libraryOn, withWeight, librarySection, toldHere, dropStates, addsMidRun, keepAdded, sourceText,
-  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine,
+  instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
+  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
+  stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -65,10 +67,10 @@ When the user asks for a flow (states reused in plans), send action "flow" (name
 
 const LOCK = `${TAG} The user signed off the plan we're working from. Call ${TOOL} with action "define" for it. If part of it is already done, list the finished states too and set "start" to the first unfinished one. Add the decisions already made, where the plan is written ("source"), a "ref" for each state, and a plain title, problem and approach for each state (they read these on its task page). The user checks the draft before it locks, so stop after define.`
 
-const SCHEMA = {
+export const SCHEMA = {
   type: 'object',
   properties: {
-    action: { type: 'string', enum: ['define', 'revise', 'advance', 'brief', 'propose', 'skip', 'finish', 'amend', 'decide', 'escalate', 'status', 'flow'] },
+    action: { type: 'string', enum: ['define', 'revise', 'advance', 'brief', 'propose', 'skip', 'finish', 'amend', 'decide', 'escalate', 'map', 'status', 'flow'] },
     order: { type: 'array', items: { type: 'string' }, description: 'revise: every state id of the plan, in order. While a plan runs, revise only adds states: send the new ones whole in states, placed after the active state in order.' },
     title: { type: 'string', description: 'define: the plan name' },
     states: {
@@ -81,6 +83,7 @@ const SCHEMA = {
           label: { type: 'string' },
           check: { type: 'string', description: 'shell command; exit 0 means the state is done' },
           files: { type: 'array', items: { type: 'string' }, description: 'globs this state may edit' },
+          parts: { type: 'array', items: { type: 'string' }, description: "the ids of the system map's parts this state builds, parts with nothing inside them. Sentinel records where they stand when the state starts and what its check proves." },
           ref: { type: 'string', description: 'where this state is described (doc section, plan step)' },
           asked: { type: 'array', items: { type: 'string' }, description: `where this state came from: short quotes copied word for word from the plan the user approved or their typed messages, at least 5 words each or a whole message. Sentinel compares them and refuses any that aren't there. Words from a part marked out of scope don't count.` },
           added: { type: 'string', description: 'in place of asked, when nothing the user approved or typed asks for this state: your reason, in a sentence. The state shows as your addition. Added while a plan runs, it goes in and finishes, unless its files can reach the breaking list: then it asks the user when it starts.' },
@@ -137,8 +140,38 @@ const SCHEMA = {
         required: ['id', 'text'],
       },
     },
+    system: {
+      type: 'object',
+      description: "define, revise, map: the system map's parts, lines and people that this plan builds or changes, joined to the project's map in .sentinel/system.json. A part or person with an id already on the map replaces it. Sentinel sets every part's status itself; the drawing says only what the parts are.",
+      properties: {
+        name: { type: 'string', description: "the map's name, for a project that has none yet" },
+        parts: {
+          type: 'array',
+          description: 'a part is one thing the system is made of. Put it inside another with parent; files are globs from the project root. Something outside the project (Redis, a service in another repo) has kind "outside" and evidence, in place of files.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'lower-case letters, digits, - and _' },
+              name: { type: 'string' },
+              parent: { type: 'string', description: 'the id of the part this one is inside' },
+              desc: { type: 'string', description: 'one line on what it does' },
+              files: { type: 'array', items: { type: 'string' }, description: 'globs of the files that make up the part' },
+              kind: { type: 'string', enum: ['outside'] },
+              evidence: { type: 'object', description: 'outside parts only, one of: {"seen": [{"file", "text"}]} (Sentinel checks the text is in the file), {"said": "what the user told you"} or {"guess": "why you think so"}' },
+              where: { type: 'string', description: 'outside parts: where it runs, such as a container' },
+            },
+            required: ['id', 'name'],
+          },
+        },
+        lines: { type: 'array', description: 'what passes between two parts or people', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, says: { type: 'string' } }, required: ['from', 'to', 'says'] } },
+        actors: { type: 'array', description: 'the people or systems that use it', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, desc: { type: 'string' } }, required: ['id', 'name'] } },
+      },
+    },
+    area: { type: 'string', description: 'status: the id of a part; the reply shows that part, what is inside it, its files and its lines' },
+    drop: { type: 'array', items: { type: 'string' }, description: 'map: ids of parts you drew in this plan, to take off the map; needs a reason. A part a state builds, or one on the map the user locked, stays.' },
+    redraw: { type: 'array', items: { type: 'string' }, description: 'map: ids of the parts or areas you reread and redrew because the user asked; "system" holds the new drawing' },
     check: { type: 'string', description: 'amend: replace the active state check' },
-    reason: { type: 'string', description: 'amend, decide, escalate, skip, finish: why' },
+    reason: { type: 'string', description: 'amend, decide, escalate, skip, finish, map: why' },
     topic: { type: 'string', description: 'decide: what was decided' },
     choice: { type: 'string', description: 'decide: the choice' },
     kind: { type: 'string', enum: ['breaking', 'stuck', 'blocked'], description: 'escalate. blocked: the work waits on something outside, such as a locked machine or someone\'s reply; the reason names what is needed, and then you stop.' },
@@ -151,12 +184,13 @@ export const register: Register = on => {
     await $.tool.register({ name: 'plan', description: DESCRIPTION, inputSchema: SCHEMA, isDeferred: false })
     await $.command.register({
       name: 'sentinel',
-      description: 'Sentinel plan pane. Args: focus, map, ledger, browser, source (the saved source, with each quote marked), lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, finish [reason] (close the plan with no final checks), hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
-      argumentHint: '[focus|map|ledger|browser|source|lock|lock <depth ids>|pause|resume|skip <state>|finish|finish <reason>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
+      description: 'Sentinel plan pane. Args: focus, map, ledger, system (the system map, once the plan has one), browser, source (the saved source, with each quote marked), lock (sign off the agreed plan; then lock the draft, with the ids of the depth answers you tick), pause, resume, skip <state>, finish [reason] (close the plan with no final checks), hands-free [off], reset, parallel on|off (experimental), library, on|off <name> [personal], weight light|standard|thorough [personal], trust <name>, add <flow> <where>, drop <flow>, flow save project|personal, flow discard',
+      argumentHint: '[focus|map|ledger|system|browser|source|lock|lock <depth ids>|pause|resume|skip <state>|fine <part>|redraw <part>|finish|finish <reason>|hands-free|hands-free off|reset|parallel on|parallel off|library|on <name>|off <name>|weight light|weight standard|weight thorough|trust <name>|add <flow> start|end|before <state>|after <state>|drop <flow>|flow save project|flow save personal|flow discard]',
     })
     // Final checks and check runs a lost session left showing are over.
     await change($, r => (r.sweep || r.checking ? { ...r, sweep: undefined, checking: undefined } : r))
     void libraryView($).catch(() => undefined)
+    void lookAll($).catch(() => undefined)
     // A new session starts empty; say so when the project holds an unfinished plan.
     void after($).then(async () => {
       const r = await read($, run)
@@ -226,6 +260,8 @@ export const register: Register = on => {
     if (arg === 'resume') return { text: await resume($) }
     if (arg === 'browser') return { text: await openBrowser($) }
     if (arg.startsWith('skip ')) return { text: await skipNow($, e.args.trim().slice(5).trim()) }
+    if (arg === 'fine' || arg.startsWith('fine ')) return { text: await fineNow($, arg.slice(4).trim()) }
+    if (arg === 'redraw' || arg.startsWith('redraw ')) return { text: await askRedraw($, arg.slice(6).trim()) }
     if (arg === 'finish' || arg.startsWith('finish ')) return { text: await finishNow($, e.args.trim().slice(6).trim()) }
     // flows is the list's older name.
     if (arg === 'library' || arg === 'flows') return { text: await libraryList($) }
@@ -242,22 +278,34 @@ export const register: Register = on => {
     }
     if (arg.startsWith('flow ')) return { text: await flowCommand($, arg.slice(5).trim()) }
     if ((VIEWS as string[]).includes(arg)) await update($, view, () => arg as View)
+    if (arg === 'system') await lookAll($).catch(() => undefined)
     // Bare /sentinel shows what needs you: a draft to check, or a stuck run.
     await openPane($, !arg && needsYou(await read($, run)))
-    return { text: 'Sentinel pane open.' }
+    return { text: arg === 'system' && mapFault ? faultText() : 'Sentinel pane open.' }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const band = e.props.hasSurvey ? undefined : renderBand($.ui.resolve(e), summarize(await read($, run)), {
+    const band = e.props.hasSurvey ? undefined : renderBand($.ui.resolve(e), summarize(await read($, run), looked), {
       open: focus => void openPane($, focus),
+      system: () => void update($, view, () => 'system').then(() => lookAll($)).then(() => openPane($, false)),
       lock: () => void lockNow($),
       keep: id => void keepNow($, id),
       takeOut: id => void takeOut($, id).then(t => $.ui.toast(`Sentinel: ${t}`)),
       resume: () => void resume($),
+      answer: () => void answerNow($),
+      asking: stopOpen !== undefined,
       saveFlow: scope => void keepFlow($, scope).then(t => $.ui.toast(`Sentinel: ${t}`)),
       discardFlow: () => void flowCommand($, 'discard').then(t => $.ui.toast(`Sentinel: ${t}`)),
     })
     return band ?? next(e)
+  })
+
+  // Sentinel's own question. The engine skips the hook that asks, so the one below, which is a hook of its own, is what
+  // lets the dashboard answer it and close the dialog. Claude's questions and every other call go through untouched.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    const qs = (e as unknown as { questions?: { question: string }[] }).questions
+    if (stopOpen === undefined || qs?.length !== 1 || qs[0]!.question !== stopOpen) return next(e)
+    return (await asked($, e as Args<'tool.call'>, next as unknown as Next<'tool.call'>, '', 'sentinel'))[0]
   })
 
   on('tool.call', async ($, e, next) => {
@@ -485,10 +533,10 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const el = $.ui.resolve(e)
-    const vm = summarize(await read($, run))
+    const vm = summarize(await read($, run), looked)
     const v = await read($, view)
     return renderPane(el, vm, v, {
-      pick: next => void update($, view, () => next),
+      pick: next => void update($, view, () => next).then(() => (next === 'system' ? lookAll($) : undefined)),
       browser: () => void openBrowser($),
     })
   })
@@ -630,10 +678,11 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
   await change($, x => (x.draft ? (d = lockDraft(x, now())) : x))
   if (!d) return 'No draft to lock.'
   void after($)
+  const unsaved = d.drawing ? await saveMap($, d.drawing.map) : undefined
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
-  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took].filter(Boolean).join(' ')
+  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, unsaved ?? ''].filter(Boolean).join(' ')
   later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}`
+  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${unsaved ? ` ${unsaved}` : ''}`
 }
 
 const keepNow = ($: $, id: string) => change($, x => keepAdded(x, id, now()))
@@ -747,7 +796,7 @@ async function saved($: $): Promise<Run | undefined> {
 async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal): Promise<Result> {
   const typed = user || spoke()
   // What a plan is locked with comes from the switches files, never from the model.
-  const { library: _library, named: _named, messages: _messages, ...sent } = raw
+  const { library: _library, named: _named, messages: _messages, drawn: _drawn, approved: _approved, ...sent } = raw
   let input = relInput(await $.session.root(), sent)
   const label = `plan ${input.action}${input.to ? ` → ${input.to}` : ''}`
   if (input.action === 'brief') return brief($, input, label)
@@ -755,6 +804,12 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   // advance runs the check itself, unless the state's last call is a passing run of it that still holds. Plan calls
   // in between change no files.
   const was = await read($, run)
+  // A redraw the user asked for, with no plan running: the old drawing stays until they say yes in the dialog.
+  if (input.action === 'map' && input.redraw !== undefined && !isUnfinished(was)) {
+    return was.draft
+      ? record($, { deny: 'A draft is open, so put the redrawn parts in its "system" with revise. The map file changes when the plan locks.' }, { kind: 'plan', label, denied: true })
+      : redrawMap($, input, label)
+  }
   // A new plan, or a new draft, takes the Library as the switches set it now. A revise keeps the draft's copy. The
   // flows that are on add themselves by their rules.
   const lib = input.action === 'define' ? await libraryNow($).catch(() => undefined) : undefined
@@ -818,17 +873,62 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   }
   if (input.action === 'revise' && addsMidRun(was)) input = { ...input, messages: (await read($, said)).messages }
   if (signal?.aborted) return { deny: STOPPED }
+  // The drawing joins the map the plan is built on, and what Sentinel finds of it goes with the input.
+  let guessed: string[] = []
+  if (input.action === 'map' || input.action === 'revise' || (input.action === 'define' && was.signedOff)) {
+    const d = await drawn($, was, input)
+    if (typeof d === 'string') return record($, { deny: d }, { kind: 'plan', label, denied: true })
+    ;({ input, guessed } = d)
+  }
+  // A part the user signed off on comes off the map only if they say yes in the dialog. Anything but a yes leaves it there.
+  if (input.action === 'map' && !was.handsFree) {
+    const ids = signedDrops(was, input)
+    if (ids.length) {
+      const answer = await askIn($, dropAsk(was, ids, input.reason ?? ''))
+      if (answer.how !== 'yes') return record($, { deny: dropText(ids, answer) }, { kind: 'plan', label, denied: true })
+      input = { ...input, approved: ids }
+    }
+  }
   let acted: Acted | undefined
   let fresh = false
   await change($, r => {
-    acted = act(r, input, now(), proofs, Date.now(), typed, without)
-    fresh = !!acted.run.pending && acted.run.pending !== r.pending
-    return acted.run
+    let x = act(r, input, now(), proofs, Date.now(), typed, without)
+    fresh = !!x.run.pending && x.run.pending !== r.pending
+    // A stop that waits on the user is theirs to open in the dialog, and a typed message does not open it.
+    if (x.stop && x.run.pending) x = { ...x, run: { ...x.run, pending: { ...x.run.pending, ok: x.run.pending.ok ?? false } } }
+    acted = x
+    return x.run
   })
   const a = acted!
   const p = a.run.pending
   if (fresh && p) $.ui.toast(p.kind === 'before' ? `Sentinel: ${p.state} asks for your OK before it starts` : `Sentinel: ${p.state} is ready for your review`)
+  if (a.stop && p) {
+    const ask = stopAsk(a.run, a.stop)
+    if (ask) {
+      const answer = await askIn($, ask)
+      const told = stopText(p, answer)
+      await change($, r => stopSettled(r, answer, now(), Date.now()))
+      if (answer.how === 'yes' && a.stop === 'after') {
+        // The work is accepted: the advance goes through now, in this call.
+        const again = await planCall($, raw, user, signal)
+        return again.deny !== undefined ? again : ({ ...again, result: `${told} ${String(again.result)}` } as Result)
+      }
+      const sorry = a.stop === 'after'
+      return attach(attach(await record($, sorry ? { deny: told } : { result: told }, { kind: 'plan', label, denied: sorry }), note), slow)
+    }
+  }
+  // The checks that passed in this call prove their states' parts: the state just left, and the done states whose checks ran again.
+  if (a.ok && input.action === 'advance') {
+    const again = (a.run.plan?.states ?? []).filter(s => s.check && proofs[s.check]?.pass).map(s => s.id)
+    const left = forwardState(was, input.to)
+    await markPass($, [...(left ? [left] : []), ...again])
+  }
+  // The map is saved once the plan locks, and when the map changes in a plan that runs: a draft leaves the file alone.
+  const saved = a.ok && (a.event === 'locked' || input.action === 'map') && a.run.drawing ? await saveMap($, a.run.drawing.map) : undefined
+  const drawnNotes = [guessed.length ? `Sentinel could not find ${guessed.join(', ')} where you cited it, so ${guessed.length === 1 ? 'that outside part is' : 'those outside parts are'} marked as a guess. The user can confirm or remove ${guessed.length === 1 ? 'it' : 'them'}.` : '', saved ?? ''].filter(Boolean).join('\n')
   const warn = await atStart($)
+  // A plan that names a part whose files changed since the map was drawn: Claude rereads it before relying on the drawing.
+  const drifted = a.ok && (input.action === 'define' || input.action === 'revise') ? await driftNote($, a.run) : undefined
   // With parallel states on, the main conversation hears which states can run beside its own.
   const parallel = a.ok && ['define', 'revise', 'advance', 'status'].includes(input.action) && (await parallelOn($))
   const beside = parallel && input.action !== 'revise' ? besideNote(a.run) : undefined
@@ -837,7 +937,10 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const apart = parallel && (input.action === 'define' || input.action === 'revise') && plan ? untestedNote(plan.states) : undefined
   // Only a draft can still change its order.
   const inLine = parallel && (input.action === 'define' || input.action === 'revise') && a.run.draft ? lineNote(a.run.draft.plan!.states) : undefined
-  if (input.action === 'status') return attach(attach({ result: `${a.text}\nParallel states are ${parallel ? 'on.' : 'off. Only the user turns them on, with /sentinel parallel on.'}` }, warn), beside)
+  if (input.action === 'status') {
+    const map = await mapReply($, a.run, input.area)
+    return attach(attach({ result: `${a.text}\nParallel states are ${parallel ? 'on.' : 'off. Only the user turns them on, with /sentinel parallel on.'}${map ? `\n${map}` : ''}` }, warn), beside)
+  }
   if (a.event === 'locked') {
     void $.ui.open({ id: PANE, title: 'Sentinel' })
     $.ui.toast(`Sentinel: plan locked, ${stateOf(a.run)?.id} is active`)
@@ -846,7 +949,10 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     void $.ui.open({ id: PANE, title: 'Sentinel' })
     $.ui.toast('Sentinel: draft ready. Review it from the band above the prompt')
   }
-  if (a.event === 'complete') $.ui.toast(`Sentinel: plan ${a.run.closed ? 'closed' : 'complete'}`)
+  if (a.event === 'complete') {
+    $.ui.toast(`Sentinel: plan ${a.run.closed ? 'closed' : 'complete'}`)
+    await logPlan($, a.run)
+  }
   const unrun = a.event === 'complete' && late.length
     ? `Not checked again before the plan completed, still running after ${WAIT_MS / 60_000} minutes, so Sentinel stopped it: ${late.map(c => `\`${c}\``).join(', ')}. Tell the user.`
     : undefined
@@ -856,7 +962,123 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const offered = a.event === 'drafted' && flowsSeen?.length
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
-  return attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), beside), apart), inLine), unrun), rules), offered)
+  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), inLine), unrun), rules), offered)
+}
+
+// ---- the drawing: what the model draws with a plan, merged into the project's map ----
+
+// An outside part cited in a file is read from the project only: a path that leaves it reads as not found.
+const readInside = ($: $, root: string, file: string): Promise<string | undefined> =>
+  /^([a-z]:)?[\\/]/i.test(file) || file.split(/[\\/]/).includes('..') ? Promise.resolve(undefined)
+    : Promise.resolve($.fs.read(`${root}/${file}`)).then(t => String(t).slice(0, 2_000_000), () => undefined)
+
+// How many parts get a look at whether their files are there; past it they count as there, so a big map costs a bounded
+// number of git runs.
+const EXISTS_CAP = 40
+
+// The input with the drawing merged into the map the plan stands on: the project's file for a new plan, the draft's map for
+// a revise, the plan's own map while it runs. The model's own "system" is dropped either way. A string says why it can't be.
+// Parts drawn now get the commit they were drawn at; outside parts cited in a file are checked, and the ones that fail
+// come back as guessed.
+async function drawn($: $, was: Run, input: PlanInput, outside = false): Promise<{ input: PlanInput; guessed: string[] } | string> {
+  const { system, ...rest } = input
+  if (input.action === 'revise' && !was.draft) {
+    return system !== undefined && addsMidRun(was) ? 'While a plan runs, change the map with the map action. revise only adds states.' : { input: rest, guessed: [] }
+  }
+  const root = await $.session.root()
+  // outside: a redraw with no plan running, which starts from the project's map, not from a finished plan's.
+  const base = (input.action === 'revise' ? was.draft?.drawing?.map : input.action === 'map' && !outside ? was.drawing?.map : undefined) ?? (await mapNow($))
+  const inRoot: Git = (args, stdin) => git($, root, args, stdin === undefined ? {} : { stdin })
+  // A redraw covers the parts and areas it names: each, and what is inside it, is drawn at the commit now.
+  const redone = input.redraw === undefined ? undefined : redrawIds(base, input.redraw)
+  if (typeof redone === 'string') return redone
+  const head = system !== undefined || redone ? await inRoot(['rev-parse', '--short', 'HEAD']).then(s => s.trim(), () => '') : ''
+  let map = base
+  let guessed: string[] = []
+  if (system !== undefined) {
+    const merged = mergeDrawing(base, system)
+    if (!merged.ok) return `The drawing was refused: ${merged.error}`
+    const before = new Map((base?.parts ?? []).map(p => [p.id, JSON.stringify(p)]))
+    const parts = await Promise.all(merged.map.parts.map(async p => {
+      if (JSON.stringify(p) === before.get(p.id)) return p
+      const checked = await verifyEvidence(p, f => readInside($, root, f))
+      return !checked.drawnAt && head ? { ...checked, drawnAt: head } : checked
+    }))
+    guessed = parts.filter((p, k) => p.evidence !== merged.map.parts[k]!.evidence).map(p => p.id)
+    map = { ...merged.map, parts }
+  }
+  if (map && redone && head) {
+    const area = new Set(redone.flatMap(id => partsInside(map!, id)))
+    map = { ...map, parts: map.parts.map(p => (area.has(p.id) ? { ...p, drawnAt: head } : p)) }
+  }
+  if (!map) return { input: rest, guessed: [] }
+  const states = input.action === 'define' ? input.states : input.action === 'revise' ? (revised(was, input) as PlanInput).states : was.plan?.states
+  const built = new Set((states ?? []).flatMap(s => (Array.isArray(s.parts) ? s.parts : [])))
+  const groups = new Set(map.parts.flatMap(p => (p.parent ? [p.parent] : [])))
+  const look = map.parts.filter(p => p.files?.length && !groups.has(p.id) && !built.has(p.id))
+  const found = await Promise.all(look.slice(0, EXISTS_CAP).map(async p => {
+    const fp = await fingerprint(p.files, inRoot)
+    return 'files' in fp && fp.files > 0 ? p.id : undefined
+  }))
+  const exists = [...found.filter((id): id is string => !!id), ...look.slice(EXISTS_CAP).map(p => p.id)]
+  return { input: { ...rest, drawn: { map, exists } }, guessed }
+}
+
+// The parts or areas a redraw names, checked against the map they are on. A string says what is wrong.
+function redrawIds(map: SystemMap | undefined, raw: unknown): string[] | string {
+  const ids = Array.isArray(raw) ? raw.map(x => (typeof x === 'string' ? x.trim() : '')) : []
+  if (!ids.length || ids.includes('')) return 'redraw needs the ids of the parts or areas you reread, as a list of strings.'
+  if (!map) return 'There is no map to redraw. Send "system" with the parts to draw.'
+  const unknown = ids.filter(id => !map.parts.some(p => p.id === id))
+  return unknown.length ? `${unknown.map(id => `"${id}"`).join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not ${unknown.length === 1 ? 'a part' : 'parts'} of the map.` : [...new Set(ids)]
+}
+
+// A redraw with no plan running. Claude rereads an area and sends the drawing, and the map file changes only when the user
+// says yes: the question names the area and what changed. Any other answer leaves the old drawing.
+async function redrawMap($: $, input: PlanInput, label: string): Promise<Result> {
+  const refuse = (deny: string) => record($, { deny }, { kind: 'plan', label, denied: true })
+  const d = await drawn($, await read($, run), input, true)
+  if (typeof d === 'string') return refuse(d)
+  const was = (await mapNow($))!
+  let map = d.input.drawn!.map
+  const drop = [...new Set((input.drop ?? []).map(x => String(x).trim()).filter(Boolean))]
+  if (drop.length) {
+    const dropped = dropParts(map, drop)
+    if (!dropped.ok) return refuse(dropped.error)
+    map = dropped.map
+  }
+  const ids = redrawIds(was, input.redraw) as string[]
+  const names = ids.map(id => was.parts.find(p => p.id === id)!.name)
+  const changes = changesOf(was, map)
+  const answer = await askIn($, redrawAsk(names, changes))
+  const told = redrawText(names, answer, redrawSame(changes))
+  if (answer.how !== 'yes') return refuse(told)
+  const saved = await saveMap($, map)
+  await lookAll($)
+  return record($, { result: saved ? `${told}\n${saved}` : told }, { kind: 'plan', label, denied: false })
+}
+
+// What the model reads of the map in a status reply: the outline, or one area, and the notes the drawing checks left.
+async function mapReply($: $, r: Run, area?: string): Promise<string | undefined> {
+  const d = (r.draft ?? r).drawing
+  const map = d?.map ?? (await mapNow($))
+  if (!map) return mapFault ? faultText() : undefined
+  const notes = d?.warnings.length ? `\nMap notes:\n${d.warnings.map(w => `- ${w}`).join('\n')}` : ''
+  return `${area?.trim() ? areaOf(map, area.trim()) : outlineOf(map)}${notes}`
+}
+
+// The project's map file, written the way a merge reads well. Sentinel writes it and never commits it. A string says why
+// it could not be saved.
+async function saveMap($: $, map: SystemMap): Promise<string | undefined> {
+  // A file that is there and does not read is somebody's work, a merge in the middle of being settled: it is not written over.
+  await mapNow($)
+  if (mapFault) return `Sentinel did not save the map. ${faultText()} The drawing stays in the run only. Tell the user.`
+  try {
+    await $.fs.write(`${await $.session.root()}/.sentinel/system.json`, formatSystem(map))
+    return undefined
+  } catch (e) {
+    return `Sentinel could not save the map to .sentinel/system.json (${e instanceof Error ? e.message : String(e)}). It stays in the run only. Tell the user.`
+  }
 }
 
 // What the sign-off adds while quote-the-source is on, so the first define can get it right.
@@ -1269,6 +1491,7 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
     }, { kind: 'plan', label, denied: true })
   }
   await change($, x => startMember(x, st.id, { agent, name: wt.name }, now(), Date.now()))
+  await markStart($)
   return record($, { result: `Started a member agent for ${st.id} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
 }
 
@@ -1467,6 +1690,8 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
       return (landed = touched(late ? x : memberIn(x, id, answer, now(), Date.now())))
     })
     left = left.filter(f => !files.includes(f))
+    // Its work is in the project now, so the state's parts are proved as they stand.
+    if (!late) await markPass($, [id])
     if (!left.length) await $.process.run(['git', 'worktree', 'remove', '--force', path], { cwd: root }).catch(() => undefined)
     const kept = left.length
       ? `It also changed files outside ${id}'s list, which stay in its worktree at .claude/worktrees/${m.name}/: ${left.slice(0, 20).join(', ')}${left.length > 20 ? ` and ${left.length - 20} more` : ''}. Bring over what the plan needs (amend first), then remove the worktree with \`git worktree remove --force .claude/worktrees/${m.name}\`.`
@@ -1493,6 +1718,7 @@ function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string
     st.check ? `${st.id} is done when \`${st.check}\` exits 0, run from ${path}.` : `${st.id} has no check: say what you found.`,
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),
+    mapHere(r, st),
     toldHere(r, st),
     'Make no commits and leave the branches alone. You may start helper agents; they meet the same limits. When you are done, stop and say what you did. Sentinel checks your work and brings it back to the project.',
   ].filter(Boolean).join('\n\n')
@@ -1503,6 +1729,7 @@ function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string
 // fails-without-change is taken first.
 async function atStart($: $): Promise<string | undefined> {
   await snapStart($)
+  await markStart($)
   const was = await read($, run)
   const check = startCheck(was)
   if (!check) return undefined
@@ -1515,6 +1742,207 @@ async function atStart($: $): Promise<string | undefined> {
     return out.run
   })
   return note
+}
+
+// ---- the system map's marks: where a part stood when its state started, and the proof a passing check left ----
+
+// The project's map, or none when there is no file or it does not read. A file that is there and does not read (a merge
+// conflict, say) leaves its reason in mapFault, for the roads that tell the user.
+let mapFault: string | undefined
+const faultText = () => `The map file .sentinel/system.json is not in use. ${mapFault}`
+async function mapNow($: $): Promise<SystemMap | undefined> {
+  const text = String(await $.fs.read(`${await $.session.root()}/.sentinel/system.json`).catch(() => ''))
+  const parsed = text ? parseSystem(text) : undefined
+  mapFault = parsed && !parsed.ok ? parsed.error : undefined
+  return parsed?.ok ? parsed.map : undefined
+}
+
+// Each of these parts as git sees its files now. A part with no files, or that is not on the map, has no fingerprint.
+async function printsOf($: $, map: SystemMap, ids: string[]): Promise<Record<string, Fingerprint>> {
+  const root = await $.session.root()
+  const inRoot: Git = (args, stdin) => git($, root, args, stdin === undefined ? {} : { stdin })
+  const out: Record<string, Fingerprint> = {}
+  for (const id of ids) out[id] = await fingerprint(map.parts.find(p => p.id === id)?.files, inRoot)
+  looked = { ...looked, now: { ...looked.now, ...out } }
+  return out
+}
+
+// What the System screens know besides the run: the saved proofs, and each part's files as they were last looked at. A
+// state's start and pass look at their own parts; lookAll looks at them all, when a session starts and when the System tab
+// opens. A shell command that changes a file waits for the next look.
+let looked: MapLook = {}
+// ponytail: looks at this many parts at most (two git runs each); an index of changed files would be the upgrade.
+const LOOK_CAP = 60
+async function lookAll($: $): Promise<void> {
+  const map = await mapNow($)
+  if (!map) {
+    looked = {}
+    if (mapFault) $.ui.toast(`Sentinel: ${faultText()}`)
+    return
+  }
+  const marks = parseMarks(String(await $.fs.read(`${await $.session.root()}/.sentinel/marks.json`).catch(() => '')))
+  const plans = parsePlans(String(await $.fs.read(`${await $.session.root()}/.sentinel/plans.json`).catch(() => '')))
+  looked = { marks, now: {}, map, plans }
+  const leaves = map.parts.filter(p => p.kind !== 'outside' && p.files?.length && !map.parts.some(q => q.parent === p.id))
+  await printsOf($, map, leaves.slice(0, LOOK_CAP).map(p => p.id))
+  const facts = await driftFacts($, map)
+  // The first-map lists: folders no part reaches (git lists the files, so none without a repo) and endpoint keys nothing names.
+  const unmapped = unmappedFolders(map, facts.files, globMatch)
+  const leads = envLeads(String(await $.fs.read(`${await $.session.root()}/.env.example`).catch(() => '')), map)
+  looked = { ...looked, drift: withoutFine(driftOf(map, facts, globMatch), marks, looked.now ?? {}), unmapped, leads }
+  await after($)
+}
+
+// What git says about the project since the commits the map's parts were drawn at. With no repo there is nothing to ask. A
+// commit git does not know comes back null. Files not tracked yet count as added since every commit.
+// ponytail: looks back over this many distinct commits at most (one git run each).
+const DRIFT_COMMITS = 20
+async function driftFacts($: $, map: SystemMap): Promise<DriftFacts> {
+  const root = await $.session.root()
+  const g = (args: string[]) => git($, root, args)
+  if (!(await g(['rev-parse', '--short', 'HEAD']).then(() => true, () => false))) return { git: false, since: {}, files: [] }
+  const lines = async (args: string[]) => (await g(args).catch(() => '')).split('\n').map(l => l.trim()).filter(Boolean)
+  const [here, fresh, gone] = await Promise.all([lines(['ls-files', '-co', '--exclude-standard']), lines(['ls-files', '-o', '--exclude-standard']), lines(['ls-files', '-d'])])
+  const files = [...new Set(here)].filter(f => !gone.includes(f))
+  const since: DriftFacts['since'] = {}
+  const commits = [...new Set(map.parts.flatMap(p => (p.drawnAt ? [p.drawnAt] : [])))].slice(0, DRIFT_COMMITS)
+  await Promise.all(commits.map(async c => {
+    since[c] = await g(['diff', '--name-status', '-M', c]).then(out => [...parseDiff(out), ...fresh.map((path): Change => ({ how: 'A', path }))], () => null)
+  }))
+  return { git: true, since, files }
+}
+// git diff --name-status lines: M, A and D then the path; R and a score, the old path, then the new one. Copies and type changes read as the new file.
+function parseDiff(out: string): Change[] {
+  return out.split('\n').flatMap((l): Change[] => {
+    const [code, a, b] = l.split('\t')
+    if (!code || !a) return []
+    if (code[0] === 'R' && b) return [{ how: 'R', was: a, path: b }]
+    if (code[0] === 'A' || code[0] === 'C') return [{ how: 'A', path: b ?? a }]
+    if (code[0] === 'D') return [{ how: 'D', path: a }]
+    return [{ how: 'M', path: a }]
+  })
+}
+
+// The user says the marks on a part, or on every part in an area, are fine: each is kept as its files are now, and comes
+// back when they change. The proof marks are not touched.
+async function fineNow($: $, id: string): Promise<string> {
+  const map = await mapNow($)
+  const part = id ? map?.parts.find(p => p.id === id) : undefined
+  if (!id) return 'Say which part: /sentinel fine <part>.'
+  if (!map || !part) return `"${id}" is not a part of the map.`
+  // The first command of a session can come before the session's look at git has finished.
+  if (!looked.drift) await lookAll($)
+  const marked = partsInside(map, id).filter(x => looked.drift?.parts[x])
+  if (!marked.length) return `${part.name} has no mark to clear.`
+  const prints = await printsOf($, map, marked)
+  await remark($, async marks => {
+    const out = { ...marks }
+    for (const x of marked) {
+      const fp = prints[x]
+      if (fp && 'hash' in fp) out[x] = { ...out[x], fine: fp.hash }
+    }
+    return out
+  })
+  await lookAll($)
+  return `Marked ${part.name} as fine. The mark comes back if its files change again.`
+}
+
+// The user asks for a part or an area to be reread. Claude hears which files, what Sentinel saw change, and what to send back.
+// The question that ends it is Sentinel's own, asked when Claude sends the drawing.
+async function askRedraw($: $, id: string): Promise<string> {
+  const map = await mapNow($)
+  const part = id ? map?.parts.find(p => p.id === id) : undefined
+  if (!id) return 'Say which part: /sentinel redraw <part>.'
+  if (!map || !part) return `"${id}" is not a part of the map.`
+  const inside = partsInside(map, id).map(x => map.parts.find(p => p.id === x)!)
+  const files = inside.filter(p => p.files?.length).map(p => `${p.id} (${p.files!.join(', ')})`)
+  const seen = inside.filter(p => looked.drift?.why[p.id]).map(p => `${p.id}: ${looked.drift!.why[p.id]}`)
+  later($, `${TAG} The user asks you to redraw ${part.name} (${id}). ${files.length ? `Reread its files: ${files.join('; ')}.` : 'It holds no files of its own, so reread the parts inside it.'}${seen.length ? ` Sentinel saw: ${seen.join(' ')}` : ''} `
+    + `Then call ${TOOL} with {"action": "map", "redraw": ["${id}"]} and "system" holding the parts you changed or added, in the same shape as when you draft a plan. Leave "system" out if the drawing is still right. `
+    + `To take a part off, add "drop" with "reason". The user answers a question in the dialog when you send it, so don't ask it yourself.`)
+  return `Asked Claude to redraw ${part.name}.`
+}
+
+// The parts a draft names that drifted, with the reason for each, for Claude to reread and redraw. Nothing when the plan names
+// none, or none of them drifted, or the user said they were fine.
+async function driftNote($: $, r: Run): Promise<string | undefined> {
+  const top = r.draft ?? r
+  const named = new Set((top.plan?.states ?? []).flatMap(s => s.parts ?? []))
+  const map = named.size ? (top.drawing?.map ?? (await mapNow($))) : undefined
+  if (!map) return undefined
+  const marks = parseMarks(String(await $.fs.read(`${await $.session.root()}/.sentinel/marks.json`).catch(() => '')))
+  const raw = driftOf(map, await driftFacts($, map), globMatch)
+  const asked = Object.keys(raw.parts).filter(id => named.has(id))
+  const d = withoutFine(raw, marks, await printsOf($, map, asked.filter(id => marks[id]?.fine)))
+  const ids = asked.filter(id => d.parts[id])
+  if (!ids.length) return undefined
+  const list = ids.slice(0, 6).map(id => `${id} (${d.why[id]})`).join('; ') + (ids.length > 6 ? `; and ${ids.length - 6} more` : '')
+  return `${TAG} These parts the plan names changed since the map was drawn: ${list} Reread their files and redraw them before you rely on the drawing: in "system" of define or revise while you draft, with the map action once the plan runs.`
+}
+
+// A plan ended: one line in plans.json, kept out of git. Each write reads the file first, so lines from other sessions stay.
+let logging: Promise<unknown> = Promise.resolve()
+function logPlan($: $, r: Run): Promise<unknown> {
+  const title = r.plan?.title
+  if (!title) return Promise.resolve()
+  const parts = [...new Set((r.plan?.states ?? []).flatMap(s => s.parts ?? []))]
+  return (logging = logging.then(async () => {
+    const file = `${await $.session.root()}/.sentinel/plans.json`
+    const lines = withPlan(parsePlans(String(await $.fs.read(file).catch(() => ''))), { title, at: new Date().toISOString(), ended: r.closed ? 'closed' : 'complete', parts })
+    await $.fs.write(file, JSON.stringify(lines))
+    looked = { ...looked, plans: lines }
+    await after($)
+  }).catch(() => undefined))
+}
+
+// One change to marks.json at a time. Each reads the file first, so calls that overlap keep each other's, and marks
+// from earlier plans stay. With no map, or one that will not read, nothing is written and nothing is said.
+let marking: Promise<unknown> = Promise.resolve()
+function remark($: $, change: (marks: Marks, map: SystemMap) => Promise<Marks>): Promise<unknown> {
+  return (marking = marking.then(async () => {
+    const map = await mapNow($)
+    if (!map) return
+    const file = `${await $.session.root()}/.sentinel/marks.json`
+    const before = parseMarks(String(await $.fs.read(file).catch(() => '')))
+    const after = await change(before, map)
+    looked = { ...looked, marks: after }
+    if (JSON.stringify(after) !== JSON.stringify(before)) await $.fs.write(file, JSON.stringify(after))
+  }).catch(() => undefined))
+}
+
+// A state starts, in the main conversation or in a member: each part it builds gets its baseline, once per visit.
+async function markStart($: $): Promise<void> {
+  const r = await read($, run)
+  const visits: [StateDef | undefined, string][] = Object.entries(r.running ?? {}).map(([id, m]) => [stateOf(r, id), `${id}@${m.since}`])
+  if (isUnfinished(r)) visits.push([stateOf(r), `${r.active}@${r.enteredAt}`])
+  if (!visits.some(([st]) => st?.parts?.length)) return
+  await remark($, async (marks, map) => {
+    let out = marks
+    for (const [st, since] of visits) {
+      const todo = (st?.parts ?? []).filter(id => marks[id]?.since !== since)
+      if (todo.length) out = withBase(out, todo, await printsOf($, map, todo), since)
+    }
+    return out
+  })
+}
+
+// These states were just left, or their checks just passed again: each part they build is looked at as it stands now. A
+// check that passed proves the part. A state with no check proves nothing, but its parts are looked at all the same, so
+// they read as built and not tested. The plan drew these parts for what the state left, so they are not marked as changed
+// since the drawing for the files the state itself wrote.
+async function markPass($: $, ids: string[]): Promise<void> {
+  const r = await read($, run)
+  const states = [...new Set(ids)].flatMap(id => stateOf(r, id) ?? []).filter(s => s.parts?.length)
+  if (!states.length) return
+  await remark($, async (marks, map) => {
+    let out = marks
+    for (const s of states) {
+      const prints = await printsOf($, map, s.parts!)
+      if (s.check) out = withProof(out, s.parts!, prints, { check: s.check, weight: r.library?.weight, at: now(), step: r.step, run: r.startedAt ?? 0 })
+      out = withDrawn(out, s.parts!, prints)
+    }
+    return out
+  })
 }
 
 // The Bash tool, with its permission check, from the project root (or a member's worktree): the run the model would make.
@@ -1879,7 +2307,7 @@ function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: bo
 
 // .sentinel/ holds Sentinel's run files, kept out of git, and the project's Library (flows, instructions and switches),
 // committed with the code.
-const IGNORE = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\n!library.json\n'
+const IGNORE = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\n!library.json\n!system.json\n'
 
 let writing: Promise<void> = Promise.resolve()
 let ignored = false
@@ -1939,7 +2367,7 @@ function snapshot(r: Run, parallel: boolean): string {
   const members = Object.fromEntries(Object.entries(r.running ?? {}).map(([id, m]) => [id, { agent: m.agent, since: m.since }]))
   const flows = (flowsSeen ?? []).map(({ file: _file, ...f }) => ({ ...f, ...(f.scope === 'built-in' ? {} : { file: `${shownDir(f.scope)}/${f.name}.json` }) }))
   const extra = { savedAt: Date.now(), ask: asking, answered, draftKey: draftKey(r), parallel, members, flows, flowSaid, library: librarySeen, draftLibrary: r.draft?.library }
-  return `window.__sentinel && window.__sentinel(${JSON.stringify({ ...summarize(r), ...extra })})\n`
+  return `window.__sentinel && window.__sentinel(${JSON.stringify({ ...summarize(r, looked), ...extra })})\n`
 }
 
 function statusText(r: Run): string | undefined {
@@ -1991,7 +2419,9 @@ let served: Promise<string | undefined> | undefined
 let serving = false
 // The question the page shows (its id comes back with the answer), and the last answer with where it was given.
 type Question = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] }
-let asking: { id: string; questions: Question[]; t: string; state?: string } | undefined
+let asking: { id: string; questions: Question[]; t: string; state?: string; by?: 'sentinel' } | undefined
+// The text of the question Sentinel has open in the dialog, if it has one. The hook below that answers it for the page knows it by this.
+let stopOpen: string | undefined
 let answered: { q: string; ans: string; by: 'chat' | 'browser'; t: string; state?: string } | undefined
 const waiting = new Map<string, (answers: unknown) => void>()
 let asks = 0
@@ -2074,6 +2504,9 @@ async function fromPage($: $, m: Record<string, unknown>) {
     const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items }) }), '')
     return why ? toast(why) : undefined
   }
+  // The update check's mark, said to be fine from the page. It needs no plan.
+  if (m.kind === 'fine' && typeof m.id === 'string') return toast(await fineNow($, m.id))
+  if (m.kind === 'redraw' && typeof m.id === 'string') return toast(await askRedraw($, m.id))
   if ((m.kind === 'keepadded' || m.kind === 'dropadded') && r.draft && m.draft === draftKey(r) && typeof m.state === 'string') {
     if (m.kind === 'keepadded') return void (await keepNow($, m.state))
     const out = await takeOut($, m.state)
@@ -2149,7 +2582,7 @@ async function fromPage($: $, m: Record<string, unknown>) {
   await change($, was => {
     const x = m.kind === 'approve' && m.all === true ? handsFree(was, true, now()) : was
     return {
-      ...(m.kind === 'approve' ? heard(x, Date.now()) : { ...x, pending: undefined, auto: 0 }),
+      ...(m.kind === 'approve' ? { ...heard(x, Date.now()), pending: x.pending && { ...x.pending, ok: true } } : { ...x, pending: undefined, auto: 0 }),
       audit: [...x.audit, { step: x.step, t: now(), state: st.id, kind: 'decided' as const, text: said }],
       log: [...x.log, { t: now(), icon: m.kind === 'approve' ? '✓' : '?', tone: m.kind === 'approve' ? ('ok' as const) : ('ask' as const), text: `${st.id} · ${m.kind === 'approve' ? 'approved' : 'changes asked'}` }],
     }
@@ -2182,7 +2615,7 @@ async function ask($: $, e: Args<'tool.call'>, next: Next<'tool.call'>, q = ''):
 // A question from the main conversation shows on the page too while it's up. The first answer counts: the dialog's, or
 // the page's, which closes the dialog. Never throws on its own account, since the hook's catch would ask again.
 // Returns the result and the ledger's label, which carries the answer.
-async function asked($: $, e: Args<'tool.call'>, next: Next<'tool.call'>, q: string): Promise<[Result, string]> {
+async function asked($: $, e: Args<'tool.call'>, next: Next<'tool.call'>, q: string, by?: 'sentinel'): Promise<[Result, string]> {
   if (!serving || e.agentId !== undefined) return [await next(e), q]
   const sent = (e as unknown as { questions?: Question[] }).questions ?? []
   const questions = sent.map(x => ({ question: x.question, header: x.header, multiSelect: x.multiSelect, options: (x.options ?? []).map(o => ({ label: o.label, description: o.description })) }))
@@ -2192,7 +2625,7 @@ async function asked($: $, e: Args<'tool.call'>, next: Next<'tool.call'>, q: str
     const v = answersOf(a, questions)
     if (v) ok(v)
   }))
-  asking = { id, questions, t: now(), state }
+  asking = { id, questions, t: now(), state, ...(by ? { by } : {}) }
   void after($)
   const dialog = next(e)
   // Once the page has answered, the dialog closes, and what its call does then doesn't matter.
@@ -2210,6 +2643,38 @@ async function asked($: $, e: Args<'tool.call'>, next: Next<'tool.call'>, q: str
     asking = undefined
     void after($)
   }
+}
+
+// A question of Sentinel's own, in the engine's dialog. The reply is read against the two labels: Esc, "Chat about this" and a
+// run with no one to ask all reject, and none of them is an answer. The dashboard answers it too (see the hook that
+// registers for AskUserQuestion), so the task clock counts the wait as the user's.
+async function askIn($: $, ask: StopAsk): Promise<Answer> {
+  stopOpen = ask.question
+  questionsUp++
+  void after($)
+  try {
+    return readAnswer(ask, String(await $.ui.ask(ask.question, { options: [ask.yes, ask.no], header: 'Your OK' })))
+  } catch {
+    return { how: 'none' }
+  } finally {
+    stopOpen = undefined
+    questionsUp--
+    void after($)
+  }
+}
+
+// The band's Answer button: the stop's question once more, after Esc. Claude's call ended long ago, so it hears the
+// answer in a message, as it does from the dashboard.
+async function answerNow($: $) {
+  const r = await read($, run)
+  const p = pendingOf(r)
+  if (!isLive(r) || !p || stopOpen !== undefined || settled(r)) return
+  const ask = stopAsk(r, p.kind)
+  if (!ask) return
+  const answer = await askIn($, ask)
+  if (answer.how === 'none') return
+  await change($, x => stopSettled(x, answer, now(), Date.now()))
+  tell($, `${TAG} ${stopText(p, answer, true)}`)
 }
 
 // The page's answers: one non-empty string for each question, keyed by its text. Anything else is dropped.

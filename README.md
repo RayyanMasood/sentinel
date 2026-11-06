@@ -48,6 +48,21 @@ Sentinel labels each tool call by whether it moved the work forward. Over the la
 
 At `H ≤ 0.25` the run is stuck. Claude gets a note that names the pattern (cycle, drift or static), the file version it went back to and the failure that keeps coming back, with what to try next. The dashboard turns red and offers a field for your own hint, which reaches Claude with its next tool result, and a Pause button.
 
+## The System map
+
+Beside the plan, Sentinel keeps a picture of the project: its parts, the people who use it and the lines between them. Claude draws it. Sentinel sets what each part shows, and checks it against git.
+
+- **Claude draws, Sentinel sets the status.** In `define`, Claude sends the drawing as `system` and names the parts each state builds as `parts`. A part then shows one of: Not built, Already there, Will change, Claude is here, Untested, Tested, Changed since test, Check failing or Needs you. Claude can't mark its own work: a part is Tested only when its state's check passed and the part's files changed since the state started. A state with no check proves nothing, so a part it builds shows Untested. A group takes a colour from its parts. Red means a check is failing and amber means something needs you. Blue means Claude is inside, and green means every part is Tested.
+- **The lines are Claude's drawing.** Nothing checks them against the code, and the part's panel says so. A drawing with a gap (a state that builds no part, a part nothing builds and no file backs, a part whose state has no check) gets a note on the draft, in the run's log and on the System tab. These notes never stop a lock.
+- **Outside parts** are things the code relies on that aren't in the repo, such as a store, a queue or a service. Each shows its evidence: Seen in code (a file and the text in it, which Sentinel finds), Said by you (your quote, compared like a state's) or Guessed (Claude's reason, drawn dotted, and the draft asks you to confirm or remove it). They get no Tested mark and are left out of the counts.
+- **Three files in `.sentinel/`.** `system.json` is the map, sorted by id so a merge conflict reads well. Sentinel writes it and never commits it. `marks.json` holds each part's last proof, and `plans.json` has one line per finished plan. The last two stay out of git. A map file that can't be read, such as one with merge conflict markers, is not used and not written over. Sentinel says so at session start, in the status reply and in `/sentinel system`, and the saved marks stay.
+- **It stays current without a model.** Each part records the commit it was drawn at. At session start, when the System page opens and while a plan is drafted, Sentinel compares the map with what git says changed since. A part whose files changed shows Changed since drawn, with git's reason, and a draft that names one tells Claude to reread it. Changed since drawn (the picture may be out of date) and Changed since test (the proof is out of date) are separate marks. A part a state built is not marked for the files that state wrote, because the plan drew it for them. The mark comes back if those files change again. With no git repo, the page says nothing could be compared.
+- **Redraw this area and It's fine.** Redraw asks Claude to reread the area, and ends with a question in the dialog: keep the new drawing, which also marks it as drawn today, or keep the old one. It's fine clears the mark until the area's files change again, on this machine. Neither happens on its own.
+- **A project that already exists** gets its map one plan at a time. Claude draws only the parts the plan touches. Sentinel lists the other top-level folders with their file counts as Not mapped yet, and the endpoint keys in `.env.example` (names ending in `_URL`, `_HOST` or `_ENDPOINT`) that no outside part names as Not placed yet. Only the keys are read, never the values.
+- **Approval stops and dropped parts ask in the real dialog.** A state that waits for you, and a part Claude wants to drop, open a question in the terminal. A typed message to Claude doesn't answer it; the page's buttons do, and so do the dialog's options.
+
+The System tab on the dashboard shows the map at four levels: Overview, Areas, Parts and Tasks (each part tagged with the tasks that build it). Its views are All, Testing (which parts are proved) and Changes (the drawing against what you signed off), as Boxes or as an Outline on narrow screens. Past plans are listed newest first, and pointing at one lights the parts it built.
+
 ## Library
 
 ![The user picks the Thorough weight, ticks one of Claude's suggestions on the draft, switches an instruction off for that plan and locks it; Claude then reads its instructions for the first state](docs/media/library.webp)
@@ -155,7 +170,9 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | Command | Does |
 | --- | --- |
 | `/sentinel` | open the pane on whatever needs you |
-| `/sentinel focus`, `map`, `ledger` | open the pane on that view |
+| `/sentinel focus`, `map`, `ledger`, `system` | open the pane on that view; `system` also checks the map against git |
+| `/sentinel redraw <part>` | ask Claude to reread a part or an area and redraw it; you answer a question before anything changes |
+| `/sentinel fine <part>` | clear the Changed since drawn mark on a part or an area until its files change again |
 | `/sentinel browser` | open the dashboard in your browser |
 | `/sentinel lock` | sign off a plan agreed in chat or already under way; again to lock the draft |
 | `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked |
@@ -195,9 +212,10 @@ The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off a
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
 - **Library** has two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
+- **System** shows once the project has a map, with or without a plan running. See [The System map](#the-system-map). A banner names the parts that changed since the map was drawn, with Redraw this area and It's fine on each.
 - **The draft card** also says how many states quote their source, notes the sections nothing quotes, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
 
-The pane in the terminal has three views, switched with `f`, `m` and `l`: Focus (the active state and its check runs), Map (the whole machine, health and log) and Ledger (every call with the arithmetic). `b` opens the dashboard.
+The pane in the terminal has four views, switched with `f`, `m`, `l` and `s`: Focus (the active state and its check runs), Map (the whole machine, health and log), Ledger (every call with the arithmetic) and System (the project's map, once it has one). `b` opens the dashboard.
 
 ## More
 

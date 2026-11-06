@@ -1,14 +1,12 @@
-import { expect, mock, test as kitTest } from 'claude-code/testing'
+import { expect, mock } from 'claude-code/testing'
 import type { Run } from '../types'
 import { DESCRIPTION } from '../hooks/register'
 import { act, lineNote, addFlow, autoContinue, keepAdded, sourceText, dropFlow, emptyRun, flowOf, freshCount, heard, instructionOf, isTestFile, libraryOn, notYet, lockDraft, memberByFile, memberIn, memberOff, needsOf, observe, pathKey, relPath, snapWanted, startCheck, startClock, startMember, stopClock, summarize, tokenSplit, untested, withRules, withSnap, withWeight, type PlanInput } from '../hooks/core'
 import { BUILTINS, BUILTIN_FLOWS } from '../hooks/builtins'
 import { renderBand, renderPane } from '../hooks/views'
 import type { FlowDef, InstructionDef, StateDef } from '../types'
+import { HOME, REFUND, ROOT, TOKEN, TOOL, endTurn, engine, openPage, said, test, until } from './kit'
 
-const ROOT = 'D:/proj'
-const TOOL = 'mcp__sentinel__plan'
-const REFUND = `${ROOT}/src/refund.ts`
 const PLAN = {
   action: 'define',
   title: 'Partial refunds',
@@ -26,228 +24,6 @@ const PANE = {
   props: { title: 'Sentinel', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
 } as const
 
-// Each hook here stands for the engine beneath the plugin.
-function engine(on: any) {
-  const files: Record<string, string> = { [REFUND]: 'original' }
-  const submitted: string[] = []
-  const commands: string[] = []
-  const reads: string[] = []
-  // One result for every command, or one per command. `cut` stops before the exit line, as Esc does.
-  // wait: the call answers once it settles. background on a check run: still going at the tool's timeout.
-  type Bash = { fail: boolean; text: string; quiet?: boolean; background?: boolean | 'huge'; saved?: boolean | 'huge' | 'gone'; cut?: boolean; deny?: string; wait?: Promise<unknown> }
-  let shell: Bash | ((command: string) => Bash) = { fail: false, text: 'ok' }
-  const outs: Record<string, string> = {}
-  let tasks = 0
-  let cwd = ROOT
-  let quoting = false
-  on('session.root', () => ({ value: ROOT }))
-  on('session.cwd', () => ({ value: cwd }))
-  const key = (path: string) => path.replace(/\\/g, '/')
-  on('fs.read', (_: unknown, e: any) => {
-    reads.push(key(e.path))
-    // As the real read does for a file that isn't there. Elsewhere a missing file reads as empty.
-    if (key(e.path).includes('/missing')) throw new Error(`ENOENT: ${e.path}`)
-    // Most tests' plans quote nothing, so the comparison is off by the user's default until a test calls eng.quoting().
-    if (!quoting && key(e.path) === `${HOME}/.sentinel/library.json` && !files[key(e.path)]) return { value: '{"on":{"quote-the-source":false}}' }
-    return { value: files[key(e.path)] ?? '' }
-  })
-  on('fs.write', (_: unknown, e: any) => {
-    files[key(e.path)] = e.text
-    return { value: undefined }
-  })
-  on('fs.exists', (_: unknown, e: any) => ({ value: Object.hasOwn(files, key(e.path)) }))
-  // A folder holds what is written under it.
-  on('fs.list', (_: unknown, e: any) => {
-    const dir = `${key(e.path).replace(/\/$/, '')}/`
-    const names = [...new Set(Object.keys(files).filter(f => f.startsWith(dir)).map(f => f.slice(dir.length).split('/')[0]!))]
-    return { value: names.map(name => ({ name, kind: Object.hasOwn(files, dir + name) ? 'file' : 'dir', size: 0, mtimeMs: 0, isLink: false })) }
-  })
-  on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  mock.store(on)
-  // What the plugin holds in memory, as it last wrote it. A test reads it here, since $.state is the plugin's own.
-  const memory: { run?: Run; said?: { messages: { text: string; at: string }[]; wrote: string[] } } = {}
-  on('state.set', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => {
-    memory[e.key as 'run' | 'said'] = e.value.value
-    return next(e)
-  })
-  const statuses: (string | undefined)[] = []
-  on('ui.status', (_: unknown, e: any) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  const toasts: string[] = []
-  on('ui.toast', (_: unknown, e: any) => {
-    toasts.push(e.text)
-    return { value: undefined }
-  })
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  let dropping: string | undefined
-  on('prompt.submit', (_: unknown, e: any) => {
-    if (dropping) return { drop: dropping }
-    submitted.push(e.text)
-    return { text: e.text }
-  })
-  on('turn.complete', () => ({ text: '' }))
-  on('classic.Stop', () => ({}))
-  on('classic.SubagentStop', () => ({}))
-  on('turn.start', (_: unknown, e: any) => ({ turnId: e.turnId }))
-  // `during` runs once, while the next Bash call or git command (by its subcommand, such as 'apply') runs.
-  let during: { at: string; run: () => Promise<unknown> } | undefined
-  const fire = async (at: string) => {
-    const now = during?.at === at ? during : undefined
-    if (now) during = undefined
-    await now?.run()
-  }
-  let agents: { id: string; status: string; description?: string; name?: string; parentId?: string }[] = []
-  on('agent.list', () => ({ value: agents }))
-  // The engine's own band, drawn when Sentinel has nothing to show.
-  on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => {
-    const { Box } = $.ui.resolve(e)
-    return <Box />
-  })
-  on('tool.call', { tool: ['Edit', 'Write'] }, (_: unknown, e: any) => {
-    files[key(e.file_path)] = e.new_string ?? e.content
-    return { result: {}, text: 'ok' }
-  })
-  on('tool.call', { tool: 'NotebookEdit' }, () => ({ result: {}, text: 'ok' }))
-  on('tool.call', { tool: ['Read', 'Grep'] }, (_: unknown, e: any) => ({ result: {}, text: `read ${e.file_path ?? e.pattern}` }))
-  // Like the real Bash tool: a trailing echo always succeeds, the tool may add a note after the output,
-  // and `quiet` is a non-zero exit it reports as success (test, grep).
-  on('tool.call', { tool: 'Bash' }, async (_: unknown, e: any) => {
-    await fire('Bash')
-    commands.push(e.command)
-    const bash = typeof shell === 'function' ? shell(e.command) : shell
-    if (bash.deny) return { deny: bash.deny }
-    if (bash.wait) await bash.wait
-    const ok = { stdout: bash.text, stderr: '', interrupted: !!bash.cut }
-    // A check run still going at the tool's timeout (`background`) goes on in the background, writing an output file,
-    // kept by command in `outs`, where a test adds to it.
-    if (e.command.endsWith('echo "[sentinel] exit $?"')) {
-      // 'huge': an output file too big to read whole, as the real read refuses over 4 MiB.
-      if (bash.background === 'huge') {
-        const id = `t${++tasks}`
-        outs[`C:/tmp/missing/tasks/${id}.output`] = `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\n`
-        return { result: { ...ok, backgroundTaskId: id }, text: `Command running in background with ID: ${id}. Output is being written to: C:\\tmp\\missing\\tasks\\${id}.output` }
-      }
-      if (bash.background) {
-        const id = `t${++tasks}`
-        outs[e.command] = `C:/tmp/tasks/${id}.output`
-        files[outs[e.command]!] = bash.text
-        return { result: { ...ok, backgroundTaskId: id }, text: `Command running in background with ID: ${id}. Output is being written to: C:\\tmp\\tasks\\${id}.output` }
-      }
-      // Over 30,000 characters the real tool answers with a preview and saves the whole output, exit line and all, to a
-      // file: `saved` 'huge' is one too big to read whole, 'gone' one that can't be read at all.
-      if (bash.saved) {
-        const path = `C:\\tmp\\${bash.saved === true ? '' : 'missing\\'}tool-results\\r${++tasks}.txt`
-        const whole = `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\n`
-        if (bash.saved === true) files[key(path)] = whole
-        else if (bash.saved === 'huge') outs[key(path)] = whole
-        return { result: { ...ok, stdout: bash.text.slice(0, 200), persistedOutputPath: path, persistedOutputSize: 40_000 }, text: `<persisted-output>\nOutput too large (39.1KB). Full output saved to: ${path}\n\nPreview (first 2KB):\n${bash.text.slice(0, 200)}\n...\n</persisted-output>\nShell cwd was reset to ${ROOT}` }
-      }
-      return { result: ok, text: bash.cut ? `${bash.text}\nInterrupted` : `${bash.text}\n[sentinel] exit ${bash.fail ? 1 : 0}\nShell cwd was reset to ${ROOT}` }
-    }
-    // tail of a file too big to read: the real tool saves an answer over 30,000 characters too, so the exit line is lost.
-    const tailed = /^tail -c (\d+) '(.+)'$/.exec(e.command)
-    const whole = tailed && outs[tailed[2]!]
-    if (tailed && whole) {
-      return Number(tailed[1]) > 30_000
-        ? { result: ok, text: `<persisted-output>\nOutput too large. Full output saved to: C:\\tmp\\tool-results\\t${++tasks}.txt\n</persisted-output>` }
-        : { result: ok, text: whole.slice(-Number(tailed[1])) }
-    }
-    if (bash.background) return { result: { ...ok, backgroundTaskId: 'b1' }, text: 'Command running in background with ID: b1' }
-    if (bash.fail && bash.quiet) return { result: { ...ok, returnCodeInterpretation: 'Condition is false' }, text: bash.text }
-    return bash.fail ? { isError: true, result: bash.text, text: bash.text } : { result: ok, text: bash.text }
-  })
-  let approved: object = { plan: 'p', isAgent: false }
-  on('tool.call', { tool: 'ExitPlanMode' }, () => ({ result: approved, text: 'approved' }))
-  const stops: string[] = []
-  on('tool.call', { tool: 'TaskStop' }, (_: unknown, e: any) => (stops.push(e.task_id), { result: {}, text: 'stopped' }))
-  // The question dialog answers at once, unless the test holds it open.
-  let dialog: (() => Promise<unknown>) | undefined
-  on('tool.call', { tool: 'AskUserQuestion' }, () => (dialog ? dialog() : { result: {}, text: 'answered' }))
-  // The dashboard's helper: its ready line, then what the test sends from the page, each line in two pieces.
-  const pageLines: string[] = []
-  let wake = () => {}
-  on('process.spawn', async function* () {
-    yield { stream: 'stdout', text: `{"port":41234,"token":"${TOKEN}"}\n` }
-    for (;;) {
-      while (pageLines.length) yield { stream: 'stdout', text: pageLines.shift()! }
-      await new Promise<void>(ok => (wake = ok))
-    }
-  })
-  // git for the member worktrees: write-tree and commit-tree print the ids the next steps take.
-  // Only core sets a spawned agent's id, so a started member is found in the agent list by its name.
-  // A member's staged diff is `patch`.
-  const runs: { argv: string[]; cwd?: string; env?: Record<string, string>; stdin?: string }[] = []
-  let patch = ''
-  // What the member changed in all, by name.
-  let names = ''
-  on('process.run', async (_: unknown, e: any) => {
-    // Sentinel waits on a check by running sleep. It answers at once here, so Sentinel waits on its clock instead.
-    if (e.argv[0] === 'sleep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
-    await fire(e.argv[1])
-    // Node deleting a flow file.
-    if (e.argv[0] === 'node' && /rmSync/.test(e.argv[2])) delete files[key(e.argv[3])]
-    runs.push({ argv: [...e.argv], cwd: e.init?.cwd, env: e.init?.env, stdin: e.init?.stdin })
-    const out = e.argv[1] === 'write-tree' ? 'tree1' : e.argv[1] === 'commit-tree' ? 'snap1' : e.argv[1] === 'diff' ? (e.argv.includes('--name-only') ? names : patch) : ''
-    return { value: { exitCode: 0, stdout: out, stderr: '' } }
-  })
-  const sent: any[] = []
-  let sendDeny: string | undefined
-  on('session.send', (_: unknown, e: any) => {
-    if (sendDeny) return { isDelivered: false, reason: sendDeny }
-    sent.push(e)
-    return { isDelivered: true }
-  })
-  const spawns: any[] = []
-  let spawnDeny: string | undefined
-  on('agent.spawn', (_: unknown, e: any) => {
-    spawns.push(e)
-    if (spawnDeny) return { deny: spawnDeny }
-    agents = [...agents, { id: `m-${spawns.length}`, status: 'running', description: e.description, name: e.name }]
-    return { model: 'm' }
-  })
-  return {
-    files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory,
-    setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
-    setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
-    setDialog: (d?: () => Promise<unknown>) => (dialog = d),
-    setApproved: (a: object) => (approved = a), setDropping: (d?: string) => (dropping = d), quoting: () => (quoting = true),
-    // Several messages go out in one piece, as two tabs sending at once can.
-    page: (...ms: object[]) => {
-      const lines = ms.map(m => JSON.stringify(m) + '\n').join('')
-      pageLines.push(lines.slice(0, 5), lines.slice(5))
-      wake()
-    },
-    // What the browser page reads.
-    snap: () => {
-      const js = files[`${ROOT}/.sentinel/state.js`]
-      return js ? JSON.parse(js.slice('window.__sentinel && window.__sentinel('.length, -2)) : {}
-    },
-  }
-}
-
-const TOKEN = 'a'.repeat(32)
-const HOME = 'C:/Users/me'
-// Moves the clock on until the plugin's background work has caught up.
-async function until(clock: any, ok: () => unknown) {
-  for (let i = 0; i < 50 && !ok(); i++) await clock.advance(1)
-  expect(ok()).toBeTruthy()
-}
-// Opens the dashboard: its helper starts from a timer, so the clock has to move.
-async function openPage($: any, clock: any) {
-  const opening = $.command.run({ command: 'sentinel', args: 'browser' })
-  await clock.advance(1)
-  return said(await opening)
-}
-
-const said = (r: any): string => String(r?.deny ?? r?.text ?? r?.result ?? '')
-// The main conversation's turn ends: the classic Stop, carrying what still runs, then turn.complete.
-async function endTurn($: any, { tasks = [] as object[], reason = 'answer', answer = 'Done for now.' } = {}) {
-  await $.classic.Stop({ hook_event_name: 'Stop', session_id: 's', transcript_path: '', cwd: ROOT, stop_hook_active: false, background_tasks: tasks, session_crons: [] })
-  await $.turn.complete({ answer, durationMs: 1, isAborted: reason === 'aborted', turnId: 't', reason })
-}
-
 // Signs off, locks PLAN and moves to service.
 async function toService($: any, eng: ReturnType<typeof engine>) {
   await $.tool.call({ tool: 'ExitPlanMode' })
@@ -257,8 +33,6 @@ async function toService($: any, eng: ReturnType<typeof engine>) {
   return eng
 }
 
-// Tests on a mock clock can take seconds on a busy machine. The kit's 5 s limit made them fail at random, and only a real hang needs one.
-const test = (name: string, ...rest: any[]) => (rest.length === 2 ? kitTest(name, { timeoutMs: 30_000, ...rest[0] }, rest[1]) : kitTest(name, { timeoutMs: 30_000 }, rest[0]))
 
 test('the model gets the whole tool description', () => {
   expect(DESCRIPTION.length).toBeLessThanOrEqual(4096)
@@ -1347,19 +1121,23 @@ test('the band says a state needs you only while it waits for your answer', asyn
   // Working on it: the band shows progress.
   expect(await shows(/ready for your review/)).toBe(false)
   await $.tool.call({ tool: 'Read', file_path: REFUND })
-  expect(await advance()).toMatch(/the user reviews it/)
+  // The kit's dialog gives no answer, as Esc does: the work waits, and the band offers to ask again.
+  expect(await advance()).toMatch(/closed the question without answering/)
   expect(await shows(/review is ready for your review/)).toBe(true)
 
   await stop()
   expect(eng.submitted).toHaveLength(0)
-  expect(await advance()).toMatch(/hasn't answered/)
+  expect(await advance()).toMatch(/closed the question without answering/)
   await clock.advance(1000)
+  // A typed message is no OK: the band keeps asking until the dialog or the dashboard says yes.
   await $.prompt.submit({ text: 'Report OK, publish it.', origin: { kind: 'composer' } })
-  expect(await shows(/ready for your review/)).toBe(false)
+  expect(await shows(/ready for your review/)).toBe(true)
+  eng.setDialog(async (e: any) => ({ result: { questions: e.questions, answers: { [e.questions[0].question]: 'Yes, accept it' } }, text: 'answered' }))
   expect(await advance()).toMatch(/Moved to publish/)
+  expect(await shows(/ready for your review/)).toBe(false)
 })
 
-test('an answered question counts as the user\'s word, and a state that needs their OK may ask one', async ($: any, on: any) => {
+test('an answered question of Claude\'s is the user\'s word but no OK for a stop, and a state that needs their OK may ask one', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = engine(on)
   await $.tool.call({ tool: 'ExitPlanMode' })
@@ -1373,7 +1151,8 @@ test('an answered question counts as the user\'s word, and a state that needs th
   const questions = [{ question: 'Two pages OK?', header: 'Design', multiSelect: false, options: [{ label: 'Yes' }, { label: 'No' }] }]
   eng.setDialog(async () => ({ result: { questions, answers: { 'Two pages OK?': 'Yes' } }, text: 'answered' }))
   expect(said(await $.tool.call({ tool: 'AskUserQuestion', questions }))).not.toMatch(/holds this question/)
-  expect(said(await edit())).toBe('ok')
+  // The user spoke, but a proposal is answered by the Yes label or the dashboard's Approve, and nothing else.
+  expect(said(await edit())).toMatch(/waits for the user's answer/)
 })
 
 test('the token split keeps cache reads apart from new input and output', () => {
@@ -3610,13 +3389,13 @@ test('library: an instruction file is checked like a flow', () => {
 })
 
 test('library: a weight sets the built-ins and switches win over it', () => {
-  const standard = ['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
+  const standard = ['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
   expect(libraryOn(ITEMS)).toEqual({ weight: 'standard', on: standard })
   expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'quote-the-source', 'mine'] })
   expect(libraryOn(ITEMS, { weight: 'thorough' }, { weight: 'light' }).on)
-    .toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
+    .toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
   // sources-first and close-phase are in no weight; a switch turns them on.
-  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
+  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
   // The project's switch beats the user's, for their own items and for built-ins.
   expect(libraryOn(ITEMS, { on: { mine: false } }, { on: { mine: true } }).on).not.toContain('mine')
   expect(libraryOn(ITEMS, {}, { on: { mine: false } }).on).not.toContain('mine')
@@ -3685,7 +3464,7 @@ test('library: fails-first runs only while it is on', () => {
 // - a flow that is off still adds itself by its rule;
 // - the ignore file keeps the committed instructions and switches out of git;
 // - the model or another plugin runs the commands.
-const IGNORED = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\n!library.json\n'
+const IGNORED = '*\n!flows/\n!flows/*.json\n!instructions/\n!instructions/*.json\n!library.json\n!system.json\n'
 const LIB_PROJECT = `${ROOT}/.sentinel/library.json`
 const LIB_PERSONAL = `${HOME}/.sentinel/library.json`
 const textOf = (name: string) => BUILTINS.find(b => b.name === name)!.text
@@ -3835,8 +3614,8 @@ test("library: define stores the library the switches give, never the model's", 
   await $.tool.call({ tool: 'ExitPlanMode' })
   await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
   const standard = heldRun(eng).draft!.library!
-  expect(standard.on).toEqual(['depth-before-size', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
-  expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'failure-list', 'break-it-once', 'widths'])
+  expect(standard.on).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
+  expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'break-it-once', 'widths'])
 })
 
 test('library: a flow that is off is not added by its rule, but can be added by hand', async ($: any, on: any) => {
@@ -3876,7 +3655,7 @@ test('library: the system prompt carries the draft and always instructions', asy
   const section = async () => (await sections()).find((s: any) => s.id === 'sentinel:library')
   eng.files[`${ROOT}/.sentinel/instructions/prose.json`] = JSON.stringify({ at: 'always', text: 'Plain prose.' })
   await sentinel('trust prose')
-  const depth = `While you draft a plan:\n${told(textOf('depth-before-size'))}`
+  const depth = `While you draft a plan:\n${told(textOf('depth-before-size'))}\n${told(textOf('draw-system'))}`
   // No plan: the Library as it is now, after the engine's own sections.
   const all = await sections()
   expect(all.map((s: any) => s.id)).toEqual(['intro', 'sentinel:library'])
@@ -5971,7 +5750,7 @@ test('terminal proof: a draft with nothing to count says nothing about quotes', 
 
 test('terminal proof: a state added during the run gets no question in the band', () => {
   const vm = summarize(addOne({ added: WHY }).run)
-  const band = JSON.stringify(renderBand({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, saveFlow: () => {}, discardFlow: () => {} }))
+  const band = JSON.stringify(renderBand({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, answer: () => {}, asking: false, saveFlow: () => {}, discardFlow: () => {} }))
   expect(band).not.toContain('nothing asks for it')
   expect(band).toContain('Sentinel: a 1/4')
 })

@@ -17,6 +17,16 @@ export const BUILTINS: readonly Builtin[] = [
       + 'right (name the artifact). Put the answers at the top of the plan as choices the user can take or leave.',
   },
   {
+    name: 'draw-system', title: 'Draw the system map', at: 'draft', kind: 'told', weights: ['standard', 'thorough'],
+    text: 'Draw the parts of the system this plan builds or changes, and nothing else, in "system" on define: parts (id, name, '
+      + 'parent, desc, files), lines (from, to, says) and people (actors). Put a part inside another with "parent". Something '
+      + 'outside the project, such as Redis or a service in another repo, is a part with kind "outside" and evidence: seen '
+      + '(the file and the text in it), said (what the user told you) or guess. Sentinel checks every seen citation and '
+      + 'turns one that fails into a guess. Each state names the parts it builds in "parts": parts with nothing inside them. '
+      + 'A state that only reads, or comes from a flow, names none. Sentinel sets every status itself, so do not say what is '
+      + 'built or tested.',
+  },
+  {
     name: 'fast-checks', title: 'Fastest check that proves it', at: 'start', kind: 'told', weights: ['light'],
     text: 'Give this state the fastest check that proves its work: one test file, a type check or a build. Leave whole suites for the final checks.',
   },

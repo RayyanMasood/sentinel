@@ -401,6 +401,15 @@ Joined tabs on a base line, 32px tall, in condensed capitals. The picked one is 
 - **One line:** the plan as a track that sits in and fills with ink up to where the run is, with stations as marks. Groups are tabs over their stretch of the line. A minimap strip under it frames what is in view.
 - **List:** rows are bars 2px apart and 6px in from the frame; the running one is lit from the left in the run's colour. Columns are the mark, number, id, label, done-when and time. Flows are wells nested in the frame.
 
+### System tab
+A nav tab that shows once the project has a map, with or without a plan running. The head gives the map's name, the part count, how many are built and how many are left to test. Under it, two controls: the level (Overview, Areas, Parts, Tasks) and the view (All, Testing, Changes, with a count on Changes), and on wide screens the layout (Boxes or Outline). Narrow screens get Outline only.
+- **Parts:** boxes in group frames, `.pt`. A part says its status in words beside the mark, never by colour alone: Not built, Already there, Will change, Claude is here, Untested, Tested, Changed since test, Check failing, Needs you. A group's frame takes one of seven tones from its parts: red, amber, blue, dashed (all Not built), plain (all Already there), green, or neutral for a mix. Outside parts are dotted when Guessed, and carry no Tested mark.
+- **Lines:** solid, since they are Claude's drawing and the part's panel says so. Pointing at a part brings out its lines.
+- **Tasks level:** each part shows a small tag for every task that builds it, with the full name in the hint. A "Tied to no part" strip above the map lists the tasks that build nothing, and is left out when there are none.
+- **Banner:** when the update check finds parts that changed since the map was drawn, a row for each gives git's reason, with Redraw this area and It's fine. The list is cut at five rows and says how many it left out. With no git repo the banner says nothing could be compared, so a quiet map is never read as an unchanged one.
+- **Side column:** the part's panel, the finish list, and the Testing or Changes view. Below them, "Not mapped yet" shows the folders no part reaches as plain boxes with their file counts, with "Not placed yet" for `.env.example` endpoint keys. Past plans come last, newest first, and pointing at one lights what it built.
+- **Words from the map, git and plans are text:** they never run as markup.
+
 ### Side panel
 Now (the current state's mark, id, title, a link to its task page, done-when, files, time on it, health and check runs), then Up next, Helper agents, Decided, Asked, Models and tokens, and the Log. While stuck, Now leads with the alert box: the check command and its failing output in red.
 

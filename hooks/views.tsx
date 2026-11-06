@@ -1,6 +1,6 @@
 // The pane's three views. Each draws from summarize(run), the same model the browser page reads.
 import { K, SYM, VIEWS, healthTone, healthWord, ruleText, shortCount, tokenSplit, tokensOf, type Status, type VM } from './core'
-import type { InstructionAt, Tone, View } from '../types'
+import type { InstructionAt, MapNode, MapRoll, MapTone, PartStatusName, Tone, View } from '../types'
 
 // The surface's element table, from $.ui.resolve(e).
 type Els = { Box: any; Text: any; Button: any }
@@ -8,7 +8,8 @@ type Part = string | false | undefined | [string, Tone?, boolean?]
 type Loop = VM['loops'][number]
 
 export type PaneActions = { pick: (v: View) => void; browser: () => void }
-export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; resume: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
+// asking: Sentinel's question is open in the dialog now. answer asks it again, after Esc.
+export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; resume: () => void; answer: () => void; asking: boolean; system?: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
 
 // The band above the prompt: what needs you, or where the plan stands, with the buttons to act on it.
 // No hotkeys: a bare digit in an empty prompt would press them while you start a message.
@@ -17,25 +18,32 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const a = vm.active
   const f = vm.flowDraft
   const live = !!a && vm.phase !== 'none' && vm.phase !== 'complete'
-  if (!live && !f) return undefined
+  // With nothing running, the update check's finding: parts whose files changed since the map was drawn.
+  const drifted = vm.system?.drift?.count ?? 0
+  if (!live && !f && !drifted) return undefined
   const hl = vm.health
+  // The parts of the system map Claude is working on, two at most.
+  const here = vm.system?.here.map(p => p.name) ?? []
+  const inside = here.length ? ` · in ${here.length > 2 ? `${here.slice(0, 2).join(', ')} and ${here.length - 2} more` : and(here)}` : ''
   // What Claude added waits for an answer, one at a time, before the draft asks to be locked.
   const added = vm.phase === 'draft' ? vm.states.find(s => s.added && !s.okAt) : undefined
   type Band = [string, Tone, [string, string, () => void][]]
   // A flow or an instruction Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
   const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
     [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save personal', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
-  const [text, tone, buttons]: Band = !a || !live ? flow!
+  const drift: Band | undefined = drifted && !live && !f ? [`Sentinel: ${count(drifted, 'part')} changed since the map was drawn.`, 'warn', [['system', 'System', on.system ?? (() => on.open(false))]]] : undefined
+  const [text, tone, buttons]: Band = drift ? drift : !a || !live ? flow!
     : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
     : vm.paused ? [`Sentinel is paused at ${a.id}.`, 'warn', [['resume', 'Resume', on.resume], ['open', 'Open', () => on.open(false)]]]
     : vm.blocked ? [`Sentinel: needs you on ${a.id}. ${vm.blocked.what}`, 'warn', [['open', 'Open', () => on.open(true)]]]
     : vm.trap ? [`Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`, 'err', [['open', 'Open', () => on.open(true)]]]
-    : vm.waiting ? [vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts. Reply in the chat.` : `Sentinel: ${a.id} is ready for your review. Reply in the chat.`, 'warn', [['open', 'Open', () => on.open(true)]]]
+    : vm.waiting && on.asking ? [`Sentinel: ${a.id} is asking for your ${vm.waiting.kind === 'before' ? 'OK' : 'review'} in the question box.`, 'warn', [['open', 'Open', () => on.open(true)]]]
+    : vm.waiting ? [vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts.` : `Sentinel: ${a.id} is ready for your review.`, 'warn', [['answer', 'Answer', on.answer], ['open', 'Open', () => on.open(true)]]]
     : flow ? flow
     : vm.sweep ? [`Sentinel: final checks · ${sweepLine(vm.sweep)}`, 'acc', [['open', 'Open', () => on.open(false)]]]
-    : vm.checking?.length ? [`Sentinel: ${a.id} ${a.pos}/${a.of} · ${checkLine(vm.checking.at(-1)!)}`, vm.checking.at(-1)!.quiet ? 'warn' : 'dim', [['open', 'Open', () => on.open(false)]]]
-    : [`Sentinel: ${a.id} ${a.pos}/${a.of}${hl ? ` · H ${hl.H.toFixed(2)} ${healthWord(hl.H)}` : ''}`, 'dim', [['open', 'Open', () => on.open(false)]]]
+    : vm.checking?.length ? [`Sentinel: ${a.id} ${a.pos}/${a.of}${inside} · ${checkLine(vm.checking.at(-1)!)}`, vm.checking.at(-1)!.quiet ? 'warn' : 'dim', [['open', 'Open', () => on.open(false)]]]
+    : [`Sentinel: ${a.id} ${a.pos}/${a.of}${inside}${hl ? ` · H ${hl.H.toFixed(2)} ${healthWord(hl.H)}` : ''}`, 'dim', [['open', 'Open', () => on.open(false)]]]
   return (
     <Box flexDirection="row" gap={1}>
       <Box flexShrink={1}>
@@ -61,7 +69,35 @@ const and = (xs: string[]) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0,
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 const COLOR: Record<Exclude<Tone, 'dim'>, string> = { ok: 'success', err: 'error', warn: 'warning', acc: 'claude', ask: 'suggestion' }
-const NAMES: Record<View, string> = { focus: 'Focus', map: 'Map', ledger: 'Ledger' }
+const NAMES: Record<View, string> = { focus: 'Focus', map: 'Map', ledger: 'Ledger', system: 'System' }
+// How each part reads on the System tab: its mark, its words and its colour. Group colours follow the page's.
+const PART: Record<PartStatusName, [string, string, Tone?]> = {
+  planned: ['○', 'Not built', 'dim'], exists: ['●', 'Already there'], change: ['◐', 'Will change', 'acc'], now: ['▶', 'Claude is here', 'acc'],
+  tested: ['✓', 'Tested', 'ok'], changed: ['↻', 'Changed since test', 'warn'], untested: ['·', 'Untested', 'warn'], failing: ['×', 'Check failing', 'err'],
+  needs: ['⚑', 'Needs you', 'ask'], outside: ['◇', 'Outside the project', 'dim'], dropped: ['–', 'Dropped', 'dim'],
+}
+const ROLL_TONE: Record<MapTone, Tone | undefined> = { red: 'err', amber: 'warn', blue: 'acc', dashed: 'dim', plain: undefined, green: 'ok', neutral: undefined }
+const TAG: Record<string, string> = {
+  skipped: 'Skipped by you', 'not-finished': 'Not finished', 'not-rechecked': 'Not rechecked', once: 'Checked once', reopened: 'Reopened by the final checks',
+  'no-git': 'No git here, so changes cannot be detected', 'no-files': 'No files to check', 'changed-since-drawn': 'Changed since drawn', 'files-gone': 'Files gone',
+}
+const EVIDENCE = { seen: 'seen in ', said: 'said by you: ', guess: 'guessed: ' }
+const LINES_SHOWN = 12
+const FILES_SHOWN = 3
+const LOOSE_SHOWN = 5
+const PLANS_SHOWN = 5
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+// "3 Nov 2026", in UTC so every machine reads a plan's day the same way.
+const dayOf = (at: string) => {
+  const d = new Date(at)
+  return Number.isNaN(d.getTime()) ? at.slice(0, 10) : `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
+// "a, b, c and 2 more": the first few of a list, and how many it left out.
+const clipList = (xs: string[], n: number) => (xs.length > n ? `${xs.slice(0, n).join(', ')} and ${xs.length - n} more` : xs.join(', '))
+const clipped = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
+// "2 parts · 1 Not built · 1 Claude is here": how many of a group's parts stand each way, in the order a part goes through.
+const rollText = (roll: MapRoll) =>
+  [`${roll.total} part${roll.total === 1 ? '' : 's'}`, ...(Object.keys(PART) as PartStatusName[]).filter(k => k !== 'outside' && k !== 'dropped' && roll.counts[k]).map(k => `${roll.counts[k]} ${PART[k][1]}`)].join(' · ')
 const MOMENT: Record<InstructionAt, string> = {
   draft: 'while Claude drafts a plan', start: 'as a state that edits its files starts', close: 'before such a state advances, told at its start',
   final: 'before the plan completes', always: 'every turn',
@@ -143,7 +179,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       gap(),
       ...askedRows(vm.states.find(s => s.id === a.id)),
       ...(vm.blocked ? [field('needs you', vm.blocked.what, 'warn')] : []),
-      ...(vm.waiting ? [field('waits', vm.waiting.kind === 'before' ? 'for your OK on its proposal, in the chat' : 'for your review, in the chat', 'warn')]
+      ...(vm.waiting ? [field('waits', vm.waiting.kind === 'before' ? 'for your OK on its proposal' : 'for your review', 'warn')]
         : a.wait && !vm.replied ? [field('asks', a.wait === 'after' ? 'for your review once it is done' : 'for your OK before it starts', 'dim')] : []),
       field('check', a.check ? `${a.check} passes` : 'evidence and a first read (no check)'),
       field('files', a.files.length ? a.files.join(', ') : 'none in this state', a.files.length ? undefined : 'dim'),
@@ -461,16 +497,100 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
     ]
   }
 
+  // The map as an indented list: each group with how its parts stand, each part with its status in words, its files and its
+  // proof, then the lines between parts and what the drawing's checks found.
+  const system = () => {
+    const s = vm.system
+    if (!s) return [line(['No system map for this plan.', undefined, true]), line(['Claude draws one with a plan that covers more than one part.', 'dim'])]
+    const t = s.tally
+    const dr = s.drift
+    const rows: unknown[] = [
+      line([s.name, undefined, true], [` · ${count(t.total, 'part')} · ${t.built} built · ${t.untestedOrChanged} to test`, 'dim']),
+      ...(s.actors.length ? [line(['People: ', 'dim'], s.actors.map(a => a.name).join(', '))] : []),
+      ...(dr?.count ? [line(['↻ ', 'warn'], [`${count(dr.count, 'part')} changed since the map was drawn.`, 'warn']), line(['  Claude rereads one: /sentinel redraw <part>', 'dim']), line(['  Mark one as fine: /sentinel fine <part>', 'dim'])] : []),
+      ...(dr?.noGit ? [line(["No git here, so Sentinel can't tell what changed since the map was drawn.", 'dim'])] : []),
+      gap(),
+    ]
+    const walk = (n: MapNode, depth: number) => {
+      const pad = '  '.repeat(depth)
+      if (n.roll) {
+        const tone = ROLL_TONE[n.roll.tone]
+        rows.push(line(pad, ['▾ ', tone], [n.name, undefined, true], '  ', [rollText(n.roll), tone]))
+        for (const k of n.kids) walk(k, depth + 1)
+        return
+      }
+      const st = n.status!
+      const [mark, word, tone] = PART[st.status]
+      const tags = st.tags.map(tag => (tag === 'shares-file' ? `Shares a file with ${(st.shares ?? []).join(', ')}` : TAG[tag] ?? tag))
+      const why = n.outside && ` · ${EVIDENCE[n.outside.kind]}${clipped(n.outside.why, 80)}`
+      rows.push(line(pad, [`${mark} `, tone], [n.name, undefined, true], '  ', [word, tone], why && [why, 'dim'], ...tags.map((tag): Part => [` · ${tag}`, 'dim'])))
+      const files = n.files && (n.files.length > FILES_SHOWN ? `${n.files.slice(0, FILES_SHOWN).join(', ')} and ${n.files.length - FILES_SHOWN} more` : n.files.join(', '))
+      const p = st.proof
+      const proof = p && `proved by ${p.check ?? 'a check'}${p.weight ? ` (${p.weight})` : ''}${p.at ? ` at ${p.at}` : ''}`
+      const detail = [n.outside?.where, n.desc, files, proof].filter(Boolean).join(' · ')
+      if (detail) rows.push(line([`${pad}    ${detail}`, 'dim']))
+      if (dr?.why[n.id]) rows.push(line([`${pad}    ${dr.why[n.id]}`, 'warn']))
+      if (st.note) rows.push(line([`${pad}    ${st.note}`, tone]))
+    }
+    for (const n of s.tree) walk(n, 0)
+    if (s.links.length) {
+      const more = s.links.length - LINES_SHOWN
+      rows.push(gap(), line(['Lines', 'dim']), ...s.links.slice(0, LINES_SHOWN).map(l => line(`  ${l.from} → ${l.to}: ${l.says}`)))
+      if (more > 0) rows.push(line([`  and ${more} more ${more === 1 ? 'line' : 'lines'}`, 'dim']))
+    }
+    const c = s.changes
+    const changed: Part[][] = [
+      ...c.added.map((p): Part[] => [`  + ${p.name}`, [' · added', 'dim']]),
+      ...c.dropped.map((p): Part[] => [`  – ${p.name}`, [' · dropped', 'dim']]),
+      ...c.edited.map((p): Part[] => [`  ~ ${p.name}`, [` · changed: ${p.what.join(', ')}`, 'dim']]),
+      ...c.linesAdded.map((l): Part[] => [`  + ${l.from} → ${l.to}: ${l.says}`]),
+      ...c.linesDropped.map((l): Part[] => [`  – ${l.from} → ${l.to}: ${l.says}`]),
+    ]
+    if (changed.length) {
+      const left = changed.length - LINES_SHOWN
+      rows.push(gap(), line(['Changes since you signed off', 'dim']), ...changed.slice(0, LINES_SHOWN).map(p => line(...p)))
+      if (left > 0) rows.push(line([`  and ${left} more ${left === 1 ? 'change' : 'changes'}`, 'dim']))
+    }
+    if (s.warnings.length || s.guessed.length) {
+      rows.push(gap(), line(['Drawing notes', 'warn', true]), ...s.warnings.map(w => para(`  ${w}`, 'dim')))
+      if (s.guessed.length) rows.push(line(['  Guessed: ', 'warn'], s.guessed.join(', '), [' · the draft asks you to confirm or remove them', 'dim']))
+    }
+    if (dr?.loose.length) rows.push(gap(), line(['Files in no part', 'dim']), line(`  ${clipList(dr.loose, LOOSE_SHOWN)}`))
+    if (s.unmapped) {
+      const more = s.unmapped.more
+      rows.push(gap(), line(['Not mapped yet', 'dim']), ...s.unmapped.rows.map(f => line(`  ${f.path}/ · ${count(f.files, 'file')}`)))
+      if (more) rows.push(line([`  and ${more} more ${more === 1 ? 'folder' : 'folders'}`, 'dim']))
+      rows.push(line(['  Each plan adds the folders it touches to the map.', 'dim']))
+    }
+    if (s.leads) {
+      rows.push(gap(), line(['Not placed yet', 'dim']), line(`  ${s.leads.keys.join(', ')}${s.leads.more ? ` and ${s.leads.more} more` : ''}`))
+      rows.push(line(['  From .env.example. Nothing is drawn from them until you or Claude name them.', 'dim']))
+    }
+    if (s.plans?.length) {
+      const names = new Map<string, string>()
+      const collect = (ns: MapNode[]) => ns.forEach(n => (names.set(n.id, n.name), collect(n.kids)))
+      collect(s.tree)
+      const left = s.plans.length - PLANS_SHOWN
+      rows.push(gap(), line(['Past plans', 'dim']), ...s.plans.slice(0, PLANS_SHOWN).map(p => {
+        const built = p.parts.map(id => names.get(id) ?? id).join(', ')
+        return line(`  ${p.title}`, [` · ${p.ended === 'complete' ? 'finished' : 'closed early'} ${dayOf(p.at)}${built ? ` · built ${built}` : ''}`, 'dim'])
+      }))
+      if (left > 0) rows.push(line([`  and ${left} more`, 'dim']))
+    }
+    return rows
+  }
+
   const tabs = (
     <Box flexDirection="row" gap={1}>
-      {VIEWS.map(v => (
+      {VIEWS.filter(v => v !== 'system' || vm.system).map(v => (
         <Button key={v} label={NAMES[v]} hotkey={v[0]} variant={v === view ? 'primary' : 'secondary'} onPress={() => on.pick(v)} />
       ))}
       <Button key="browser" label="Browser" hotkey="b" onPress={() => on.browser()} />
     </Box>
   )
-  const body = vm.phase === 'none' ? none()
-    : view === 'map' ? map() : view === 'ledger' ? ledger()
+  // With no plan locked the project's own map still shows on the System tab.
+  const body = vm.phase === 'none' ? (view === 'system' && vm.system ? system() : none())
+    : view === 'map' ? map() : view === 'ledger' ? ledger() : view === 'system' ? system()
     : vm.phase === 'draft' ? review() : vm.phase === 'complete' ? summary() : focus()
   return (
     <Box flexDirection="column">

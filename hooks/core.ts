@@ -1,13 +1,15 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, FlowDef, FlowState, FlowWhen, InstructionAt, InstructionDef, Kind, Lane, LogLine, Member, Plan, PlanInput, Refused, Run, Source, Spend, StateDef, Switches, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, Refused, Run, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import { rollOf, statusOf, tally } from './mapstatus.ts'
 import { checkQuote, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
+import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
 
 export const K = 8 // window of recent calls the detector looks at
 export const THETA = 0.25 // stuck at or below this health
 export const AUTO_CAP = 2 // auto-continues in a row without a state change
-export const VIEWS: readonly View[] = ['focus', 'map', 'ledger']
+export const VIEWS: readonly View[] = ['focus', 'map', 'ledger', 'system']
 const MAX_CALLS = 400
 // The plain-words fields on a task page, and a reason or outcome, are cut to this many characters.
 const MAX_TEXT = 400
@@ -265,11 +267,15 @@ export const pendingOf = (r: Run) => {
   const p = r.pending
   return p && p.state === r.active && p.at >= enteredAt(r, p.state) ? p : undefined
 }
-// The user answered what the active state asked, after it asked: an early "go ahead" doesn't count.
+// The user answered what the active state asked, after it asked: an early "go ahead" doesn't count. A stop that went
+// through the question dialog carries `ok`, and only that settles it: the Yes label or the dashboard's Approve. What the
+// user types then goes to Claude and leaves the stop closed. A stop saved without `ok` keeps the old rule: any message
+// the user typed after it.
 export const answered = (r: Run, kind?: Wait) => {
   if (r.handsFree) return true
   const p = pendingOf(r)
-  return !!p && (!kind || p.kind === kind) && (r.heardAt ?? 0) > p.at
+  if (!p || (kind && p.kind !== kind)) return false
+  return p.ok ?? (r.heardAt ?? 0) > p.at
 }
 // Hands-free, from /sentinel hands-free or the dashboard; off takes it back.
 export const handsFree = (r: Run, on: boolean, t: string): Run =>
@@ -402,6 +408,20 @@ export function fixOf(r: Run, rel: string, root = ''): string | undefined {
   if (Object.keys(r.running ?? {}).some(id => mine(stateOf(r, id)))) return undefined
   const done = doneOf(r)
   return r.plan!.states.find(s => done.includes(s.id) && !r.skipped?.[s.id] && mine(s))?.id
+}
+
+// The parts of the system map whose last proof an edit has undone: the part has a proof, and a file in it was edited
+// after that proof. Only what the ledger recorded counts, so an edit made by a shell command waits for the next look at
+// the files. A proof from an earlier run is older than every edit of this one.
+export function editedSince(map: SystemMap, r: Pick<Run, 'calls' | 'startedAt'>, marks: Marks): Set<string> {
+  const out = new Set<string>()
+  for (const p of map.parts) {
+    const m = marks[p.id]
+    if (m?.hash === undefined || !p.files?.length) continue
+    const after = m.run === r.startedAt && m.step !== undefined ? m.step : -1
+    if (r.calls.some(c => c.kind === 'edit' && !c.denied && c.file !== undefined && c.step > after && p.files!.some(g => globMatch(g, c.file!)))) out.add(p.id)
+  }
+  return out
 }
 
 // ponytail: path patterns stand in for "breaking"; the model still judges API and data changes itself.
@@ -608,7 +628,8 @@ export function verLabel(calls: Call[], file: string, ver?: string): string {
 
 // ---- the plan tool ----
 
-export type Acted = { run: Run; text: string; ok: boolean; event?: 'locked' | 'drafted' | 'complete' }
+// stop: the call ended at a stop that waits on the user, which Sentinel asks in the dialog (unless they are hands-free).
+export type Acted = { run: Run; text: string; ok: boolean; event?: 'locked' | 'drafted' | 'complete'; stop?: Wait }
 // Results of the checks of states done before the lock, keyed by command.
 export type Proofs = Record<string, { pass: boolean; sigText: string; tail?: string }>
 // A failing check's one line, with its last lines under it. Three checks' worth is enough to act on: the final-checks log keeps the rest.
@@ -637,12 +658,13 @@ export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = 
     return refuse(r, r.active === 'done' ? 'The plan is complete. A new plan needs a new sign-off.' : 'No plan is locked.')
   }
   if (i.action === 'advance') return advance(r, i, t, now, proofs, false, without)
+  if (i.action === 'map') return mapChange(r, i, t)
   if (i.action === 'propose') return propose(r, i, t, now)
   if (i.action === 'skip') return skip(r, i, t, now, proofs, typed)
   if (i.action === 'amend') return amend(r, i, t)
   if (i.action === 'decide') return decide(r, i, t)
   if (i.action === 'escalate') return escalate(r, i, t, now)
-  return refuse(r, `Unknown action "${i.action}". Use define, revise, advance, brief, propose, skip, finish, amend, decide, escalate or status.`)
+  return refuse(r, `Unknown action "${i.action}". Use define, revise, advance, brief, propose, skip, finish, amend, decide, escalate, map or status.`)
 }
 
 const closedText = (c: NonNullable<Run['closed']>) => [
@@ -692,7 +714,123 @@ function propose(r: Run, i: PlanInput, t: string, now: number): Acted {
     return { run: { ...run, audit: [...r.audit, { step: r.step + 1, t, state: st.id, kind: 'decided', text: `Went ahead hands-free: ${intent}` }] }, ok: true,
       text: `The user is hands-free, so go ahead with ${st.id} as proposed. Sentinel lists it for them to check later.` }
   }
-  return { run, ok: true, text: `The user sees your proposal above the prompt and on the dashboard. Put it in your reply too, then stop your turn and wait. Edits in ${st.id} open once they answer; if they ask for changes, propose again.` }
+  return { run, ok: true, stop: 'before', text: `The user sees your proposal above the prompt and on the dashboard. Put it in your reply too, then stop your turn and wait. Edits in ${st.id} open once they answer; if they ask for changes, propose again.` }
+}
+
+// ---- the question dialog ----
+// Sentinel's own questions go through the engine's dialog: the approval stops, and a part the user signed off on that Claude
+// wants to drop. The words are Sentinel's, apart from Claude's reason, which is clipped and quoted. `$.ui.ask` takes labels
+// only, so what each answer does goes in the question.
+
+export type StopAsk = { question: string; yes: string; no: string }
+// What the user answered: a label, words typed under Other, or nothing (Esc, "Chat about this", or no one to ask).
+export type Answer = { how: 'yes' } | { how: 'no' } | { how: 'words'; words: string } | { how: 'none' }
+
+const quoted = (text: string | undefined, max = 300) => {
+  const t = (text ?? '').replace(/\s+/g, ' ').trim()
+  return t ? `"${t.length > max ? `${t.slice(0, max).trimEnd()}…` : t}"` : undefined
+}
+const listOf = (xs: string[]) => (xs.length < 3 ? xs.join(' and ') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`)
+
+// The question for the stop the active state waits on.
+export function stopAsk(r: Run, kind: Wait): StopAsk | undefined {
+  const st = stateOf(r)
+  const p = pendingOf(r)
+  if (!st || !p || p.kind !== kind) return undefined
+  const said = quoted(p.text)
+  return kind === 'before'
+    ? { question: `Claude is ready to start ${st.label}.${said ? ` It plans to:\n${said}` : ''}\nGo ahead?`, yes: 'Yes, go ahead', no: 'No, hold off' }
+    : { question: `${st.label} is finished and ready for your review.${said ? `\nClaude says: ${said}` : ''}\nAccept it?`, yes: 'Yes, accept it', no: 'No, it needs changes' }
+}
+
+// What the dialog's reply means. Only the Yes label is a yes, and so is the same text typed under Other, exactly.
+export function readAnswer(ask: { yes: string; no: string }, said: string): Answer {
+  const t = said.trim()
+  return t === ask.yes ? { how: 'yes' } : t === ask.no ? { how: 'no' } : t ? { how: 'words', words: t.slice(0, 500) } : { how: 'none' }
+}
+
+// The run once the user answered the stop. Yes opens it. No and words close it and drop the request, so Claude asks again.
+// No answer changes nothing: the stop stays closed, and waits.
+export function stopSettled(r: Run, a: Answer, t: string, now: number): Run {
+  const p = pendingOf(r)
+  if (!p || a.how === 'none') return r
+  const what = p.kind === 'before' ? 'proposal' : 'work'
+  const said = a.how === 'yes' ? `Approved the ${what} in the dialog.` : a.how === 'no' ? `Said no to the ${what} in the dialog.` : `Answered the ${what} in the dialog: ${a.words}`
+  const heardR = heard(r, now)
+  return {
+    ...heardR, pending: a.how === 'yes' ? { ...p, ok: true } : undefined,
+    audit: [...heardR.audit, { step: heardR.step, t, state: p.state, kind: 'decided', text: said }],
+    log: [...heardR.log, { t, icon: a.how === 'yes' ? '✓' : '?', tone: a.how === 'yes' ? 'ok' : 'ask', text: `${p.state} · ${a.how === 'yes' ? 'approved' : a.how === 'no' ? 'said no' : 'answered'}` }],
+  }
+}
+
+// What Claude hears of the answer. late: Claude's call has ended already (the answer came from the band), so it is told
+// to call again; otherwise the call's own reply carries what follows.
+export function stopText(p: NonNullable<Run['pending']>, a: Answer, late = false): string {
+  const id = p.state
+  const words = a.how === 'words' ? a.words : ''
+  if (p.kind === 'before') {
+    return a.how === 'yes' ? `The user said yes. Go ahead with ${id}.`
+      : a.how === 'no' ? `The user said no to your proposal for ${id}. Don't start it. Ask what they want changed, or propose again once you have changed it.`
+      : a.how === 'words' ? `The user answered your proposal for ${id} with: "${words}". That is not a yes, so edits in ${id} stay closed. Answer them, then propose again.`
+      : `The user closed the question without answering. Edits in ${id} stay closed. Put your proposal in your reply, then stop your turn and wait. They can answer from the band above the prompt or on the dashboard.`
+  }
+  return a.how === 'yes' ? `The user accepted ${id}.${late ? ' Call advance again.' : ''}`
+    : a.how === 'no' ? `The user says ${id} needs changes. Ask what, make them, then advance again.`
+    : a.how === 'words' ? `The user answered your review of ${id} with: "${words}". That is not an acceptance, so ${id} stays in review. Answer them, make any changes, then advance again.`
+    : `The user closed the question without answering. ${id} stays in review. Say in your reply what was done and what they should check, then stop your turn and wait. They can answer from the band above the prompt or on the dashboard.`
+}
+
+// The parts a map call would take off that the user signed off on and that nothing else holds: a state that builds a part
+// keeps it on the map, and so does a missing reason. Those are refused without asking.
+export function signedDrops(r: Run, i: PlanInput): string[] {
+  const d = r.drawing
+  if (!d?.locked || !r.plan || !clip(i.reason)) return []
+  const drop = [...new Set((i.drop ?? []).map(x => String(x).trim()).filter(Boolean))]
+  return drop.filter(id => d.locked!.parts.some(p => p.id === id) && d.map.parts.some(p => p.id === id) && !r.plan!.states.some(s => s.parts?.includes(id)))
+}
+export function dropAsk(r: Run, ids: string[], reason: string): StopAsk {
+  const names = ids.map(id => r.drawing?.map.parts.find(p => p.id === id)?.name ?? id)
+  const one = ids.length === 1
+  return {
+    question: `Claude wants to stop building ${listOf(names)}, which you signed off on.\nClaude's reason: ${quoted(reason)}\nIf you say yes, ${one ? 'it comes' : 'they come'} off the map and ${one ? 'shows' : 'show'} under Changes at the finish.\nRemove ${one ? 'it' : 'them'}?`,
+    yes: `Yes, remove ${one ? 'it' : 'them'}`, no: `No, keep ${one ? 'it' : 'them'}`,
+  }
+}
+// What Claude hears when the part stays.
+export function dropText(ids: string[], a: Answer): string {
+  const one = ids.length === 1
+  const stay = `${ids.join(', ')} ${one ? 'stays' : 'stay'} on the map. Keep building ${one ? 'it' : 'them'}.`
+  return a.how === 'no' ? `The user said no, so ${stay}`
+    : a.how === 'words' ? `The user answered with: "${a.words}". ${stay}`
+    : `The user closed the question without answering, so ${stay} Tell them in your reply what you wanted to change.`
+}
+
+// ---- redraw: the user asked for an area to be reread ----
+
+const few = (xs: string[]) => (xs.length > 5 ? `${xs.slice(0, 5).join(', ')} and ${xs.length - 5} more` : listOf(xs))
+// A redraw that changes nothing the user can see: the same parts, the same words, the same lines.
+export const redrawSame = (c: MapChanges) => !c.added.length && !c.edited.length && !c.dropped.length && !c.linesAdded.length && !c.linesDropped.length
+// The question that ends a redraw: what Claude did to the area, and what each answer does.
+export function redrawAsk(names: string[], c: MapChanges): StopAsk {
+  const area = listOf(names)
+  if (redrawSame(c)) return { question: `Claude reread ${area} and found the drawing still right.\nMark it as up to date?`, yes: 'Yes, mark it up to date', no: 'No, leave it' }
+  const lines = c.linesAdded.length + c.linesDropped.length
+  const did = [
+    c.added.length && `adds ${few(c.added.map(x => x.name))}`,
+    c.edited.length && `changes ${few(c.edited.map(x => x.name))}`,
+    c.dropped.length && `takes off ${few(c.dropped.map(x => x.name))}`,
+    lines && `redraws ${lines} ${lines === 1 ? 'line' : 'lines'}`,
+  ].filter(Boolean) as string[]
+  return { question: `Claude redrew ${area}.\nIt ${listOf(did)}.\nKeep the new drawing? A yes also marks it as drawn today.`, yes: 'Yes, keep it', no: 'No, keep the old one' }
+}
+// What Claude hears of the answer.
+export function redrawText(names: string[], a: Answer, same: boolean): string {
+  const area = listOf(names)
+  return a.how === 'yes' ? (same ? `The user marked ${area} as up to date.` : `The user kept the new drawing of ${area}. Its marker moved to today.`)
+    : a.how === 'no' ? `The user said no, so the old drawing of ${area} stays. Ask what they want changed.`
+    : a.how === 'words' ? `The user answered with: "${a.words}". The old drawing of ${area} stays. Answer them, then redraw again if they ask.`
+    : `The user closed the question without answering, so the old drawing of ${area} stays. Tell them in your reply what you found, and that they can ask you to redraw again.`
 }
 
 // The user skips a state: the active one moves on, a later one no longer has to run, and a done one keeps its work. A
@@ -763,6 +901,7 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
     ...base, action: 'define', states: order.map(id => sent.get(id) ?? had.get(id)!), loops,
     title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions, named: i.named, messages: i.messages,
     ...(i.depth ? { depth: i.depth } : {}),
+    ...(i.drawn ? { drawn: i.drawn } : {}),
   }
 }
 
@@ -782,10 +921,15 @@ function here(r: Run, final = false): string {
     `Files you may edit: ${st.files.length ? st.files.join(', ') : 'none in this state'}.`,
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),
+    mapHere(r, st),
     // The final instructions come at the lock, and again once this is the last state left.
     toldHere(r, st, final || r.plan!.states.every(s => s.id === st.id || doneOf(r).includes(s.id))),
   ].filter(Boolean).join('\n')
 }
+
+// The parts a state builds, from the plan's map, for the reply that starts it and for a member's prompt. Nothing when
+// the state names no part or the plan has no map.
+export const mapHere = (r: Run, st: StateDef): string => (r.drawing ? stateReads(r.drawing.map, st.parts ?? []) : '')
 
 // What a state came from, handed back as it starts: Claude rereads what was asked just before doing the work.
 export const askedLine = (st: StateDef) =>
@@ -871,13 +1015,15 @@ function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | stri
   const problem = clip(s.problem)
   const approach = clip(s.approach)
   const needs = s.needs && [...new Set(s.needs.map(n => n.trim()).filter(Boolean))]
+  // Which parts of the map these are is checked against the map where the drawing is (the link state).
+  const parts = Array.isArray(s.parts) ? [...new Set(s.parts.filter((p): p is string => typeof p === 'string').map(p => p.trim()).filter(Boolean))] : []
   if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`
   if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`
   const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
   if (s.once !== undefined && typeof s.once !== 'boolean') return `"once" on ${id} must be true or false.`
   if (s.once && !check) return `${id} has "once" but no check. "once" means its check runs at its advance and not again at the end.`
   const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
 }
 
 // What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
@@ -956,6 +1102,8 @@ function addStates(r: Run, i: PlanInput, t: string): Acted {
   const inOrder = () => order.map(id => fresh.find(s => s.id === id) ?? had.find(s => s.id === id)!)
   const problem = statesProblem(inOrder(), doneOf(r))
   if (problem) return refuse(r, problem)
+  const unmapped = namesProblem(r.drawing, fresh)
+  if (unmapped) return refuse(r, unmapped)
   const more = loopsFrom(i.loops, inOrder())
   if (typeof more === 'string') return refuse(r, more)
   const proof = proofOf({ ...i, states: sent }, fresh, 0, [], r.sources ?? [], t)
@@ -992,6 +1140,8 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   if (!states.length) return refuse(r, 'A plan needs at least one state.')
   const problem = statesProblem(states)
   if (problem) return refuse(r, problem)
+  const drawing = drawingOf(i, states)
+  if (typeof drawing === 'string') return refuse(r, drawing)
   const loops = loopsFrom(i.loops, states)
   if (typeof loops === 'string') return refuse(r, loops)
   const start = i.start?.trim()
@@ -1036,10 +1186,14 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   const prior = states.slice(0, at).map(s => s.id)
   const log: LogLine[] = [{ t, icon: '●', tone: 'acc', text: `${drafting ? 'Drafted' : 'Plan locked'} · ${states.length} states, ${loops.length} loop${loops.length === 1 ? '' : 's'}` }]
   if (prior.length) log.push({ t, icon: '✓', tone: 'ok', text: `Done before the lock · ${prior.join(', ')}` })
+  if (drawing) log.push(...mapLog(t, drawing))
   const sources = proof?.used ?? kept
-  const run: Run = { ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...(i.library ? { library: i.library } : {}), ...(sources.length ? { sources } : {}), ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft && !drafting ? { flowDraft: r.flowDraft } : {}) }
+  const run: Run = {
+    ...emptyRun(), plan, active: states[at]!.id, audit, log, startedAt: now, tasks: { [states[at]!.id]: { visits: [{ from: now }] } }, ...(i.library ? { library: i.library } : {}), ...(sources.length ? { sources } : {}), ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft && !drafting ? { flowDraft: r.flowDraft } : {}),
+    ...(drawing ? { drawing: drafting ? drawing : { ...drawing, locked: drawing.map } } : {}),
+  }
   const rail = `${states.map(s => s.id).join(' → ')} → done`
-  const before = prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : ''
+  const before = (prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : '') + mapNote(drawing)
   if (drafting) {
     const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
     const waits = r.review ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`
@@ -1047,6 +1201,66 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
     return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
   return { run, ok: true, event: 'locked', text: `Locked "${plan.title}": ${rail}.${before}\n${here(run, true)}` }
+}
+
+// ---- the system map a plan draws ----
+
+const NO_MAP = 'A state names parts, but the plan has no map. Draw it in "system": parts, lines and people, as an object.'
+
+// The drawing a define carries, checked against its states. A string says why it can't stand. A plan that sends none
+// and names no part has none.
+function drawingOf(i: PlanInput, states: StateDef[]): Drawing | string | undefined {
+  if (!i.drawn) return states.some(s => s.parts?.length) ? NO_MAP : undefined
+  const { errors, warnings } = checkDrawing(i.drawn.map, states, new Set(i.drawn.exists))
+  return errors.length ? errors.join('\n') : { map: i.drawn.map, warnings, exists: i.drawn.exists }
+}
+
+// States added to a plan that runs may name only parts that are on its map.
+function namesProblem(d: Drawing | undefined, states: StateDef[]): string | undefined {
+  if (!states.some(s => s.parts?.length)) return undefined
+  return d ? checkDrawing(d.map, states, new Set(d.exists)).errors.join('\n') || undefined : NO_MAP
+}
+
+// What the drawing checks found goes in the run's log (a few lines) and in the reply, since a sign-off in plan mode locks
+// without the user seeing a draft.
+const MAP_LOG = 3
+const mapLog = (t: string, d: Drawing): LogLine[] => [
+  ...d.warnings.slice(0, MAP_LOG).map((text): LogLine => ({ t, icon: '!', tone: 'warn', text: `Map · ${text}` })),
+  ...(d.warnings.length > MAP_LOG ? [{ t, icon: '!', tone: 'warn', text: `Map · ${d.warnings.length - MAP_LOG} more` } satisfies LogLine] : []),
+]
+const mapNote = (d?: Drawing) =>
+  d?.warnings.length ? `\nThe map has ${d.warnings.length === 1 ? 'a note' : `${d.warnings.length} notes`} for the user. None of them stops the lock:\n${d.warnings.map(w => `- ${w}`).join('\n')}` : ''
+
+// The map changes while the plan runs: parts, lines and people join it, and parts that only Claude drew come off, with a
+// reason. A part on the map the user locked stays unless they take it off, and so does a part a state builds.
+function mapChange(r: Run, i: PlanInput, t: string): Acted {
+  const d = r.drawing
+  if (!i.drawn) return refuse(r, 'There is no map to change. Send "system" with the parts, lines or people to draw.')
+  const drop = [...new Set((i.drop ?? []).map(x => String(x).trim()).filter(Boolean))]
+  const reason = clip(i.reason)
+  let map = i.drawn.map
+  if (drop.length) {
+    if (!reason) return refuse(r, 'Taking a part off the map needs "reason": why it goes.')
+    const signed = drop.filter(id => d?.locked?.parts.some(p => p.id === id) && !(i.approved ?? []).includes(id))
+    if (signed.length) return refuse(r, `${signed.join(', ')} ${signed.length === 1 ? 'is' : 'are'} on the map the user locked, so only they can take ${signed.length === 1 ? 'it' : 'them'} off. Tell them what is wrong and leave ${signed.length === 1 ? 'it' : 'them'} there.`)
+    const built = r.plan!.states.filter(s => s.parts?.some(p => drop.includes(p)))
+    if (built.length) return refuse(r, `${built.map(s => s.id).join(', ')} ${built.length === 1 ? 'builds' : 'build'} a part you are taking off. A part a state builds stays on the map.`)
+    const dropped = dropParts(map, drop)
+    if (!dropped.ok) return refuse(r, dropped.error)
+    map = dropped.map
+  }
+  const { errors, warnings } = checkDrawing(map, r.plan!.states, new Set(i.drawn.exists))
+  if (errors.length) return refuse(r, errors.join('\n'))
+  if (d && JSON.stringify(d.map) === JSON.stringify(map)) return { run: r, ok: true, text: 'The map already holds that. Nothing changed.' }
+  const had = new Map((d?.map.parts ?? []).map(p => [p.id, JSON.stringify(p)]))
+  const drew = map.parts.filter(p => had.get(p.id) !== JSON.stringify(p)).map(p => p.id)
+  const what = [drew.length ? `drew ${drew.join(', ')}` : drop.length ? '' : 'changed lines or people', drop.length ? `took off ${drop.join(', ')} (${reason})` : ''].filter(Boolean).join('; ')
+  const run: Run = {
+    ...r, drawing: { map, ...(d?.locked ? { locked: d.locked } : {}), warnings, exists: i.drawn.exists },
+    audit: [...r.audit, { step: r.step + 1, t, state: r.active ?? undefined, kind: 'amended', text: `Map: ${what}` }],
+    log: [...r.log, { t, icon: '+', tone: 'acc', text: `Map · ${what}` }],
+  }
+  return { run, ok: true, text: `Map updated: ${what}.${mapNote(run.drawing)}` }
 }
 
 // A draft's depth answers as the model sent them, checked. A string says what is wrong.
@@ -1304,7 +1518,7 @@ export function lockDraft(r: Run, t: string, now = Date.now()): Run {
   const tasks = Object.fromEntries(Object.entries(d.tasks ?? {}).map(([id, k]) => [id, { ...k, visits: k.visits.map(v => ({ ...v, from: now })) }]))
   // A lock keeps what the user hasn't answered.
   const states = d.plan!.states.map(s => (s.added && !s.okAt ? { ...s, okAt: t } : s))
-  return { ...d, plan: { ...d.plan!, lockedAt: t, states }, startedAt: now, tasks, log: [...d.log, { t, icon: '●', tone: 'acc', text: 'Locked by the user' }], ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft ? { flowDraft: r.flowDraft } : {}) }
+  return { ...d, plan: { ...d.plan!, lockedAt: t, states }, startedAt: now, tasks, log: [...d.log, { t, icon: '●', tone: 'acc', text: 'Locked by the user' }], ...(d.drawing ? { drawing: { ...d.drawing, locked: d.drawing.map } } : {}), ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft ? { flowDraft: r.flowDraft } : {}) }
 }
 
 // The main conversation's next state: the first in the listed order with no member whose needs are all done once
@@ -1322,6 +1536,12 @@ const nextOf = (r: Run, st: StateDef): string | undefined => {
 export function forwardCheck(r: Run, to?: string): string | undefined {
   const st = isLive(r) ? stateOf(r) : undefined
   return st?.check && (to ?? '').trim() === nextOf(r, st) ? st.check : undefined
+}
+
+// The state a forward advance leaves, with a check or without one. Not a return along a loop.
+export function forwardState(r: Run, to?: string): string | undefined {
+  const st = isLive(r) ? stateOf(r) : undefined
+  return st && (to ?? '').trim() === nextOf(r, st) ? st.id : undefined
 }
 
 // The project may have changed where the ledger can't see it.
@@ -1442,14 +1662,14 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
       const p = pendingOf(r)
       const seen = p?.kind === 'after' && !visit.some(c => c.kind === 'edit' && c.ver !== undefined && c.step > p.step)
       if (!seen || !answered(r, 'after')) {
-        if (seen) return refuse(r, `The user hasn't answered your review of ${st.id} yet. Stop your turn and wait for them.`)
+        if (seen) return { ...refuse(r, `The user hasn't answered your review of ${st.id} yet. Stop your turn and wait for them.`), stop: 'after' }
         const text = clip(outcome ?? evidence, 1500)
         const run: Run = {
           ...r, pending: { state: st.id, at: now, step: r.step + 1, kind: 'after', ...(text ? { text } : {}) },
           audit: [...r.audit, { step: r.step + 1, t, state: st.id, kind: 'asked', text: `Ready for review${text ? `: ${text}` : ''}` }],
           log: [...r.log, { t, icon: '?', tone: 'ask', text: `${st.id} · ready for your review` }],
         }
-        return { run, ok: false, text: `${st.id} is done, and the user reviews it before it moves on. They see your outcome above the prompt and on the dashboard. Say in your reply what was done and what they should check, then stop your turn and wait. Call advance again once they answer.` }
+        return { run, ok: false, stop: 'after', text: `${st.id} is done, and the user reviews it before it moves on. They see your outcome above the prompt and on the dashboard. Say in your reply what was done and what they should check, then stop your turn and wait. Call advance again once they answer.` }
       }
     }
     if (without && 'skipped' in without) r = { ...r, log: [...r.log, { t, icon: '–', tone: 'dim', text: `${st.id} · rerun without the change skipped: ${without.skipped}` }] }
@@ -1726,6 +1946,9 @@ export type VM = {
   // The checks Sentinel runs now.
   checking?: Run['checking']
   flowDraft?: Run['flowDraft']
+  // The system map this plan draws: its size, what the drawing checks found, the outside parts that are guesses, and how
+  // every part stands (see systemOf).
+  system?: SystemView
   // A draft's depth answers, which the user ticks as they lock it.
   depth?: Depth[]
   // Where the states came from, while the plan compares quotes. quoted of of: states with a quote, of those with a quote
@@ -1849,8 +2072,86 @@ function spansOf(k: Task): Span[] {
   return out
 }
 
+// ---- the system map as the screens draw it ----
+
+// Why the final checks sent a state back, while that visit is the one under way.
+function reopenedWhy(r: Run, id: string): string | undefined {
+  const trip = r.trips?.findLast(t => t.to === id && t.reason.startsWith('Final check'))
+  return trip && enteredAt(r, id) === trip.at ? trip.reason.replace(/^Final check:\s*/, '') : undefined
+}
+
+// The plan's states as the map's status function reads them. A draft has begun nothing. The main conversation's state is
+// the one with status active or trap; a state in a member agent is running. A plan closed with finish leaves the states
+// it names unfinished, though the run counts as complete.
+function mapStates(r: Run, states: VM['states'], phase: VM['phase'], lastCheck: Call | undefined, blocked: VM['blocked']): MapRunState[] {
+  const done = new Set(doneOf(r))
+  const open = new Set(r.closed?.unfinished ?? [])
+  return states.map(s => {
+    const mine = s.status === 'active' || s.status === 'trap'
+    const finished = (phase === 'complete' || done.has(s.id)) && !open.has(s.id)
+    const failing = s.status === 'trap' || (mine && phase === 'live' && lastCheck !== undefined && !lastCheck.pass) || (r.running?.[s.id]?.fails ?? 0) > 0
+    const reopened = mine && phase === 'live' ? reopenedWhy(r, s.id) : undefined
+    const where: MapRunState['where'] = phase === 'draft' ? 'ahead' : finished ? 'done' : mine || s.status === 'running' ? 'active' : 'ahead'
+    return {
+      id: s.id, parts: s.parts ?? [], where, hasCheck: !!s.check,
+      ...(s.skipped ? { skipped: true } : {}), ...(s.once ? { once: true } : {}), ...(failing ? { failing: true } : {}),
+      ...(mine && blocked ? { blocked: blocked.what } : {}), ...(reopened !== undefined ? { reopened } : {}),
+    }
+  })
+}
+
+// An outside part's evidence in one place, for a screen to put in words.
+function outsideOf(p: SysTreePart): NonNullable<MapNode['outside']> {
+  const e: Evidence | undefined = p.evidence
+  const why = e && 'seen' in e ? { kind: 'seen' as const, why: [...new Set(e.seen.map(c => c.file))].join(', ') }
+    : e && 'said' in e ? { kind: 'said' as const, why: e.said } : { kind: 'guess' as const, why: e && 'guess' in e ? e.guess : '' }
+  return { ...why, ...(p.where ? { where: p.where } : {}) }
+}
+
+// How many folders and endpoint keys the screens list before saying how many more there are.
+const UNMAPPED_SHOWN = 12, LEADS_SHOWN = 8
+// How the map stands, for the screens: every part's status, the groups rolled up, the totals, and where Claude is. look: the
+// saved proofs and the files as last seen. An edit the ledger recorded after a proof counts at once, with no new look.
+export function systemOf(r: Run, d: Drawing, states: VM['states'], phase: VM['phase'], lastCheck: Call | undefined, blocked: VM['blocked'], look: MapLook): SystemView {
+  const map = d.map
+  const run = mapStates(r, states, phase, lastCheck, blocked)
+  const now: Record<string, Fingerprint> = { ...look.now }
+  if (look.marks) for (const id of editedSince(map, r, look.marks)) now[id] = { hash: 'edited since the proof', files: 0 }
+  const statuses = statusOf({
+    map, states: run, existing: d.exists, marks: look.marks, now, ...(look.drift ? { drift: look.drift.parts } : {}),
+    ...(r.closed ? { closed: { ran: run.filter(s => s.where === 'done' && !r.closed!.unchecked.includes(s.id)).map(s => s.id) } } : {}),
+  })
+  const node = (t: SysTreePart): MapNode => ({
+    id: t.id, name: t.name, ...(t.desc ? { desc: t.desc } : {}), ...(t.files?.length ? { files: t.files } : {}),
+    ...(t.kind === 'outside' ? { outside: outsideOf(t) } : {}),
+    ...(t.kids.length ? { roll: rollOf(map, statuses, t.id) } : { status: statuses[t.id] }),
+    builtBy: run.filter(s => s.parts.includes(t.id)).map(s => s.id),
+    kids: t.kids.map(node),
+  })
+  const tree = treeOf(map).map(node)
+  const leaves = (ns: MapNode[]): MapNode[] => ns.flatMap(n => (n.kids.length ? leaves(n.kids) : [n]))
+  return {
+    name: map.name, parts: map.parts.length, lines: map.lines.length, warnings: d.warnings,
+    guessed: map.parts.filter(p => p.evidence && 'guess' in p.evidence).map(p => p.id),
+    tree, tally: tally(map, statuses), actors: map.actors, links: map.lines,
+    here: leaves(tree).filter(n => n.status?.status === 'now').map(n => ({ id: n.id, name: n.name })),
+    changes: changesOf(d.locked, map),
+    ...(look.drift ? { drift: { count: Object.keys(look.drift.parts).length, why: look.drift.why, loose: look.drift.loose, ...(look.drift.noGit ? { noGit: true } : {}) } } : {}),
+    ...(look.unmapped?.length ? { unmapped: { rows: look.unmapped.slice(0, UNMAPPED_SHOWN), more: Math.max(0, look.unmapped.length - UNMAPPED_SHOWN) } } : {}),
+    ...(look.leads?.length ? { leads: { keys: look.leads.slice(0, LEADS_SHOWN), more: Math.max(0, look.leads.length - LEADS_SHOWN) } } : {}),
+    // Past plans, newest first, with the parts that are still on the map.
+    ...(look.plans?.length ? { plans: [...look.plans].reverse().slice(0, 10).map(p => ({ ...p, parts: p.parts.filter(id => map.parts.some(q => q.id === id)) })) } : {}),
+  }
+}
+
+// A project that has a map and no plan: the map as it stands, with each part with files that exist counted as already there.
+const standing = (map: SystemMap, look: MapLook): Drawing => ({
+  map, warnings: [],
+  exists: map.parts.filter(p => { const fp = look.now?.[p.id]; return !!fp && 'hash' in fp && fp.files > 0 }).map(p => p.id),
+})
+
 // A draft waiting for the user's lock is what the views show, over any plan still running.
-export function summarize(top: Run): VM {
+export function summarize(top: Run, look: MapLook = {}): VM {
   const r = top.draft ?? top
   const plan = r.plan
   const phase: VM['phase'] = top.draft ? 'draft' : !plan ? 'none' : r.active === 'done' ? 'complete' : 'live'
@@ -1968,6 +2269,7 @@ export function summarize(top: Run): VM {
     ...(r.sweep && { sweep: r.sweep }),
     ...(phase === 'live' && r.checking?.length && { checking: r.checking }),
     ...(top.flowDraft && { flowDraft: top.flowDraft }),
+    ...((r.drawing || (!plan && look.map)) && { system: systemOf(r, r.drawing ?? standing(look.map!, look), states, phase, lastCheck, blockedOn(r), look) }),
     ...(top.draft && top.held?.depth && { depth: top.held.depth }),
     ...(facts && { proof: {
       quoted: plan!.states.filter(s => s.asked?.length).length,

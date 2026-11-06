@@ -1,4 +1,4 @@
-export type View = 'focus' | 'map' | 'ledger'
+export type View = 'focus' | 'map' | 'ledger' | 'system'
 
 // ref: where the state's details are written. evidence: why a state that was done before the lock counts as done.
 // group: a name the views fold the state under, "a/b" for b inside a. It only labels.
@@ -14,6 +14,8 @@ export type StateDef = {
   title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]
   // A check that holds only at this moment, such as one tied to a branch: it runs at this state's advance and never again.
   once?: true
+  // The parts of the system map this state builds (ids of parts with nothing inside them).
+  parts?: string[]
   // Where the state came from, while quote-the-source is on. asked: the words it quotes, compared with the sources.
   // added: Claude's reason, when nothing asked for it.
   asked?: string[]; added?: string
@@ -46,6 +48,93 @@ export type Weight = 'light' | 'standard' | 'thorough'
 export type Switches = { weight?: Weight; on?: Record<string, boolean> }
 // What a plan was locked with: the weight, every item on by name, and the instructions Claude is told.
 export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[] }
+// The system map, saved in .sentinel/system.json (committed). A part is flat with a parent id, so one part is one line
+// and two people editing different parts merge cleanly.
+// drawnAt: the commit the part was last drawn at. An outside part has evidence in place of files.
+export type Cite = { file: string; text: string }
+export type Evidence = { seen: Cite[] } | { said: string } | { guess: string }
+export type SysPart = {
+  id: string; name: string; parent?: string; desc?: string; files?: string[]
+  kind?: 'outside'; evidence?: Evidence; where?: string; drawnAt?: string
+}
+export type SysActor = { id: string; name: string; desc?: string }
+export type SysLine = { from: string; to: string; says: string }
+export type SystemMap = { name: string; actors: SysActor[]; parts: SysPart[]; lines: SysLine[] }
+export type SysTreePart = SysPart & { kids: SysTreePart[] }
+// A part's files as one hash and a count. none: it has no files to hash, or the folder has no git repo.
+export type Fingerprint = { hash: string; files: number } | { none: 'no files' | 'no git' }
+// What a part shows (hooks/mapstatus.ts). planned: Not built. exists: Already there. change: Will change. now: Claude is here.
+// changed: Changed since test. failing: Check failing. needs: Needs you.
+export type PartStatusName = 'planned' | 'exists' | 'change' | 'now' | 'tested' | 'changed' | 'untested' | 'failing' | 'needs' | 'outside' | 'dropped'
+// One state of the run as the map needs it. parts: the leaf parts it builds. where: done, being worked on, or not started.
+export type MapRunState = {
+  id: string; parts: string[]; where: 'done' | 'active' | 'ahead'
+  hasCheck?: boolean; skipped?: boolean; once?: boolean; failing?: boolean; blocked?: string; reopened?: string
+}
+// A part's saved proof (marks.json, kept out of git). base: its fingerprint when the state started, and since: which
+// visit that was (state@step). hash: its fingerprint when the check passed, and from: the baseline it was measured against.
+// check, weight and at: what proved it and when. step and run: the ledger step of the proof and the run it was in, so
+// an edit after it can be told from one before.
+// fine: the part's fingerprint when the user said a drift mark was fine; the mark stays away until the files differ from it.
+export type PartMark = { base?: string; since?: string; hash?: string; from?: string; check?: string; weight?: string; at?: string; step?: number; run?: number; fine?: string }
+// What git says changed in a project since a commit, one file at a time. A: added. M: edited. D: removed. R: renamed from `was`.
+export type Change = { how: 'A' | 'M' | 'D' | 'R'; path: string; was?: string }
+// What the update check asks of git. git: there is a repo. since: the changes since each commit parts were drawn at (null: git
+// does not know the commit). files: every file the project has now, tracked or new.
+export type DriftFacts = { git: boolean; since: Record<string, Change[] | null>; files: string[] }
+// What the update check found. parts: the leaf parts whose files changed or went. why: one line for each. loose: files added
+// since the map was drawn that no part covers. noGit: there is no repo to compare with.
+export type Drift = { parts: Record<string, 'changed' | 'gone'>; why: Record<string, string>; loose: string[]; noGit?: true }
+export type Marks = Record<string, PartMark>
+// A top-level folder no part's files reach, and how many files it holds.
+export type Unmapped = { path: string; files: number }
+export type StatusInput = {
+  map: SystemMap; states: MapRunState[]
+  existing?: string[]; dropped?: string[]
+  marks?: Record<string, PartMark>; now?: Record<string, Fingerprint>
+  closed?: { ran: string[] }; drift?: Record<string, 'changed' | 'gone'>
+}
+export type PartStatus = {
+  status: PartStatusName; tags: string[]; note?: string; shares?: string[]
+  proof?: { check?: string; weight?: string; at?: string }; evidence?: 'seen' | 'said' | 'guess'
+}
+export type MapTone = 'red' | 'amber' | 'blue' | 'dashed' | 'plain' | 'green' | 'neutral'
+export type MapCounts = Record<PartStatusName, number>
+export type MapRoll = { tone: MapTone; counts: MapCounts; total: number }
+export type MapTally = MapCounts & { total: number; built: number; untestedOrChanged: number }
+// One part as the screens draw it, with the parts inside it. A part with nothing inside has a status; a group has a roll
+// (its colour and counts). builtBy: the states that build it. outside: where it runs and why Claude says it is there.
+export type MapNode = {
+  id: string; name: string; desc?: string; files?: string[]
+  outside?: { kind: 'seen' | 'said' | 'guess'; why: string; where?: string }
+  status?: PartStatus; roll?: MapRoll; builtBy: string[]; kids: MapNode[]
+}
+// The system map as the views show it (summarize). parts and lines count what the drawing holds; tree, tally, actors and
+// links are what the System screens draw; here is where Claude is working now.
+export type SystemView = {
+  name: string; parts: number; lines: number; warnings: string[]; guessed: string[]
+  tree: MapNode[]; tally: MapTally; actors: SysActor[]; links: SysLine[]; here: { id: string; name: string }[]
+  changes: MapChanges
+  drift?: { count: number; why: Record<string, string>; loose: string[]; noGit?: boolean }
+  plans?: PlanLine[]
+  // Folders no part reaches (Not mapped yet) and .env.example endpoint keys nothing names (Not placed yet), each cut to what shows.
+  unmapped?: { rows: Unmapped[]; more: number }
+  leads?: { keys: string[]; more: number }
+}
+// What summarize needs besides the run to say how the parts stand: the saved proofs, and the files as last looked at.
+// map: the project's own map, for the screens when no plan has drawn one. drift: what the update check found.
+export type MapLook = { marks?: Marks; now?: Record<string, Fingerprint>; map?: SystemMap; drift?: Drift; plans?: PlanLine[]; unmapped?: Unmapped[]; leads?: string[] }
+// One finished plan, a line of .sentinel/plans.json: how it ended, when, and the ids of the parts its states built.
+export type PlanLine = { title: string; at: string; ended: 'complete' | 'closed'; parts: string[] }
+// The map a plan draws, kept in the run. map: the project's map with the plan's drawing merged in, as it stands now.
+// locked: as it stood at the lock, so what changed since can be told. warnings: what the drawing checks found; they never
+// stop a lock. exists: the ids of the parts nothing builds whose files are in the project, as of the last drawing.
+export type Drawing = { map: SystemMap; locked?: SystemMap; warnings: string[]; exists: string[] }
+// What differs between the drawing as signed off and as it stands (changesOf). edited: what changed in each part, in words.
+export type MapChanges = {
+  added: { id: string; name: string }[]; dropped: { id: string; name: string }[]
+  edited: { id: string; name: string; what: string[] }[]; linesAdded: SysLine[]; linesDropped: SysLine[]
+}
 export type LibraryScope = 'built-in' | 'project' | 'personal'
 // One instruction as the dashboard shows it. kind: told (Claude reads the text) or checks (Sentinel acts itself).
 // runs: the check runs it adds per state; slow: they can take as long as the check. needs: what it depends on.
@@ -160,7 +249,7 @@ export type PlanInput = {
   title?: string
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
   // flow: the flow the model drafts for the user to save.
   name?: string
   description?: string
@@ -189,6 +278,18 @@ export type PlanInput = {
   messages?: { text: string; at: string }[]
   // define: the model's answers to "what would an expert do here", for the user to tick before the lock.
   depth?: Depth[]
+  // define, revise, map: the parts, lines and people the plan draws, as an object. Sentinel merges it into the project's map.
+  system?: unknown
+  // define, revise, map: the map with that drawing merged in, and the ids of the parts nothing builds whose files exist.
+  // Sentinel sets it; anything the model sends here is dropped.
+  drawn?: { map: SystemMap; exists: string[] }
+  // status: a part id, to read that part and what is inside it. map: part ids to take off the map (with a reason).
+  area?: string
+  drop?: string[]
+  // map: the ids of the parts or areas Claude reread and redrew because the user asked. Their marker moves to the commit now.
+  redraw?: string[]
+  // map: the part ids in `drop` that the user agreed to in the dialog. Sentinel sets it; anything the model sends here is dropped.
+  approved?: string[]
   // flow: an instruction's text and moment, in place of states.
   text?: string
   at?: string
@@ -223,8 +324,9 @@ export type Run = {
   // When the user last typed a prompt or answered a question (ms since the epoch).
   heardAt?: number
   // What waits on the user's answer, asked at `at` (ms) and call `step`: a state's proposal (before) or its finished
-  // work (after). An answer after `at` settles it.
-  pending?: { state: string; at: number; step: number; kind: Wait; text?: string }
+  // work (after). `ok` is set once the stop goes through the question dialog: then only the Yes label or the dashboard's
+  // Approve settles it (true), and a typed message does not (false). Without `ok`, an answer after `at` settles it.
+  pending?: { state: string; at: number; step: number; kind: Wait; text?: string; ok?: boolean }
   // When the model last escalated (ms). Until the user answers, a stopped turn is not pushed on.
   escalatedAt?: number
   // What a blocked report says the run waits for, outside Sentinel and Claude. It counts while the escalation of the same `at` waits.
@@ -286,6 +388,8 @@ export type Run = {
   // A flow or an instruction (it has text, not states) the model drafted for the user to save, and what they asked
   // for, if they asked from the dashboard.
   flowDraft?: (FlowDef | InstructionDef) & { asked?: string }
+  // The system map this plan draws.
+  drawing?: Drawing
 }
 
 declare module 'claude-code' {
