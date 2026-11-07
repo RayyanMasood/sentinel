@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight } from '../types'
+import type { PlanSetting, Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight } from '../types'
 import { areaOf, changesOf, driftOf, dropParts, envLeads, fingerprint, formatSystem, mergeDrawing, outlineOf, parseMarks, parsePlans, parseSystem, partsInside, unmappedFolders, verifyEvidence, withBase, withDrawn, withoutFine, withPlan, withProof, type Git } from './system'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import {
@@ -10,7 +10,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
-  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -296,6 +296,7 @@ export const register: Register = on => {
       lock: () => void lockNow($),
       keep: id => void keepNow($, id),
       takeOut: id => void takeOut($, id).then(t => $.ui.toast(`Sentinel: ${t}`)),
+      setRow: (id, keep) => void answerRow($, id, keep).then(t => (t ? $.ui.toast(`Sentinel: ${t}`) : undefined)),
       resume: () => void resume($),
       answer: () => void answerNow($),
       asking: stopOpen !== undefined,
@@ -334,6 +335,15 @@ export const register: Register = on => {
       return { result: act(await read($, run), input as unknown as PlanInput, now()).text }
     }
     if (tool === 'ExitPlanMode') return signOff($, await next(e))
+    // ponytail: guards Edit and Write only, as the parallel file below; a Bash redirect into the file gets through.
+    if (EDITS.has(tool)) {
+      const root = await $.session.root()
+      const key = pathKey(root, String(input.file_path ?? input.notebook_path ?? ''))
+      const home = await sentinelDir($, 'personal')
+      if ([`${root}/.sentinel`, ...(home ? [home] : [])].some(d => pathKey(root, `${d}/library.json`) === key)) {
+        return { deny: "The Library's switches are the user's. They change them on the Library page, or with /sentinel on, off and weight." }
+      }
+    }
     // ponytail: guards Edit and Write only; a Bash redirect into the file gets through.
     if (EDITS.has(tool) && relPath(await $.session.root(), String(input.file_path ?? input.notebook_path ?? ''))?.toLowerCase() === PARALLEL_FILE) {
       return { deny: "Parallel states are the user's choice. They turn them on or off with /sentinel parallel on or /sentinel parallel off." }
@@ -691,6 +701,8 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
   }
   const chosen = depth.filter(x => ticked(x.id))
   const unanswered = (r.draft?.plan?.states ?? []).filter(s => s.added && !s.okAt).map(s => s.id)
+  const looser = r.draft ? looserLeft(r.draft.library, r.draft.plan?.states ?? []) : []
+  const stands = looser.length ? `Left at the plan's weight: ${looser.join(', ')}, looser settings Claude asked for that nobody answered.` : ''
   const left = depth.filter(x => !ticked(x.id))
   const gone = [...new Set(left.flatMap(x => (x.state && !chosen.some(c => c.state === x.state) ? [x.state] : [])))]
   if (gone.length) {
@@ -703,12 +715,25 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
   void after($)
   const unsaved = d.drawing ? await saveMap($, d.drawing.map) : undefined
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
-  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, unsaved ?? ''].filter(Boolean).join(' ')
+  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, stands, unsaved ?? ''].filter(Boolean).join(' ')
   later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${unsaved ? ` ${unsaved}` : ''}`
+  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${unsaved ? ` ${unsaved}` : ''}`
 }
 
 const keepNow = ($: $, id: string) => change($, x => keepAdded(x, id, now()))
+
+// The user's answer on one row of the draft's settings. A string says why it didn't go through.
+async function answerRow($: $, id: string, keep: boolean): Promise<string> {
+  const d = (await read($, run)).draft
+  const row = d && settingRows(d).find(x => x.id === id)
+  if (!row) return 'That setting has changed. Check the draft again.'
+  if (row.kind === 'weight' && keep) return void (await change($, x => keepWeights(x, row.states))), ''
+  if (row.kind === 'plan') {
+    const l = await libraryNow($)
+    return changeDraft($, held => (held.library ? { ...held, library: planLibrary({ ...answerSetting(held.library, row.key!, keep, l.items), items: l.items, project: l.project, personal: l.personal }) } : held), '')
+  }
+  return changeDraft($, held => (row.kind === 'weight' ? dropWeights(held, row.states) : dropAdd(held, row.states, row.name!)), '')
+}
 
 // Takes a state Claude added out of the draft. Only those: a state with a quote was asked for, and a flow's is the user's.
 async function takeOut($: $, id: string): Promise<string> {
@@ -861,7 +886,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const typed = user || spoke()
   // What a plan is locked with comes from the switches files, never from the model.
   const { library: _library, named: _named, messages: _messages, drawn: _drawn, approved: _approved, ...sent } = raw
-  let input = relInput(await $.session.root(), sent)
+  let input = relInput(await $.session.root(), { ...sent, ...(sent.states ? { states: sent.states.map(({ weightOk: _ok, ...s }) => s) } : {}) })
   const label = `plan ${input.action}${input.to ? ` → ${input.to}` : ''}`
   if (input.action === 'brief') return brief($, input, label)
   if (input.action === 'flow') return draftFlow($, input, label)
@@ -880,6 +905,30 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   if (lib) input = { ...input, library: planLibrary(lib) }
   const ruled = lib && was.signedOff ? withRules(input, lib.flows.filter(f => lib.on.includes(f.name))) : undefined
   if (ruled) input = ruled.input
+  // The experimental switch, as this plan has it. Off, what Claude sent for it goes. On, Sentinel checks it. A define from
+  // before the sign-off keeps it as sent: it comes back through here at the sign-off, when there is what the user typed.
+  let dropped: string | undefined
+  if (input.action === 'define' || input.action === 'revise') {
+    const midRun = input.action === 'revise' && addsMidRun(was)
+    const base = input.action === 'define' ? input.library : (midRun ? was : was.draft)?.library
+    if (!base?.states) {
+      const off = withoutSettings(input)
+      input = off.input
+      dropped = off.had ? SETTINGS_OFF : undefined
+    } else if (was.signedOff || midRun) {
+      const typedNow = (await read($, said)).messages.map(m => m.text)
+      const sentStates = settledStates(input, base, typedNow)
+      if (typeof sentStates === 'string') return record($, { deny: sentStates }, { kind: 'plan', label, denied: true })
+      input = sentStates
+      if (input.settings !== undefined && !midRun) {
+        const l = lib ?? await libraryNow($)
+        const got = planSettings(base, input.settings, l.items, typedNow)
+        if (typeof got === 'string') return record($, { deny: got }, { kind: 'plan', label, denied: true })
+        const { settings: _settings, ...rest } = input
+        input = { ...rest, library: planLibrary({ ...got, items: l.items, project: l.project, personal: l.personal }) }
+      }
+    }
+  }
   const check = input.action === 'advance' ? forwardCheck(was, input.to) : undefined
   let note: string | undefined
   let slow: string | undefined
@@ -1026,7 +1075,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const offered = a.event === 'drafted' && flowsSeen?.length
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
-  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), inLine), unrun), rules), offered)
+  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), inLine), unrun), rules), offered), a.ok ? dropped : undefined)
 }
 
 // ---- the drawing: what the model draws with a plan, merged into the project's map ----
@@ -1215,7 +1264,7 @@ async function trust($: $, file: string, item?: object): Promise<void> {
   await $.store.set(TRUSTED, t)
 }
 // An item as its file holds it, without what the Library adds.
-const defOf = <T extends { scope: unknown; file: string; trusted: boolean; weights?: unknown }>({ scope: _s, file: _f, trusted: _t, weights: _w, ...def }: T) => def
+const defOf = <T extends { scope: unknown; file: string; trusted: boolean }>({ scope: _s, file: _f, trusted: _t, ...def }: T) => def
 const nameTaken = (name: string, by: Kind) => `"${name}" is already the name of ${by === 'flow' ? 'a flow' : 'an instruction'}.`
 
 // The flows and instructions on disk, the project's first, then the personal ones. A file's name is its item's name;
@@ -1269,7 +1318,7 @@ function insItems(user: SavedIns[]): Omit<LibraryItem, 'on'>[] {
       const f = user.find(x => x.name === b.name)
       return f ? mine(f, b.weights) : { ...b, scope: 'built-in' as const, trusted: true }
     }),
-    ...user.filter(x => !BUILTINS.some(b => b.name === x.name)).map(x => mine(x)),
+    ...user.filter(x => !BUILTINS.some(b => b.name === x.name)).map(x => ({ ...mine(x), own: true })),
   ]
 }
 
@@ -1327,9 +1376,9 @@ async function promptSection($: $): Promise<string> {
 }
 
 // What a new plan is locked with: the weight, every item on, and the instructions on that Claude is told.
-function planLibrary(l: { weight: Weight; on: string[]; items: Omit<LibraryItem, 'on'>[] }): PlanLibrary {
+function planLibrary(l: { weight: Weight; on: string[]; items: Omit<LibraryItem, 'on'>[]; project?: Switches; personal?: Switches; settings?: PlanSetting[] }): PlanLibrary {
   const told = l.items.filter(x => x.kind === 'told' && l.on.includes(x.name))
-  return { weight: l.weight, on: l.on, told: told.map(({ name, description, at, files, text }) => ({ name, ...(description ? { description } : {}), at, ...(files ? { files } : {}), text })) }
+  return { weight: l.weight, on: l.on, told: told.map(toldEntry), ...(l.on.includes(STATE_SETTINGS) ? { states: planStates(l.items, l.weight, l.on, handOf(l.items, l.project, l.personal)) } : {}), ...(l.settings?.length ? { settings: l.settings } : {}) }
 }
 
 // A flow (it has states) or an instruction, saved to the project or the user's own folder, and trusted. A name serves
@@ -1396,8 +1445,8 @@ async function switchNow($: $, name: string, on: boolean | null, scope: Scope): 
 async function weightNow($: $, weight: string, scope: Scope): Promise<Reply> {
   if (!(WEIGHTS as readonly string[]).includes(weight)) return no('Use /sentinel weight light, standard or thorough, and personal after it for your default.')
   const l = await libraryNow($)
-  const weighted = [...l.items, ...l.flows].filter(x => x.weights).map(x => x.name)
-  const why = await saveSwitches($, scope, withWeight(scope === 'project' ? l.project : l.personal, weight as Weight, weighted))
+  const builtins = [...BUILTINS, ...BUILTIN_FLOWS].map(x => x.name)
+  const why = await saveSwitches($, scope, withWeight(scope === 'project' ? l.project : l.personal, weight as Weight, builtins))
   if (why) return no(why)
   const over = scope === 'personal' && l.project.weight ? ` This project picked ${l.project.weight}, which wins here.` : ''
   return { ok: true, text: `The weight is ${weight} ${scopeWords(scope)}.${over || ' The built-ins follow it; your own items keep their switches.'}` }
@@ -1410,7 +1459,8 @@ async function trustNow($: $, name: string): Promise<Reply> {
   const found = flow ?? instructions.find(x => x.name === name)
   if (!found && !BUILTINS.some(b => b.name === name)) return noItem(name)
   if (!found || found.scope === 'built-in') return no(`${name} is built in, so there is nothing to trust.`)
-  await trust($, found.file, defOf(found))
+  // A flow's weights are the Library's; an instruction's come from its file, so they count as what was trusted.
+  await trust($, found.file, flow ? { ...defOf(found), weights: undefined } : defOf(found))
   const on = (await libraryNow($)).on.includes(name)
   void after($)
   const then = flow && on ? ` It adds itself ${ruleText(flow.when)}.` : ` It is ${on ? 'on' : `off: /sentinel on ${name} turns it on`}.`
@@ -1787,7 +1837,8 @@ function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),
     mapHere(r, st),
-    toldHere(r, st),
+    toldHere(r, st, false, true),
+    memberGap(r, st),
     'Make no commits and leave the branches alone. You may start helper agents; they meet the same limits. When you are done, stop and say what you did. Sentinel checks your work and brings it back to the project.',
   ].filter(Boolean).join('\n\n')
 }
@@ -2577,8 +2628,15 @@ async function fromPage($: $, m: Record<string, unknown>) {
   // told comes from the Library as it is now.
   if (m.kind === 'libplan' && r.draft && m.draft === draftKey(r) && WEIGHTS.includes(m.weight as Weight) && Array.isArray(m.on)) {
     const l = await libraryNow($)
-    const on = [...l.items, ...l.flows].filter(x => x.trusted && (m.on as unknown[]).includes(x.name)).map(x => x.name)
-    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items }) }), '')
+    // The experimental switch isn't one of the draft's choices: it stays as the plan was drafted.
+    const picked = [...l.items, ...l.flows].filter(x => x.trusted && x.name !== STATE_SETTINGS && (m.on as unknown[]).includes(x.name)).map(x => x.name)
+    const on = r.held?.library?.on.includes(STATE_SETTINGS) ? [...picked, STATE_SETTINGS] : picked
+    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, personal: l.personal, settings: held.library?.settings }) }), '')
+    return why ? toast(why) : undefined
+  }
+  // An answer on the draft card's settings. The row comes from the draft as it stands, so a stale page changes nothing.
+  if (m.kind === 'setrow' && r.draft && m.draft === draftKey(r) && typeof m.id === 'string') {
+    const why = await answerRow($, m.id, m.keep === true)
     return why ? toast(why) : undefined
   }
   // The update check's mark, said to be fine from the page. It needs no plan.

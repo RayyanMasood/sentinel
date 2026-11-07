@@ -81,6 +81,17 @@ export function checkQuote(doc: string, quote: string): Verdict {
   return w.split(' ').length >= MIN_WORDS || w === whole ? 'ok' : 'short'
 }
 
+// A quote for one setting. short: what it sets and one more word will do, which suits an instruction turned on or a
+// stricter weight. Anything looser keeps the 5-word rule, as "go light" sits inside "don't go light on this".
+export function checkSetting(doc: string, quote: string, name: string, short: boolean): Verdict {
+  const v = checkQuote(doc, quote)
+  if (v !== 'short' || !short) return v
+  const words = (t: string) => squash(t).split(/[ -]/).map(bare).filter(Boolean)
+  const said = words(quote)
+  const want = words(name)
+  return said.length > want.length && said.some((_, k) => want.every((w, j) => said[k + j] === w)) ? 'ok' : 'short'
+}
+
 export const sectionOf = (doc: string, quote: string): string | undefined => {
   const w = squash(quote)
   return w ? sectionsOf(doc).find(s => holds(squash(s.body), w))?.name : undefined

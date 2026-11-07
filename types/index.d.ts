@@ -21,6 +21,10 @@ export type StateDef = {
   asked?: string[]; added?: string
   // okAt: when the user kept a state Claude added on the draft. look: why Sentinel stops a state Claude added at its start.
   okAt?: string; look?: string
+  // With the Library's state-settings switch on. weight: this state's, with weightWhy saying why it differs from the plan.
+  // weightQuote: the user's words that asked for it. weightOk: the user asked for it or kept it, which a weight looser than
+  // the plan's needs. adds: instructions on top.
+  weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[]
   // A state a flow put in the plan: the flow's name, the name of this copy (review, or review-2 for a second one), and
   // why it is there (the user added it, or one of their rules).
   flow?: FlowMark
@@ -40,14 +44,22 @@ export type FlowDef = { name: string; description?: string; when?: FlowWhen; sta
 // edits files starts), close (before such a state closes; told at its start), final (before the plan completes),
 // always (every turn). files: for start and close, only the states that edit them.
 export type InstructionAt = 'draft' | 'start' | 'close' | 'final' | 'always'
-export type InstructionDef = { name: string; description?: string; at: InstructionAt; files?: string[]; text: string }
+export type InstructionDef = { name: string; description?: string; at: InstructionAt; files?: string[]; text: string; weights?: Weight[] }
 // How much testing the built-ins carry. Each built-in says which weights turn it on.
 export type Weight = 'light' | 'standard' | 'thorough'
 // A switches file: .sentinel/library.json (the project's, committed) or ~/.sentinel/library.json (the user's default).
 // on: an item's switch by name, where it differs from its default.
 export type Switches = { weight?: Weight; on?: Record<string, boolean> }
 // What a plan was locked with: the weight, every item on by name, and the instructions Claude is told.
-export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[] }
+// states: only with the state-settings switch on, what lets a state differ from the plan. hand: the switches flipped by
+// hand, which no weight moves. weights: which weights turn on each instruction a state's weight can move. spare: the told
+// instructions off for this plan that a state's weight or addition can bring in.
+// settings: what Claude set for this plan, with why or the user's quote. held: looser and waiting for the user, so not in effect.
+export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; held?: true }
+// One row of the draft card's settings: what differs from the plan, for the states it covers. owed: it waits for the user.
+// kept: they kept a looser one. id: what an answer names.
+export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true }
+export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[] }
 // The system map, saved in .sentinel/system.json (committed). A part is flat with a parent id, so one part is one line
 // and two people editing different parts merge cleanly.
 // drawnAt: the commit the part was last drawn at. An outside part has evidence in place of files.
@@ -140,7 +152,7 @@ export type LibraryScope = 'built-in' | 'project' | 'personal'
 // runs: the check runs it adds per state; slow: they can take as long as the check. needs: what it depends on.
 export type LibraryItem = InstructionDef & {
   scope: LibraryScope; title?: string; kind: 'told' | 'checks'; runs?: number; slow?: boolean; needs?: string
-  weights?: Weight[]; on: boolean; trusted: boolean; file?: string
+  weights?: Weight[]; on: boolean; trusted: boolean; file?: string; own?: boolean
 }
 // The Library as the dashboard reads it: the weight in force, both switches files as saved, the instructions, and
 // which flows are on (the flows themselves are in `flows`).
@@ -250,7 +262,10 @@ export type PlanInput = {
   title?: string
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark; weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[] }[]
+  // define, revise, with the Library's state-settings switch on: the plan's weight and instructions on or off. Sentinel
+  // turns it into library.settings; with the switch off it is dropped.
+  settings?: unknown
   // flow: the flow the model drafts for the user to save.
   name?: string
   description?: string

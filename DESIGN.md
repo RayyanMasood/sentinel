@@ -424,9 +424,13 @@ Opens at `#source`, or at `#source-<state>` with that state's quotes picked out 
 ### Draft card: where the states came from
 With a plan that compares quotes, the slip's left column leads with the count (a green tick, or an amber warning when nothing is quoted) and one amber line per source for the sections nothing quotes. Each state Claude added follows as a block with Keep it and Take it out, tinted amber until answered and sunk after. The quotes fold under a details row across both columns. While any addition is unanswered the stub says how many and Lock the plan stays disabled.
 
+### Draft card: settings Claude chose
+Only with Settings per state on, after the quotes. A grid of states, setting, reason and answers, one row for each reason (one column under 860px). The setting is a mini tag. A row that waits for an answer is tinted amber like an added state, and its tag gets the amber outline. The slip's stub counts them and holds Lock back.
+
 ### Library page
 Two tabs, Instructions and Flows, and a "Switches for" choice between this project and your default. Claude's draft of either kind shows above them in a slip, outlined and banded in the run's colour.
 - **Weights:** three cards in a row (one column under 860px), each with its name in Libre Franklin capitals, a line on what it is for, and a footer of figures: words per state, words once per plan, extra check runs. Slow extra time shows as amber cells. The picked card stands with an ink edge.
+- **Experimental switch:** one sunk row under the weight note, with the switch, its title, an Experimental tag and a line saying it is for testing. It stays out of the instruction list and its totals. The System page's heading carries the same tag, with no switch.
 - **Instruction rows:** bars 62px tall with a switch, the title and text, then the moment, a "Claude is told" or "Sentinel checks this" tag and the cost. A row that is off greys its words. A sunk strip under the list adds up what is on.
 - **Detail panel:** the picked instruction's tags, its text, what it needs in a callout, and Copy to edit for a built-in, Trust for a file Sentinel didn't save, Edit and Delete for your own.
 - **Flows:** a table with an On switch per row, a search box and a scope filter, and a detail panel (Edit, Duplicate, Delete).

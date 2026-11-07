@@ -1,8 +1,8 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, Refused, Run, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
-import { checkQuote, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
+import { checkQuote, checkSetting, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
 
@@ -912,6 +912,7 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
     title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions, named: i.named, messages: i.messages,
     ...(i.depth ? { depth: i.depth } : {}),
     ...(i.drawn ? { drawn: i.drawn } : {}),
+    ...(i.library ? { library: i.library } : {}),
   }
 }
 
@@ -1033,7 +1034,7 @@ function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | stri
   if (s.once !== undefined && typeof s.once !== 'boolean') return `"once" on ${id} must be true or false.`
   if (s.once && !check) return `${id} has "once" but no check. "once" means its check runs at its advance and not again at the end.`
   const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}) }
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}), ...(s.weight ? { weight: s.weight } : {}), ...(s.weightWhy ? { weightWhy: s.weightWhy } : {}), ...(s.weightQuote ? { weightQuote: s.weightQuote } : {}), ...(s.weightOk ? { weightOk: true as const } : {}), ...(s.adds?.length ? { adds: s.adds } : {}) }
 }
 
 // What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
@@ -1082,7 +1083,7 @@ export const addsMidRun = (r: Run) => isLive(r) && !r.draft && !!r.library?.on.i
 const BREAKING_SAMPLES = ['package.json', '.github/x.yml', '.env', 'migrations/x.sql', 'auth/x.ts']
 const reachOf = (files: string[]) => files.map(f => breakingKind(f) ?? breakingKind(BREAKING_SAMPLES.find(p => globMatch(f, p)) ?? '')).find(Boolean)
 
-const FIXED_MID_RUN = ['title', 'source', 'start', 'decisions', 'depth'] as const
+const FIXED_MID_RUN = ['title', 'source', 'start', 'decisions', 'depth', 'settings'] as const
 
 // States added while the plan runs. The rest stays as the user locked it and the work carries on: a state with a quote
 // goes in, one Claude added goes in tagged with its reason, and that one stops at its start if it can reach a risky path.
@@ -1177,13 +1178,15 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   // A state nothing asked for waits for the user's answer, even on a plan they approved. An answer they gave on this
   // draft stands while the reason stays the same.
   const additions = states.filter(s => s.added).map(s => s.id)
-  const drafting = r.review || additions.length > 0
   if (r.review) {
     for (const [k, s] of states.entries()) {
       const was = r.draft?.plan?.states.find(x => x.id === s.id)
       if (s.added && was?.okAt && was.added === s.added) states[k] = { ...s, okAt: was.okAt }
+      if (s.weight && was?.weightOk && was.weight === s.weight && was.weightWhy === s.weightWhy) states[k] = { ...states[k]!, weightOk: true }
     }
   }
+  const looser = looserLeft(i.library, states)
+  const drafting = r.review || additions.length > 0 || looser.length > 0
   const audit: Audit[] = []
   for (const d of i.decisions ?? []) {
     const topic = d.topic?.trim()
@@ -1206,7 +1209,8 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   const before = (prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : '') + mapNote(drawing)
   if (drafting) {
     const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
-    const waits = r.review ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`
+    const waits = (r.review || !additions.length ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`)
+      + (looser.length ? `Looser than the plan, so these wait for the user's answer: ${looser.join(', ')}. If they lock it without answering, the plan's weight stands.\n` : '')
     const text = `${waits}Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
     return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
@@ -1444,6 +1448,7 @@ export function withRules(i: PlanInput, flows: FlowDef[]): { input: PlanInput; a
 
 const MOMENTS: readonly InstructionAt[] = ['draft', 'start', 'close', 'final', 'always']
 export const DEFAULT_WEIGHT: Weight = 'standard'
+const isWeight = (w: unknown): w is Weight => w === 'light' || w === 'standard' || w === 'thorough'
 
 // An instruction as the user saved it or the model sent it. A string says what is wrong.
 export function instructionOf(raw: unknown): InstructionDef | string {
@@ -1457,27 +1462,258 @@ export function instructionOf(raw: unknown): InstructionDef | string {
   const files = strings(f.files)
   if (files.length && at !== 'start' && at !== 'close') return `files in ${name} apply only when at is start or close.`
   const description = clip(f.description, 300)
-  return { name, ...(description ? { description } : {}), at, ...(files.length ? { files } : {}), text }
+  const weights = f.weights ?? []
+  if (!Array.isArray(weights) || !weights.every(isWeight)) return `weights in ${name} are light, standard or thorough.`
+  return { name, ...(description ? { description } : {}), at, ...(files.length ? { files } : {}), text, ...(weights.length ? { weights: weights as Weight[] } : {}) }
 }
+
+// The Library's experimental switch. Only the user turns it on. With it off, a plan has one weight for all its states, as
+// it always has, and Claude never hears of anything else.
+export const STATE_SETTINGS = 'state-settings'
+// The built-ins a state's own weight can move. Every other instruction is the plan's.
+const WEIGHT_MOVES = ['fast-checks', 'failure-list', 'fails-first', 'break-it-once', 'fails-without-change']
+const WEIGHT_RANK: Record<Weight, number> = { light: 0, standard: 1, thorough: 2 }
+
+// own: the user's own instruction, with its own list of weights if any. A file in a built-in's place isn't.
+type LibItem = { name: string; weights?: readonly Weight[]; trusted?: boolean; own?: boolean }
+const sw = (s: Switches, name: string) => (s.on && Object.hasOwn(s.on, name) ? s.on[name] : undefined)
+// An item's switch flipped by hand, if it has one. A project that picks a weight takes the built-ins over, so the user's
+// switch no longer counts for them. Their own items keep it, and so does state-settings, which is in no weight.
+const handOn = (it: LibItem, project: Switches, personal: Switches) => sw(project, it.name) ?? (it.weights && !it.own && project.weight && it.name !== STATE_SETTINGS ? undefined : sw(personal, it.name))
 
 // Which items are on. A built-in lists the weights that turn it on; the user's own items list none and are on unless
 // switched off. A project that picks a weight takes the built-ins over: its switches and that weight decide them.
 // Otherwise the project's switch counts first, then the user's, then the user's weight (Standard when neither picked
 // one). An item that isn't trusted is off.
-export function libraryOn(items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[], project: Switches = {}, personal: Switches = {}): { weight: Weight; on: string[] } {
+export function libraryOn(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}): { weight: Weight; on: string[] } {
   const weight = project.weight ?? personal.weight ?? DEFAULT_WEIGHT
-  const sw = (s: Switches, name: string) => (s.on && Object.hasOwn(s.on, name) ? s.on[name] : undefined)
-  const on = items.filter(it => it.trusted !== false && (it.weights
-    ? sw(project, it.name) ?? (project.weight ? undefined : sw(personal, it.name)) ?? it.weights.includes(weight)
-    : sw(project, it.name) ?? sw(personal, it.name) ?? true))
+  const on = items.filter(it => it.trusted !== false && (handOn(it, project, personal) ?? it.weights?.includes(weight) ?? true))
   return { weight, on: on.map(it => it.name) }
 }
 
+// The switches flipped by hand that decide an item.
+export function handOf(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}): Record<string, boolean> {
+  return Object.fromEntries(items.flatMap(it => {
+    const v = handOn(it, project, personal)
+    return v === undefined ? [] : [[it.name, v]]
+  }))
+}
+
 // A switches file with a weight picked: the built-ins' switches go, so the weight sets them; the user's items keep theirs.
+// state-settings keeps its switch, since no weight decides it.
 export function withWeight(s: Switches, weight: Weight, builtins: readonly string[]): Switches {
-  const on = Object.fromEntries(Object.entries(s.on ?? {}).filter(([name]) => !builtins.includes(name)))
+  const on = Object.fromEntries(Object.entries(s.on ?? {}).filter(([name]) => !builtins.includes(name) || name === STATE_SETTINGS))
   return { weight, ...(Object.keys(on).length ? { on } : {}) }
 }
+
+// What a plan keeps for its states. `on` is the plan's list, which the draft card may have changed: a switch counts as
+// the list has it, and an item the list has against its weight counts as flipped by hand.
+export function planStates(items: readonly (LibItem & InstructionDef & { kind: string })[], weight: Weight, on: readonly string[], hand: Record<string, boolean>): NonNullable<PlanLibrary['states']> {
+  const perState = (x: InstructionDef) => x.at === 'start' || x.at === 'close'
+  const moved = items.filter(x => x.weights && (WEIGHT_MOVES.includes(x.name) || (x.own && perState(x))))
+  const flipped = moved.filter(x => x.weights!.includes(weight) !== on.includes(x.name)).map(x => [x.name, on.includes(x.name)])
+  const allHand = { ...Object.fromEntries(Object.keys(hand).map(n => [n, on.includes(n)])), ...Object.fromEntries(flipped) } as Record<string, boolean>
+  const spare = items.filter(x => x.kind === 'told' && perState(x) && x.trusted !== false && !on.includes(x.name) && allHand[x.name] !== false)
+  return { hand: allHand, weights: Object.fromEntries(moved.map(x => [x.name, [...x.weights!]])), spare: spare.map(toldEntry) }
+}
+// An instruction as a plan keeps it.
+export const toldEntry = ({ name, description, at, files, text }: InstructionDef): InstructionDef => ({ name, ...(description ? { description } : {}), at, ...(files ? { files } : {}), text })
+
+// The weight a state runs at. A looser one than the plan's holds only once the user asked for it or kept it. It is worked
+// out here and not stored, as the plan's weight can change on the draft.
+export function weightFor(r: Run, st: StateDef): Weight {
+  const plan = r.library?.weight ?? DEFAULT_WEIGHT
+  if (!st.weight || !r.library?.states) return plan
+  return st.weightOk || WEIGHT_RANK[st.weight] >= WEIGHT_RANK[plan] ? st.weight : plan
+}
+
+// Is this instruction on for this state? With the switch off, or in a run saved before it, the plan's list answers.
+export function onFor(r: Run, st: StateDef, name: string): boolean {
+  const l = r.library
+  const s = l?.states
+  if (!s) return !!l?.on.includes(name)
+  if (Object.hasOwn(s.hand, name)) return s.hand[name]!
+  if (st.adds?.some(a => a.name === name)) return true
+  return Object.hasOwn(s.weights, name) ? s.weights[name]!.includes(weightFor(r, st)) : l!.on.includes(name)
+}
+
+// What still waits for the user: the looser settings Claude decided on. A lock with these unanswered leaves them out.
+export function looserLeft(l: PlanLibrary | undefined, states: readonly StateDef[]): string[] {
+  const r = { ...emptyRun(), ...(l ? { library: l } : {}) }
+  return [
+    ...(l?.settings ?? []).filter(s => s.held).map(s => (s.weight ? `plan weight ${s.weight}` : `${s.name} off`)),
+    ...states.filter(s => s.weight && weightFor(r, s) !== s.weight).map(s => `${s.id} (${s.weight})`),
+  ]
+}
+
+const MAX_WHY = 200
+// The checks Sentinel runs per state, which can be added to one. Told instructions show by when they fire.
+const PER_STATE_CHECKS = ['fails-first', 'fails-without-change']
+export const SETTINGS_OFF = "The Library's per-state settings are off, so Sentinel dropped weight, adds and settings from this plan. Only the user turns them on."
+
+// Why these words don't count as the user's, or nothing when they do. Compared with what they typed, not the plan.
+function notTyped(typed: readonly string[], quote: string, name: string, short: boolean): string | undefined {
+  const verdicts = typed.map(m => checkSetting(m, quote, name, short))
+  if (verdicts.includes('ok')) return undefined
+  if (verdicts.includes('short')) return `"${shown(quote)}" is too short to count: quote at least ${MIN_WORDS} words${short ? `, or ${name} and one more word` : ''}, or a whole message.`
+  return `"${shown(quote)}" isn't in what the user typed, word for word. Copy their words, or send your own reason instead: a stricter setting then applies and a looser one waits for them.`
+}
+
+// With the switch off, what Claude sent for it goes. had: there was something to drop.
+export function withoutSettings(i: PlanInput): { input: PlanInput; had: boolean } {
+  const fields = ['weight', 'weightWhy', 'weightQuote', 'adds'] as const
+  const { settings, ...rest } = i
+  const had = settings !== undefined || !!i.states?.some(s => fields.some(k => s[k] !== undefined))
+  return { had, input: had ? { ...rest, states: i.states?.map(({ weight: _w, weightWhy: _y, weightQuote: _q, adds: _a, ...s }) => s) } : i }
+}
+
+type SentState = NonNullable<PlanInput['states']>[number]
+
+// What a state can add: an instruction that fires per state, on this state's files. Off because of the weight is fine, off by hand isn't.
+function addsProblem(s: SentState, id: string, lib: PlanLibrary): string | undefined {
+  const can = [...lib.told, ...(lib.states?.spare ?? [])].filter(x => x.at === 'start' || x.at === 'close')
+  const files = (s.files ?? []).map(f => f.trim()).filter(Boolean)
+  if (!Array.isArray(s.adds)) return `adds on ${id} is a list of { name, why }.`
+  for (const a of s.adds) {
+    const name = typeof a?.name === 'string' ? a.name.trim() : ''
+    if (!name) return `Each addition on ${id} needs a name and a one-line why.`
+    if (!clip(a.why, MAX_WHY)) return `${name} on ${id} needs a one-line why.`
+    if (lib.states?.hand[name] === false) return `The user switched ${name} off, so ${id} can't add it.`
+    const told = can.find(x => x.name === name)
+    if (!told && !PER_STATE_CHECKS.includes(name)) return `${name} can't be added to ${id}: a state takes only an instruction that fires per state. These can: ${[...can.map(x => x.name), ...PER_STATE_CHECKS].join(', ')}.`
+    if (!files.length) return `${id} edits no files, so no instruction fires there, and it can't add ${name}.`
+    if (told?.files?.length && !files.some(f => told.files!.some(g => globsMeet(f, g)))) return `${name} covers ${told.files.join(', ')} and ${id} edits none of that, so it would never fire there.`
+  }
+  return undefined
+}
+
+// The states' weights and additions as sent, with the switch on. A string says what is wrong. weightOk comes from here
+// alone, once the user's words hold up: Sentinel drops what the model sends for it.
+export function settledStates(i: PlanInput, lib: PlanLibrary, typed: readonly string[]): PlanInput | string {
+  const states: SentState[] = []
+  for (const s of i.states ?? []) {
+    const id = (s.id ?? '').trim()
+    const { weight, weightWhy, weightQuote, adds, ...rest } = s
+    let out: SentState = rest
+    if (weight !== undefined) {
+      if (!isWeight(weight)) return `weight on ${id} is light, standard or thorough.`
+      const why = clip(weightWhy, MAX_WHY)
+      const quote = clip(weightQuote, MAX_WHY)
+      if (!why && !quote) return `weight on ${id} needs weightWhy, one line on why, or weightQuote, the user's words.`
+      const wrong = quote ? notTyped(typed, quote, weight, WEIGHT_RANK[weight] > WEIGHT_RANK[lib.weight]) : undefined
+      if (wrong) return `weight on ${id}: ${wrong}`
+      out = { ...out, weight, ...(why ? { weightWhy: why } : {}), ...(quote ? { weightQuote: quote, weightOk: true as const } : {}) }
+    }
+    if (adds !== undefined) {
+      const wrong = addsProblem(s, id, lib)
+      if (wrong) return wrong
+      // A name sent twice keeps the last reason.
+      const byName = new Map(adds.map(a => [a.name.trim(), { name: a.name.trim(), why: clip(a.why, MAX_WHY)! }]))
+      out = { ...out, adds: [...byName.values()] }
+    }
+    states.push(out)
+  }
+  return { ...i, ...(i.states ? { states } : {}) }
+}
+
+const settingKey = (s: PlanSetting) => (s.weight ? '#weight' : s.name!)
+
+// The plan's own settings as sent, on top of what it has. Each carries the user's words or Claude's reason. What is looser
+// and only has a reason is held: on the list, out of effect. Reaches this plan only, so the switch files stay as they are.
+export function planSettings(lib: PlanLibrary, sent: unknown, items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[], typed: readonly string[]): { weight: Weight; on: string[]; settings: PlanSetting[] } | string {
+  if (!Array.isArray(sent)) return '"settings" is a list of { weight } or { name, on }, each with "why" or "quote".'
+  const hand = lib.states?.hand ?? {}
+  const list = new Map((lib.settings ?? []).map(s => [settingKey(s), s]))
+  for (const x of sent as PlanSetting[]) {
+    const name = typeof x?.name === 'string' ? x.name.trim() : undefined
+    const weight = x?.weight
+    if (!name && weight === undefined) return 'Each of "settings" names a weight, or an instruction with name and on.'
+    if (!name && !isWeight(weight)) return 'A weight in "settings" is light, standard or thorough.'
+    if (name === STATE_SETTINGS) return 'Only the user turns state-settings on or off.'
+    if (name && !items.some(it => it.name === name && it.trusted !== false)) return `There is no instruction "${name}" to set.`
+    if (name && typeof x.on !== 'boolean') return `${name} in "settings" needs "on", true or false.`
+    const why = clip(x.why, MAX_WHY)
+    const quote = clip(x.quote, MAX_WHY)
+    if (!why && !quote) return `${name ?? weight} in "settings" needs "why", one line on why, or "quote", the user's words.`
+    const looser = name ? !x.on : WEIGHT_RANK[weight!] < WEIGHT_RANK[lib.weight]
+    const wrong = quote ? notTyped(typed, quote, name ?? weight!, !looser) : undefined
+    if (wrong) return `${name ?? weight} in "settings": ${wrong}`
+    if (name && x.on && hand[name] === false && !quote) return `The user switched ${name} off, so it takes their own words to turn it on for this plan.`
+    const held = looser && !quote
+    const entry: PlanSetting = { ...(name ? { name, on: x.on! } : { weight: weight! }), ...(why ? { why } : {}), ...(quote ? { quote } : {}), ...(held ? { held: true as const } : {}) }
+    list.set(settingKey(entry), entry)
+  }
+  return applied(lib, [...list.values()], items)
+}
+
+// The plan's weight and list with these settings in effect, apart from the ones held for the user.
+function applied(lib: PlanLibrary, settings: PlanSetting[], items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[]): { weight: Weight; on: string[]; settings: PlanSetting[] } {
+  const hand = lib.states?.hand ?? {}
+  const live = settings.filter(s => !s.held)
+  let { weight } = lib
+  const on = new Set(lib.on)
+  for (const s of live.filter(x => x.weight)) {
+    weight = s.weight!
+    for (const it of items) {
+      if (it.weights && it.trusted !== false && !Object.hasOwn(hand, it.name)) void (it.weights.includes(weight) ? on.add(it.name) : on.delete(it.name))
+    }
+  }
+  for (const s of live.filter(x => x.name)) void (s.on ? on.add(s.name!) : on.delete(s.name!))
+  return { weight, on: [...on], settings }
+}
+
+// The user's answer on a plan setting: Keep puts it in effect, and otherwise it goes.
+export function answerSetting(lib: PlanLibrary, key: string, keep: boolean, items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[]) {
+  const settings = (lib.settings ?? []).flatMap(s => {
+    if (settingKey(s) !== key) return [s]
+    const { held: _held, ...rest } = s
+    return keep ? [rest] : []
+  })
+  return applied(lib, settings, items)
+}
+
+// What differs from the plan, for the draft card and the band: the plan's own settings, then the states grouped by what they say.
+export function settingRows(r: Run): SettingRow[] {
+  const l = r.library
+  if (!l?.states) return []
+  const rows = new Map<string, SettingRow>()
+  const put = (id: string, row: Omit<SettingRow, 'id' | 'states'>, state?: string) => {
+    const had = rows.get(id)
+    if (had && state) had.states.push(state)
+    else if (!had) rows.set(id, { id, ...row, states: state ? [state] : [] })
+  }
+  const fields = (why?: string, quote?: string) => ({ ...(why ? { why } : {}), ...(quote ? { quote } : {}) })
+  for (const s of l.settings ?? []) {
+    const key = settingKey(s)
+    put(`plan|${key}`, { kind: 'plan', key, ...(s.weight ? { weight: s.weight } : { name: s.name!, on: !!s.on }), ...fields(s.why, s.quote), owed: !!s.held })
+  }
+  for (const st of r.plan?.states ?? []) {
+    if (st.weight && st.weight !== l.weight) {
+      const owed = weightFor(r, st) !== st.weight
+      const kept = !owed && WEIGHT_RANK[st.weight] < WEIGHT_RANK[l.weight] && !st.weightQuote
+      put(`weight|${st.weight}|${st.weightWhy ?? ''}|${st.weightQuote ?? ''}|${owed}|${kept}`, { kind: 'weight', weight: st.weight, ...fields(st.weightWhy, st.weightQuote), owed, ...(kept ? { kept: true as const } : {}) }, st.id)
+    }
+    for (const a of st.adds ?? []) put(`add|${a.name}|${a.why}`, { kind: 'add', name: a.name, why: a.why, owed: false }, st.id)
+  }
+  return [...rows.values()]
+}
+
+// Keep on a looser state weight, for the whole row. A define stands by it while the setting stays the same.
+export const keepWeights = (r: Run, ids: readonly string[]): Run => (r.draft
+  ? { ...r, draft: { ...r.draft, plan: { ...r.draft.plan!, states: r.draft.plan!.states.map(s => (ids.includes(s.id) && s.weight ? { ...s, weightOk: true as const } : s)) } } }
+  : r)
+// Use the plan's weight: the states lose their own.
+export const dropWeights = (held: PlanInput, ids: readonly string[]): PlanInput => ({
+  ...held, states: held.states?.map(s => {
+    if (!ids.includes(idOf(s))) return s
+    const { weight: _w, weightWhy: _y, weightQuote: _q, weightOk: _k, ...rest } = s
+    return rest
+  }),
+})
+// Remove: the states lose this addition.
+export const dropAdd = (held: PlanInput, ids: readonly string[], name: string): PlanInput => ({
+  ...held, states: held.states?.map(s => (ids.includes(idOf(s)) && s.adds ? { ...s, adds: s.adds.filter(a => a.name !== name) } : s)),
+})
 
 // The plan's told instructions for one moment. Start and close are for states that edit files: the instructions
 // without files, and those whose files meet the state's.
@@ -1485,21 +1721,27 @@ export function toldFor(r: Run, at: InstructionAt, st?: StateDef): InstructionDe
   const told = (r.library?.told ?? []).filter(x => x.at === at)
   if (at !== 'start' && at !== 'close') return told
   if (!st?.files.length) return []
-  return told.filter(x => !x.files?.length || st.files.some(f => x.files!.some(g => globsMeet(f.trim(), g))))
+  const here = r.library?.states ? [...told, ...r.library.states.spare.filter(x => x.at === at)].filter(x => onFor(r, st, x.name)) : told
+  return here.filter(x => !x.files?.length || st.files.some(f => x.files!.some(g => globsMeet(f.trim(), g))))
 }
 
 const RULES_WIN = "Where the project's own rules (such as CLAUDE.md) differ from these, the project's rules win."
+const MAY_SKIP = 'If one of these doesn\'t fit this state, skip it and record why with "decide". If two of them disagree, pick one and record why the same way.'
+const MEMBER_SKIPS = "If one of these doesn't fit this state, skip it and say why when you report back. If two of them disagree, pick one and say why the same way."
+// ponytail: rerunOf runs only in the main conversation, so a member's state gets this note in place of the rerun.
+export const memberGap = (r: Run, st: StateDef) =>
+  (r.library && onFor(r, st, 'fails-without-change') ? "Sentinel won't run your check without your code changes, as fails-without-change does for the main conversation. Make sure your check fails without them, and say so when you report back." : '')
 const block = (head: string, xs: InstructionDef[]) => (xs.length ? [head, ...xs.map(x => `- ${x.text}`)].join('\n') : '')
 
 // What the plan's instructions say for `st` as it starts and before it closes, and with `final`, what they say before
 // the plan completes. A member hears it for its state too.
-export function toldHere(r: Run, st: StateDef, final = false): string {
+export function toldHere(r: Run, st: StateDef, final = false, member = false): string {
   const parts = [
     block(`Your instructions for ${st.id}:`, toldFor(r, 'start', st)),
     block(`Before you advance ${st.id}:`, toldFor(r, 'close', st)),
     final ? block('Before the plan completes:', toldFor(r, 'final')) : '',
   ].filter(Boolean)
-  return parts.length ? [...parts, RULES_WIN].join('\n') : ''
+  return parts.length ? [...parts, ...(r.library?.states ? [member ? MEMBER_SKIPS : MAY_SKIP] : []), RULES_WIN].join('\n') : ''
 }
 
 // The system prompt's Library section: the always instructions, and the draft ones while no plan is locked. The
@@ -1566,7 +1808,7 @@ export const knownPass = (r: Run, c: Call | undefined, check: string) =>
 export function startCheck(r: Run): string | undefined {
   const st = isLive(r) ? stateOf(r) : undefined
   if (!st?.check || !st.files.length || r.startChecked?.includes(st.id)) return undefined
-  if (r.library && !r.library.on.includes('fails-first')) return undefined
+  if (r.library && !onFor(r, st, 'fails-first')) return undefined
   return visitOf(r).some(c => c.kind === 'edit' && !c.denied) ? undefined : st.check
 }
 
@@ -1598,7 +1840,7 @@ export const withSnap = (r: Run, sha: string): Run => ({ ...r, snap: { state: r.
 // has no snapshot and no edit yet. A new visit, such as a return along a loop, takes a new one.
 export function snapWanted(r: Run): boolean {
   const st = isLive(r) ? stateOf(r) : undefined
-  if (!st?.check || !st.files.length || !r.library?.on.includes('fails-without-change') || snapOf(r)) return false
+  if (!st?.check || !st.files.length || !r.library || !onFor(r, st, 'fails-without-change') || snapOf(r)) return false
   return !visitOf(r).some(c => c.kind === 'edit' && !c.denied)
 }
 
@@ -1910,6 +2152,9 @@ export type LedgerRow = {
 
 export type VM = {
   phase: 'none' | 'draft' | 'live' | 'complete'
+  // Only with the Library's per-state settings on.
+  planWeight?: Weight
+  settingRows?: SettingRow[]
   paused: boolean
   source?: string
   signedOff: boolean
@@ -1920,7 +2165,8 @@ export type VM = {
   // ms: time in the visits that are over, so a running task adds Date.now() - since. visits: how often it was entered.
   // needs: every state it needs, the one before it when it lists none. waits: those not done yet.
   // skipped: why the user skipped it; it still shows as done.
-  states: (StateDef & { asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
+  // weightNow: what the state runs at, with the Library's per-state settings on. noRerun: a member running it misses Sentinel's rerun.
+  states: (StateDef & { weightNow?: Weight; noRerun?: true; asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
   // Some state lists its needs, so the views show what each one needs.
   deps: boolean
   loops: { from: string; to: string; count: number; hot: boolean }[]
@@ -2306,6 +2552,8 @@ export function summarize(top: Run, look: MapLook = {}): VM {
         needs: s.id === 'done' ? [] : needsOf(plan.states, s.id),
         waits: phase === 'complete' || done.has(s.id) || s.id === 'done' ? [] : needsOf(plan.states, s.id).filter(n => !done.has(n)),
         ...(r.skipped?.[s.id] ? { skipped: r.skipped[s.id] } : {}),
+        ...(s.id !== 'done' && r.library?.states ? { weightNow: weightFor(r, s) } : {}),
+        ...(s.id !== 'done' && memberGap(r, s) ? { noRerun: true as const } : {}),
       }))
     : []
   const st = phase === 'live' || phase === 'draft' ? stateOf(r) : undefined
@@ -2404,6 +2652,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     ...(top.flowDraft && { flowDraft: top.flowDraft }),
     ...((r.drawing || (!plan && look.map)) && { system: systemOf(r, r.drawing ?? standing(look.map!, look), states, phase, lastCheck, blockedOn(r), look) }),
     ...(top.draft && top.held?.depth && { depth: top.held.depth }),
+    ...(r.library?.states ? { planWeight: r.library.weight, settingRows: settingRows(r) } : {}),
     ...(facts && { proof: {
       quoted: plan!.states.filter(s => s.asked?.length).length,
       of: plan!.states.filter(s => s.asked?.length || s.added).length,

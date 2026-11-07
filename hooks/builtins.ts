@@ -1,6 +1,7 @@
 // The Library items Sentinel ships. Read-only: the user switches them on or off, or copies one to edit it. A weight
-// turns on the built-ins that list it; sources-first and close-phase are in no weight, so they start off.
+// turns on the built-ins that list it; sources-first, close-phase and state-settings are in no weight, so they start off.
 import type { FlowDef, InstructionDef, Weight } from '../types'
+import { STATE_SETTINGS } from './core.ts'
 
 export const WEIGHTS: readonly Weight[] = ['light', 'standard', 'thorough']
 
@@ -68,6 +69,15 @@ export const BUILTINS: readonly Builtin[] = [
     text: 'Plan from the raw sources (the TRD, the design frames, the sprint sheet), not summaries of them. Where they disagree, '
       + 'the TRD decides behaviour and data, the design decides screens, and the sprint sheet decides scope and order. '
       + 'List each conflict at the top of the plan, and ask before departing from the TRD on anything structural.',
+  },
+  {
+    name: STATE_SETTINGS, title: 'Settings per state', at: 'draft', kind: 'told', weights: [],
+    text: 'You may set what each state needs, where it differs from the plan. define and revise take these fields though the plan tool\'s schema '
+      + 'doesn\'t list them. On a state: weight (light, standard or thorough) with weightWhy, one line on why, or weightQuote, the user\'s words; and '
+      + 'adds, a list of { name, why } naming Library instructions that fire per state. On the plan: settings, a list of { weight } or { name, on }, '
+      + 'each with why or quote. A quote is compared with what the user typed: for an instruction turned on or a stricter weight, its name and one more '
+      + 'word will do; anything looser needs at least 5 words. A stricter setting applies with its reason shown. A looser one with only a reason waits '
+      + 'for the user on the draft. Leave alone a state that fits the plan.',
   },
 ]
 

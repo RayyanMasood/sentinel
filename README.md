@@ -54,6 +54,8 @@ A look runs on Opus for several requests. In a small test repo, one took 4,000 t
 
 ## The System map
 
+Experimental: the System tab says so too, and has no switch.
+
 Beside the plan, Sentinel keeps a picture of the project: its parts, the people who use it and the lines between them. Claude draws it. Sentinel sets what each part shows, and checks it against git.
 
 - **Claude draws, Sentinel sets the status.** In `define`, Claude sends the drawing as `system` and names the parts each state builds as `parts`. A part then shows one of: Not built, Already there, Will change, Claude is here, Untested, Tested, Changed since test, Check failing or Needs you. Claude can't mark its own work: a part is Tested only when its state's check passed and the part's files changed since the state started. A state with no check proves nothing, so a part it builds shows Untested. A part whose files are already in the project when the plan is locked shows Will change until its state starts, and Already there if the state leaves it alone; a part with no files yet shows Not built. A group takes a colour from its parts. Red means a check is failing and amber means something needs you. Blue means Claude is inside, and green means every part is Tested.
@@ -97,11 +99,27 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 | `prove-end-to-end` | before the plan completes | told | Thorough |
 | `measure-before-delete` | every turn | told | Thorough (needs a mutation-testing tool) |
 | `sources-first` | while Claude drafts a plan | told | off; switch it on for projects with a spec and designs |
+| `state-settings` | while Claude drafts a plan | told | off; see [Settings per state](#settings-per-state) |
 | `close-phase` (a flow) | at the end of a plan | flow | off |
 
 "Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `quote-the-source` compares each state's quote with its sources (see [Proof each state was asked for](#proof-each-state-was-asked-for)). `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
 
 `depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. You tick the ones you want as you lock it, on the dashboard or with `/sentinel lock <id> <id>`. A state that only an unticked answer names comes out.
+
+### Settings per state
+
+Experimental, and off until you turn it on. The switch is the row marked Experimental under the weights on the Library page, for this project or your default. It is there for testing. No weight turns it on, Claude can't, and a plan reads it when it is drafted, so flipping it mid-run changes nothing in a running plan. With it off, Sentinel drops these fields from what Claude sends, says so once, and the plan runs as it did before.
+
+With it on, a plan can differ from its one weight where a state calls for it:
+
+- **A per-state weight:** a state names `weight`, with a reason or your own words. It moves `fast-checks`, `failure-list`, `fails-first`, `break-it-once` and `fails-without-change`, plus your own start and close instructions that list weights. Everything else stays plan-wide, and a switch you flipped by hand beats any weight.
+- **An addition:** a state names `adds`, Library instructions that fire per state, each with a reason. Sentinel refuses an unknown name, a plan-wide instruction and one you switched off by hand. One that is off only because of the weight can be added.
+- **A skip:** Claude can skip a told instruction that makes no sense for a state, with `decide` and a reason, and it shows under Decided without asking you. The ones Sentinel checks still run.
+- **The plan's own settings:** `settings` sets the plan's weight or turns an instruction on or off, each with a reason or your own words.
+
+A stricter setting applies with its reason shown. A looser one waits for you: the draft card lists what differs, one row for each reason, with Keep and Use Standard, or Remove on an addition, and the band above the prompt asks the same. Words you typed count as your answer, once Sentinel has found them in your messages (at least 5 words for anything looser). If you lock with one unanswered, the plan runs without it. A state added mid-run takes the plan's weight unless it names a stricter one.
+
+Each state's task page shows its weight and additions. A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
 
 ### Your own instructions
 
@@ -116,9 +134,11 @@ An instruction is a JSON file named after it, in `.sentinel/instructions/` (proj
 }
 ```
 
-`at` is `draft`, `start`, `close`, `final` or `always`. `files` limits a `start` or `close` instruction to the states that edit them. Ask Claude for one in the chat or from the dashboard, write one in the dashboard's editor, or copy a built-in and change it; a file with a built-in's name takes its place.
+`at` is `draft`, `start`, `close`, `final` or `always`. `files` limits a `start` or `close` instruction to the states that edit them. `weights` lists the weights that turn it on (`light`, `standard`, `thorough`); with no list it is on at every weight, and it keeps your switches either way. Ask Claude for one in the chat or from the dashboard, write one in the dashboard's editor, or copy a built-in and change it; a file with a built-in's name takes its place.
 
 ### Switches
+
+Edit and Write can't touch `.sentinel/library.json` or `~/.sentinel/library.json`, so the switches stay yours. A shell redirect isn't caught, as with `.sentinel/parallel`.
 
 `.sentinel/library.json` holds the project's weight and switches and is committed, so a team shares them. `~/.sentinel/library.json` holds your default for every project. For each item the project's switch counts first, then yours, then the weight. Picking a weight clears that file's switches for the built-ins; your own items keep theirs, and they are on unless you switch them off. A flow that is off doesn't add itself by its rule, but you can still add it by hand.
 

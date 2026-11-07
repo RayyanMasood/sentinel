@@ -864,6 +864,13 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 .slow-cells i.on { background: var(--amber-fill); box-shadow: none; }
 .wnote { margin-top: var(--s2); font-size: 13.5px; color: var(--ink-3); }
 .wnote b { color: var(--ink); font-weight: 600; }
+/* The experimental switch: a row of its own, under the weights. No weight turns it on. */
+.xsw { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: var(--s3); margin-top: var(--s3); padding: 8px var(--s4) 8px var(--s2); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); }
+.xsw:empty { display: none; }
+.xsw b { font: 600 14.5px/1.3 var(--f-text); }
+.xsw .tag { margin-left: 8px; vertical-align: 1px; }
+.xsw p { margin-top: 2px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+.phead .xtitle { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
 .ilist { padding: 0 6px 6px; }
 .mg-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--s3); padding: 16px calc(var(--s5) - 6px) 6px; }
 .mg-h h3 { font: 600 11px/1 var(--f-disp); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3); }
@@ -903,6 +910,8 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 .moments label:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); }
 .moments input { margin-top: 3px; }
 .moments b { font: 600 14px/1.35 var(--f-text); }
+.iew { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); margin: 0 0 var(--s2); padding: 0; border: 0; }
+.iew label { display: inline-flex; align-items: center; gap: var(--s2); font-size: 14px; cursor: pointer; }
 .moments span { grid-column: 2; font-size: 13.5px; color: var(--ink-3); }
 #iefilesBox { margin-top: var(--s4); }
 .deep { display: grid; gap: 2px; margin-top: var(--s3); }
@@ -973,6 +982,16 @@ ul.lst .lnk { font: inherit; color: var(--ink); }
 .askl { padding: 0 var(--s4) var(--s2); }
 .askl li { display: grid; grid-template-columns: minmax(64px, 120px) minmax(0, 170px) minmax(0, 1fr) minmax(0, 150px); gap: 2px var(--s4); align-items: baseline; padding: 8px 0; border-top: 1px solid var(--hair); font-size: 14px; line-height: 20px; }
 .askl li:first-child { border-top: 0; }
+/* What Claude set apart from the plan's weight: states, setting, reason, answers. */
+.setl { margin-top: var(--s2); }
+.setl li { display: grid; grid-template-columns: minmax(96px, 180px) minmax(0, 190px) minmax(0, 1fr) auto; gap: 6px var(--s4); align-items: center; padding: 10px var(--s3); border-top: 1px solid var(--hair); font-size: 14px; line-height: 20px; }
+.setl li:first-child { border-top: 0; }
+.setl li.open { border-top-color: transparent; border-radius: var(--r1); background: var(--amber-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber-fill) 55%, transparent); }
+.setl li.open + li { border-top-color: transparent; }
+.setl .sts { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.setl .mini { max-width: 100%; overflow: hidden; }
+.setl .why { min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.slip-b .setl .row { margin-top: 0; }
 .askl code { overflow-wrap: anywhere; }
 .askl .al { font-weight: 600; color: var(--ink); }
 .askl .aq { color: var(--ink-2); overflow-wrap: anywhere; }
@@ -1291,6 +1310,7 @@ button.key-i:hover { color: var(--ink); }
   .word, .count b { font-size: 34px; }
   .slip-b { grid-template-columns: minmax(0, 1fr); }
   .askl li { grid-template-columns: minmax(64px, 120px) minmax(0, 1fr); }
+  .setl li { grid-template-columns: minmax(0, 1fr); }
   .askl .aq, .askl .lnk { grid-column: 1 / -1; }
   .doc { padding: var(--s4); }
   .doc-p { grid-template-columns: minmax(0, 1fr); }
@@ -1502,6 +1522,7 @@ button.key-i:hover { color: var(--ink); }
       <div class="sh"><h2>How much testing</h2><span class="sp"></span><span class="quiet" id="wLabel"></span></div>
       <div class="weights" id="weights"></div>
       <p class="wnote">A weight sets the <b>built-in</b> instructions and flows in one go. Your own keep their switches. Flip any switch below and the weight shows the change.</p>
+      <div class="xsw" id="xsw"></div>
     </section>
     <div class="fgrid">
       <section class="panel">
@@ -1535,7 +1556,7 @@ button.key-i:hover { color: var(--ink); }
  <div id="ied" hidden></div>
  <div id="srcp" hidden></div>
  <div id="sysp" hidden>
-  <div class="phead"><div><h1 class="caps">System</h1><p id="sysSum"></p></div></div>
+  <div class="phead"><div><div class="xtitle"><h1 class="caps">System</h1><span class="tag sm">Experimental</span></div><p id="sysSum"></p></div></div>
   <section class="panel empty" id="sysNone" hidden><h1>No system map</h1><p>This plan has no system map. Claude draws one with a plan that covers more than one part.</p></section>
   <div id="sysMap">
     <section class="panel" id="sysDrift" hidden><div id="sysDriftBody"></div><p class="hint sy-say" id="sysSay" role="status"></p></section>
@@ -1826,6 +1847,11 @@ function stub(kind, n, done) {
     return { k: 'Your sign-off', h: many ? `${owed.length} states need your answer` : 'One state needs your answer', p: `Keep or take out ${many ? 'the states' : 'the state'} Claude added, then lock the plan.`,
       acts: [['Lock the plan', 'lock', 'pri', 'lock', true], ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which keeps ${many ? 'them' : 'it'}.` }
   }
+  const loose = kind === 'draft' ? (vm.settingRows ?? []).filter(r => r.owed) : []
+  if (loose.length) {
+    return { k: 'Your sign-off', h: loose.length > 1 ? `${loose.length} looser settings need your answer` : 'A looser setting needs your answer', p: "Keep it or use the plan's setting, then lock the plan.",
+      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which runs the plan without ${loose.length > 1 ? 'them' : 'it'}.` }
+  }
   if (kind === 'draft') return { k: 'Your sign-off', h: 'Check the draft, then lock it', p: 'Locking holds Claude to these states. Edits outside the running state\'s files are refused.',
     acts: [['Lock the plan', 'lock', 'pri', 'lock'], ['Ask for changes', null, '', 'changes'], ['Add a flow', 'plus', '', 'flowlist']], fine: `Or type ${code('/sentinel lock')} in the chat.` }
   if (kind === 'stuck') return { k: 'Needs you', h: `Claude is ${PATTERN[vm.trap.pattern]}`, p: 'Tell Claude what it may be missing, or pause the plan and take over.',
@@ -1971,7 +1997,7 @@ const SLIP = {
     const flows = `Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p>`
     return `<div class="slip-h"><h2>Before you lock it</h2>${from ? `<span class="quiet">From ${esc(srcName(from))}. ${esc(from.origin)}.</span>` : vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
       + `<div class="slip-b">${where ? `${where}<div>${locking}<h3 class="gap">${flows}</div>` : `<div>${locking}</div><div><h3>${flows}</div>`}`
-      + quotesBlock() + depthBlock() + planInsBlock()
+      + quotesBlock() + settingsBlock() + depthBlock() + planInsBlock()
       + chgBox('draftchg', 'For example: split a state into the route and its tests.') + '</div>'
   },
   stuck() {
@@ -2016,6 +2042,18 @@ function quotesBlock() {
   }).join('')}</ul></details></div>`
 }
 
+// What Claude set apart from the plan's weight, one row for each reason, with the Library's settings per state on.
+function settingsBlock() {
+  const rows = vm.settingRows
+  if (!rows?.length) return ''
+  const pw = cap(vm.planWeight)
+  const btn = (r, label, keep) => `<button type="button" class="btn sm${keep ? ' pri' : ''}" data-act="setrow" data-row="${esc(r.id)}"${keep ? ' data-keep="1"' : ''}>${label}</button>`
+  const tag = r => r.kind === 'add' ? `+ ${r.name}` : r.weight ? cap(r.weight) : `${r.name} ${r.on ? 'on' : 'off'}`
+  const who = r => r.quote ? `You asked: “${esc(r.quote)}”` : r.kept ? `You kept it. Claude's reason: “${esc(r.why ?? '')}”` : esc(r.why ?? '')
+  const acts = r => r.kind === 'add' ? btn(r, 'Remove') : r.owed ? btn(r, 'Keep', true) + btn(r, r.weight ? `Use ${pw}` : 'Leave it on') : r.kept ? btn(r, `Use ${pw}`) : ''
+  return `<div class="wide"><h3>Settings Claude chose</h3><p class="lead">Plan weight: ${pw}. A state not listed here runs at it.</p><ul class="setl">${rows.map(r => `<li${r.owed ? ' class="open"' : ''}><span class="sts">${r.states.length ? r.states.map(s => code(s)).join(' ') : 'This plan'}</span><span><span class="mini${r.owed ? ' need' : ''}">${esc(tag(r))}</span></span><span class="why">${who(r)}</span><span class="row">${acts(r)}</span></li>`).join('')}</ul></div>`
+}
+
 // Claude's answers to "what would an expert do here", for the user to tick. One that names a state takes that state out
 // of the plan at the lock unless it is ticked. depthPicked: the ticked ids, kept while the draft changes.
 const ASK = { expert: 'What an expert would add', raw: 'The raw material to start from', methods: 'Methods and tools', proof: 'What shows it is right' }
@@ -2026,9 +2064,9 @@ const depthBlock = () => !vm.depth?.length ? '' : `<div class="wide"><h3>Deeper,
 // switches at the lock.
 let planKeep = false
 function planInsBlock() {
-  const pl = vm.draftLibrary, ins = (vm.library?.instructions ?? []).filter(i => i.trusted !== false)
+  const pl = vm.draftLibrary, ins = (vm.library?.instructions ?? []).filter(i => i.trusted !== false && i.name !== XS)
   if (!pl || !ins.length) return ''
-  const diff = ins.filter(i => i.weights && pl.on.includes(i.name) !== i.weights.includes(pl.weight)).length
+  const diff = ins.filter(i => weighted(i) && pl.on.includes(i.name) !== i.weights.includes(pl.weight)).length
   return `<div class="wide"><h3>Instructions for this plan</h3>
     <div class="row" style="margin: 0 0 var(--s3)"><span class="seg">${WEIGHTS.map(p => `<button type="button" data-act="planweight" data-pw="${p.id}" aria-pressed="${pl.weight === p.id}">${p.name}</button>`).join('')}</span>${diff ? `<span class="quiet">${wName({ weight: pl.weight, diff })}</span>` : ''}</div>
     <div class="planins">${MOMENTS.map(m => {
@@ -2116,8 +2154,9 @@ function onAct(e) {
   }
   if (act === 'planweight') {
     const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
-    return planSend(w, pl.on.filter(n => !ins.some(i => i.weights && i.name === n)).concat(ins.filter(i => i.weights?.includes(w) && i.trusted !== false).map(i => i.name)))
+    return planSend(w, pl.on.filter(n => !ins.some(i => weighted(i) && i.name === n)).concat(ins.filter(i => weighted(i) && i.weights.includes(w) && i.trusted !== false).map(i => i.name)))
   }
+  if (act === 'setrow') return send({ kind: 'setrow', draft: vm.draftKey, id: b.dataset.row, keep: b.dataset.keep === '1' })
   if (act === 'keepadded' || act === 'dropadded') return send({ kind: act, draft: vm.draftKey, state: b.dataset.st })
   if (act === 'draftchg') return send({ kind: 'draft', text: text('chg') }, { q: 'The draft', ans: 'Changes asked for', where: 'Check the draft again once it changes.' })
   if (act === 'pause' || act === 'resume') return send({ kind: act, state: a })
@@ -3371,6 +3410,16 @@ function renderDetail() {
 }
 
 // What asked for this state, in its source's own words, or why Claude added it. The rest of the page is Claude's description.
+// The state's own settings, with the Library's settings per state on, and what a member running it misses.
+function stateSettings(s) {
+  const own = vm.planWeight && s.weight && s.weight !== vm.planWeight ? s.weight : '', adds = (vm.planWeight && s.adds) || [], gap = par() && s.noRerun
+  if (!own && !adds.length && !gap) return ''
+  return '<h3>Settings for this state</h3>'
+    + (own ? `<p><span class="mini">${cap(own)}</span> ${s.weightQuote ? `You asked: “${esc(s.weightQuote)}”` : `Claude's reason: “${esc(s.weightWhy ?? '')}”`}</p>`
+      + (s.weightNow !== own ? `<p class="qsrc">It runs at ${cap(s.weightNow)}${vm.phase === 'draft' ? ' unless you keep this on the draft card' : ', because nobody kept this on the draft'}.</p>` : s.weightOk && !s.weightQuote ? '<p class="qsrc">You kept it on the draft.</p>' : '') : '')
+    + adds.map(a => `<p><span class="mini">+ ${esc(a.name)}</span> Claude's reason: “${esc(a.why)}”</p>`).join('')
+    + (gap ? '<p class="qsrc">A member agent running this state gets no rerun without its changes. It is told to check that itself and say so.</p>' : '')
+}
 function askedFor(s, h = 'h3') {
   const p = vm.proof, asks = s.asks ?? []
   if (!p || (!asks.length && !s.added)) return ''
@@ -3439,7 +3488,7 @@ function taskPage(s, i, T) {
       ${runbar}
       <div class="tp-cols">
         <div class="tp-main">
-          ${askedFor(s)}
+          ${askedFor(s)}${stateSettings(s)}
           <h3>Why it's needed</h3>${s.problem ? `<p>${ticks(s.problem)}</p>` : `<p class="quiet">No description was written for this state. Its label is “${esc(s.label)}”.</p>`}
           ${s.approach ? `<h3>The approach</h3><p>${ticks(s.approach)}</p>` : ''}
           ${s.outcome ? `<h3>What was done</h3><p>${ticks(s.outcome)}</p>` : s.status === 'done' ? `<h3>What was done</h3>${s.evidence ? `<p>Already done when the plan was locked. Evidence: ${ticks(s.evidence)}</p>` : '<p class="quiet">No summary was written when this state finished.</p>'}` : ''}
@@ -4383,6 +4432,10 @@ const kindCell = i => i.kind === 'checks' ? `<span class="kb checks">${icon('che
 // Every item with a switch, instructions and flows, keyed by name. Weighted items (the built-ins, and copies of them)
 // list the weights that turn them on.
 const libItems = () => [...(vm.library?.instructions ?? []), ...(vm.flows ?? []).map(f => ({ ...f, kind: 'flow' }))]
+// The experimental switch: a built-in with its own row, which no weight turns on.
+const XS = 'state-settings'
+// What a weight sets. Your own items keep their switches, even with a list of weights.
+const weighted = i => i.weights && !i.own && i.name !== XS
 const switches = () => ({ project: vm.library?.project ?? {}, personal: vm.library?.personal ?? {} })
 const shownIn = (i, scope) => scope === 'project' || i.scope !== 'project'
 // Which items are on, as libraryOn in hooks/core.ts works it out: for this project, or for your default alone.
@@ -4390,15 +4443,15 @@ function onMap(scope, sw = switches()) {
   const project = scope === 'project' ? sw.project : {}, personal = sw.personal, weight = project.weight ?? personal.weight ?? 'standard'
   const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
   const on = {}
-  for (const i of libItems()) on[i.name] = i.trusted !== false && (i.weights ? pick(project, i.name) ?? (project.weight ? undefined : pick(personal, i.name)) ?? i.weights.includes(weight) : pick(project, i.name) ?? pick(personal, i.name) ?? true)
+  for (const i of libItems()) on[i.name] = i.trusted !== false && (pick(project, i.name) ?? (weighted(i) && project.weight ? undefined : pick(personal, i.name)) ?? (i.weights ? i.weights.includes(weight) : true))
   return { weight, on }
 }
 // A switches file with a weight picked: the weighted items' switches go, so the weight sets them.
-const withWeight = (s, weight) => ({ weight, on: Object.fromEntries(Object.entries(s.on ?? {}).filter(([n]) => !libItems().some(i => i.weights && i.name === n))) })
+const withWeight = (s, weight) => ({ weight, on: Object.fromEntries(Object.entries(s.on ?? {}).filter(([n]) => !libItems().some(i => weighted(i) && i.name === n))) })
 // The weight in force and how many weighted items its switches change.
 function weightOf(scope) {
   const m = onMap(scope)
-  return { ...m, diff: libItems().filter(i => i.weights && i.trusted !== false && shownIn(i, scope) && m.on[i.name] !== i.weights.includes(m.weight)).length }
+  return { ...m, diff: libItems().filter(i => weighted(i) && i.trusted !== false && shownIn(i, scope) && m.on[i.name] !== i.weights.includes(m.weight)).length }
 }
 const wName = w => `${cap(w.weight)}${w.diff ? `, ${plural(w.diff, 'change')}` : ''}`
 // What the instructions that are on cost: words Claude reads with each state, once per plan and every turn, and the
@@ -4409,7 +4462,7 @@ function costOf(on, list) {
 }
 // Flip a switch, or put it back to what it would be without one (on: null). The switch keeps its new place until the
 // next snapshot; if Sentinel didn't get it, the page draws again from what Sentinel has.
-const libRedraw = ok => { if (!ok) for (const id of ['ilist', 'ftBody', 'idet', 'weights']) $(id)._h = null; renderLib() }
+const libRedraw = ok => { if (!ok) for (const id of ['ilist', 'ftBody', 'idet', 'weights', 'xsw']) $(id)._h = null; renderLib() }
 const libSwitch = (name, on) => flowSend('lib', { kind: 'libon', name, scope: swScope, on }).then(libRedraw)
 
 function renderLib() {
@@ -4427,7 +4480,7 @@ function renderLib() {
   $('askf').placeholder = ins ? 'For example: keep each check under a minute, and run whole suites only at the final checks.' : 'For example: after any state that edits web/, check the page at three widths.'
   $('t-ins').hidden = !ins
   $('t-flows').hidden = ins
-  $('nIns').textContent = (vm.library?.instructions ?? []).filter(i => shownIn(i, swScope)).length
+  $('nIns').textContent = (vm.library?.instructions ?? []).filter(i => shownIn(i, swScope) && i.name !== XS).length
   $('nFl').textContent = (vm.flows ?? []).filter(f => shownIn(f, swScope)).length
   if (ins) renderIns()
   else renderFlows()
@@ -4442,8 +4495,8 @@ function renderIns() {
   const L = vm.library, live = online()
   $('noLib').hidden = !!L
   $('wsect').hidden = !L
-  if (!L) { put($('ilist'), ''); put($('tot'), ''); put($('idet'), ''); return }
-  const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope))
+  if (!L) { put($('ilist'), ''); put($('tot'), ''); put($('idet'), ''); put($('xsw'), ''); return }
+  const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope) && i.name !== XS)
   $('wLabel').textContent = `${swScope === 'project' ? 'This project' : 'Your default'}: ${wName(w)}${swScope === 'project' && !sw.project.weight ? ', from your default' : ''}`
   put($('weights'), WEIGHTS.map(p => {
     const c = costOf(onMap(swScope, { ...sw, [swScope]: withWeight(sw[swScope], p.id) }).on, shown), nb = libItems().filter(i => i.scope === 'built-in' && i.weights?.includes(p.id)).length
@@ -4458,6 +4511,9 @@ function renderIns() {
   if (!scopes.includes(insScope)) insScope = 'All'
   put($('insScope'), scopes.map(x => `<button type="button" data-ins-scope="${x}" aria-pressed="${x === insScope}">${x}</button>`).join(''))
   const m = onMap(swScope), mine = swScope === 'project' ? onMap('personal') : null, q = insQ.trim().toLowerCase()
+  const xs = L.instructions.find(i => i.name === XS)
+  put($('xsw'), xs ? `<label class="ck sw"><input type="checkbox" data-sw="${XS}"${m.on[XS] ? ' checked' : ''}${live ? '' : ' disabled'} aria-label="${esc(xs.title)} on"></label>
+    <div><b>${esc(xs.title)}</b><span class="tag sm">Experimental</span><p>Claude can set a weight for one state, add an instruction to one state, or skip one with a reason, and each shows on the draft. This is here for testing. With it off, plans run as they did before.</p></div>` : '')
   const list = all.filter(i => (insScope === 'All' || i.scope === insScope.toLowerCase()) && `${i.name} ${i.title ?? ''} ${i.description ?? ''} ${i.text}`.toLowerCase().includes(q))
   if (!all.some(i => insKey(i) === insSel)) insSel = all[0] ? insKey(all[0]) : ''
   const row = i => {
@@ -4873,12 +4929,12 @@ function openIe() {
   return {
     hash: h, was: h === '#ins-new' ? null : { name: src.name, scope: src.scope }, fromDraft: !!src.fromDraft, sent: null,
     msg: src.trusted === false ? "It stays off until you save it here. Read it first." : '',
-    name: src.name, description: src.description ?? '', at: src.at, files: (src.files ?? []).join(' '), text: src.text ?? '', scope: src.scope === 'personal' ? 'personal' : 'project',
+    name: src.name, description: src.description ?? '', at: src.at, files: (src.files ?? []).join(' '), text: src.text ?? '', scope: src.scope === 'personal' ? 'personal' : 'project', weights: src.own ? src.weights ?? [] : [],
   }
 }
 function ieDef() {
   const e = ie, files = ['start', 'close'].includes(e.at) ? words(e.files) : []
-  return { name: e.name.trim(), ...(e.description.trim() ? { description: e.description.trim() } : {}), at: e.at, ...(files.length ? { files } : {}), text: e.text.trim() }
+  return { name: e.name.trim(), ...(e.description.trim() ? { description: e.description.trim() } : {}), at: e.at, ...(files.length ? { files } : {}), ...(e.weights.length ? { weights: e.weights } : {}), text: e.text.trim() }
 }
 // What Sentinel would refuse, as instructionOf checks it, and a name a flow already has.
 const ieProblem = d => nameBad(d.name, 'instruction') || ((vm.flows ?? []).some(f => f.name === d.name) ? `A flow is named ${d.name}.` : '') || (d.text ? '' : 'Write what Claude is told.')
@@ -4891,6 +4947,7 @@ function ieForm() {
         <div class="fld"><label class="label" for="iedesc">What it's for</label><input class="field" id="iedesc" data-i="description" maxlength="300" value="${esc(e.description)}" placeholder="One line on why you keep it"></div></div></div>
       <div class="edsec"><h2>When Claude reads it</h2><fieldset class="moments"><legend class="vh">When Claude reads it</legend>${MOMENTS.map(m => `<label><input type="radio" class="pick" name="iem" value="${m.id}"${m.id === e.at ? ' checked' : ''}><b>${m.name}</b><span>${m.say}</span></label>`).join('')}</fieldset>
         <div class="fld" id="iefilesBox"><label class="label" for="iefiles">Only states that edit <span class="quiet">(optional)</span></label><input class="field mono" id="iefiles" data-i="files" value="${esc(e.files)}" placeholder="Leave empty for every state that edits files"></div></div>
+      <div class="edsec"><h2>Which weights turn it on</h2><fieldset class="iew"><legend class="vh">Which weights turn it on</legend>${WEIGHTS.map(p => `<label><input type="checkbox" class="pick" name="iew" value="${p.id}"${e.weights.includes(p.id) ? ' checked' : ''}><span>${p.name}</span></label>`).join('')}</fieldset><p class="hint">Tick none and it is on at every weight. A state with its own weight follows that weight.</p></div>
       <div class="edsec"><h2><label for="ietext">What Claude is told</label></h2><textarea class="field" id="ietext" data-i="text" rows="5" maxlength="2000">${esc(e.text)}</textarea><p class="hint" id="iecount"></p></div>
       <div class="edsec"><h2>Saved in</h2><fieldset class="opts two"><legend class="vh">Saved in</legend>${scopeOpts('iescope', e.name, e.scope, 'instruction')}</fieldset></div>
     </form>
@@ -4946,6 +5003,7 @@ $('ied').addEventListener('input', e => {
 $('ied').addEventListener('submit', e => e.preventDefault())
 $('ied').addEventListener('change', e => {
   if (e.target.name === 'iem') ie.at = e.target.value
+  if (e.target.name === 'iew') ie.weights = [...$('ieform').querySelectorAll('[name=iew]:checked')].map(x => x.value)
   if (e.target.name === 'iescope') ie.scope = e.target.value
   if (ie) renderIe()
 })

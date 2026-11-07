@@ -1,6 +1,6 @@
 // The dashboard's Library page, instruction editor, draft card, task page, source page and System page in a real browser, served by the real web/serve.mjs:
 //   npx -y -p playwright@1.64.1 -c 'node tests/page.check.mjs'
-// ONLY=system runs the System page's checks alone (about a third of the time). DUMP=<variant> prints that variant's System view.
+// ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. DUMP=<variant> prints that variant's System view.
 // It fails on a console or policy error, a page wider than its window at 390, 860 or 1440 px (light and dark), a part
 // that doesn't show, or a message the page sends in the wrong shape. SHOTS=<dir> also saves a screenshot of each.
 // SERVE=<variant> (library, light, insDraft, draft or a proof variant) checks nothing: it keeps the server up on that variant for a
@@ -38,7 +38,7 @@ const flows = [
 ]
 // The snapshot fields the plugin adds for the Library: the instructions with their switches worked out, and the flows.
 function library(project = {}, personal = {}) {
-  const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in' })), ...own.map(i => ({ kind: 'told', ...i }))]
+  const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in' })), ...own.map(i => ({ kind: 'told', own: true, ...i }))]
   const fl = [...BUILTIN_FLOWS.map(f => ({ ...f, scope: 'built-in' })), ...flows]
   const { weight, on } = libraryOn([...items, ...fl], project, personal)
   return {
@@ -59,6 +59,30 @@ const plan = {
 const drafted = act({ ...emptyRun(), signedOff: true, review: true }, plan, '', {}, now).run
 if (!drafted.draft) throw new Error('no draft')
 const standardOn = libraryOn(BUILTINS.map(b => ({ ...b })), {}, {}).on
+// A draft with the Library's settings per state on: mixed weights, one addition on two states, and a plan setting held for the user.
+const XS = 'state-settings'
+const settingsPlan = {
+  action: 'define', title: 'Card payments',
+  library: {
+    weight: 'standard', on: [...standardOn.filter(n => n !== 'quote-the-source'), XS], told: [],
+    states: { hand: { [XS]: true }, weights: Object.fromEntries(BUILTINS.filter(b => b.weights?.length).map(b => [b.name, b.weights])), spare: [] },
+    settings: [{ name: 'fails-first', on: false, why: 'the suite takes an hour', held: true }],
+  },
+  states: [
+    { id: 'copy', label: 'Reword the checkout text', check: 'npm test -- copy', files: ['docs/**'], weight: 'light', weightWhy: 'only changes text' },
+    { id: 'docs', label: 'Update the README', check: 'npm test -- docs', files: ['README.md'], weight: 'light', weightWhy: 'only changes text' },
+    { id: 'form', label: 'Build the checkout form', check: 'npm test -- form', files: ['web/**'] },
+    { id: 'charge', label: 'Charge the card', check: 'npm test -- charge', files: ['src/charge/**'], adds: [{ name: 'dashboard-widths', why: 'it shows the card form' }] },
+    { id: 'refund', label: 'Handle refunds', check: 'npm test -- refund', files: ['src/refund/**'], adds: [{ name: 'dashboard-widths', why: 'it shows the card form' }] },
+    { id: 'export', label: 'Rewrite saved data', check: 'npm test -- export', files: ['src/export/**'], weight: 'thorough', weightWhy: 'rewrites saved data <i>on disk</i>' },
+    { id: 'long-state-name-that-keeps-going-past-the-column-it-sits-in', label: 'A long name', check: 'npm test -- long', files: ['long/**'], weight: 'light', weightWhy: 'a much longer reason than the others, written out in full so the row has to wrap at every width it is shown at' },
+  ],
+}
+const settingsActed = act({ ...emptyRun(), signedOff: true, review: true }, settingsPlan, '', {}, now)
+const withSettings = settingsActed.run
+const settingsOff = act({ ...emptyRun(), signedOff: true, review: true }, { ...settingsPlan, library: { weight: 'standard', on: [], told: [] } }, '', {}, now).run
+if (!withSettings.draft?.library?.states) throw new Error(`no draft with settings: ${settingsActed.text}`)
+const lockedSettings = lockDraft(withSettings, '09:12', now)
 // A parallel plan with a state nothing needs, early on, and a way back across rows: the two lines most likely to run under a card.
 const step = (id, ...needs) => ({ id, label: id, needs, check: `npm test -- ${id}`, files: [`src/${id}/**`] })
 const graph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Graph', states: [{ id: 'a', label: 'a' }, step('b', 'a'), step('side', 'a'), step('c', 'b'), step('d', 'c'), step('e', 'd')], loops: [['e', 'b']] }, '', {}, now).run
@@ -110,6 +134,9 @@ const VARIANTS = {
   noProof: page(act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Old', loops: [], states: [{ id: 'a', label: 'a', ref: 'plan.md, step 1' }] }, '09:01').run),
   graph: page(graph, { parallel: true }),
   library: page(emptyRun()),
+  settings: page(withSettings, { draftKey: 's1', draftLibrary: withSettings.draft.library, parallel: true }),
+  settingsRun: page(lockedSettings, { parallel: true }),
+  settingsOff: page(settingsOff, { draftKey: 'o1', parallel: true }),
   light: page(emptyRun(), library({ weight: 'light', on: { 'failure-list': true } })),
   insDraft: page({ ...emptyRun(), flowDraft: { name: 'quick-checks', description: 'Checks under a minute', at: 'start', text: 'Keep each check under a minute: one test file, a type check or a build.', asked: 'keep checks quick' } }),
   draft: page(drafted, {
@@ -1003,7 +1030,7 @@ async function tasksPage() {
 }
 
 try {
-  await systemPage()
+  if (process.env.ONLY !== 'others') await systemPage()
   await historyPage()
   await tasksPage()
   const parts = async p => { await p.locator('#sysLevel [data-lv=parts]').click(); await p.locator('#sysMain [data-id=refunds]').click() }
@@ -1029,10 +1056,10 @@ try {
   let p = await open('library', '#library')
   check(await p.locator('#wLabel').textContent() === 'This project: Standard, from your default', 'weight label')
   check(await p.locator('.wcard[aria-pressed=true] .wn').textContent() === 'Standard', 'Standard picked')
-  check(await p.locator('.irow').count() === BUILTINS.length + own.length, 'a row for each instruction')
+  check(await p.locator('.irow').count() === BUILTINS.length - 1 + own.length, 'a row for each instruction, and the experimental switch apart')
   check(await p.locator('.mg-h').count() === 5, 'a group for each moment')
   check(await p.locator('.irow[data-ins="project/release-notes"] .tag.off').textContent() === 'Not trusted', 'untrusted row marked')
-  check((await p.locator('#tot').textContent()).includes(`${standardOn.length + 2} of ${BUILTINS.length + own.length}`), 'totals count what is on')
+  check((await p.locator('#tot').textContent()).includes(`${standardOn.length + 2} of ${BUILTINS.length - 1 + own.length}`), 'totals count what is on')
   await p.locator('.irow[data-ins="built-in/failure-list"] .ck.sw').click()
   await sent('libon', b => b.kind === 'libon' && b.name === 'failure-list' && b.scope === 'project' && b.on === false)
   await p.locator('.wcard[data-weight=thorough]').click()
@@ -1046,7 +1073,7 @@ try {
   await p.locator('#swScope [data-sws=personal]').click()
   check(await p.locator('.irow[data-ins^="project/"]').count() === 0, 'my default hides project items')
   await p.locator('.irow[data-ins="built-in/fast-checks"] .ck.sw').click()
-  await sent('libon personal', b => b.kind === 'libon' && b.name === 'fast-checks' && b.scope === 'personal' && b.on === true)
+  await sent('libon personal', b => b.kind === 'libon' && b.name === 'fast-checks' && b.scope === 'personal' && b.on === false)
   await p.locator('#askBtn').click()
   await p.locator('#askf').fill('keep checks quick')
   await p.locator('[data-act=sendflow]').click()
@@ -1104,7 +1131,7 @@ try {
   // The draft card: depth ticks, the plan's own switches, and Lock carrying both.
   p = await open('draft', '')
   check(await p.locator('#slip .deep label').count() === 2, 'depth items')
-  check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted).length, 'a switch per trusted instruction')
+  check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted && i.name !== XS).length, 'a switch per trusted instruction')
   await p.locator('#slip [data-deep=perf]').check()
   await p.locator('#slip [data-plan=failure-list]').uncheck()
   const key = VARIANTS.draft.draftKey
@@ -1350,6 +1377,127 @@ try {
   if (shots) await p.screenshot({ path: join(shots, 'graph.png'), fullPage: true })
   await p.context().close()
 
+  // The experimental switch has a row of its own, and only the user's click sends it.
+  p = await open('library', '#library')
+  check(await p.locator('.irow[data-ins="built-in/state-settings"]').count() === 0, 'switch: not in the list')
+  check(await p.locator('#xsw .tag').textContent() === 'Experimental', 'switch: says experimental')
+  check((await p.locator('#xsw').innerText()).includes('testing'), 'switch: says it is for testing')
+  check(!await p.locator('#xsw input').isChecked(), 'switch: off by default')
+  await p.locator('.wcard[data-weight=thorough]').click()
+  await sent('a weight, for the switch case', b => b.kind === 'libweight' && b.weight === 'thorough')
+  check(!await p.locator('#xsw input').isChecked(), 'switch: a weight leaves it off')
+  await p.locator('#xsw .ck.sw').click()
+  await sent('libon for the switch', b => b.kind === 'libon' && b.name === XS && b.on === true && b.scope === 'project')
+  await p.context().close()
+  // With a project weight and the personal default on, the switch reads on: no weight clears it.
+  write({ ...VARIANTS.library, library: { ...VARIANTS.library.library, project: { weight: 'light' }, personal: { on: { [XS]: true } } } })
+  p = await browser.newContext({ viewport: { width: 1440, height: 900 } }).then(c => c.newPage())
+  await p.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
+  await p.goto(`${base}#library`)
+  await p.waitForSelector('#xsw input')
+  check(await p.locator('#xsw input').isChecked(), 'switch: the personal default holds under a project weight')
+  check((await p.locator('#wLabel').textContent()) === 'This project: Light', 'switch: it counts as no change to the weight')
+  await p.context().close()
+
+  // The System page says it is experimental, and has no switch.
+  p = await open('sysMid', '#system')
+  check(await p.locator('#sysp .phead .tag').textContent() === 'Experimental', 'System: says experimental')
+  check(await p.locator('#sysp .phead input').count() === 0, 'System: no switch')
+  check(await p.evaluate(() => { const h = document.querySelector('#sysp h1'); return h.getBoundingClientRect().width <= h.parentElement.getBoundingClientRect().width }), 'System: the heading fits beside the tag')
+  await p.context().close()
+  p = await open('sysMid', '#system', { width: 390 })
+  check(await p.locator('#sysp .phead h1').isVisible(), 'System: the heading shows on a phone')
+  await p.context().close()
+
+  // The draft card: only what differs, one row for each reason, and the answers.
+  p = await open('settings', '')
+  check((await p.locator('#stub h2').innerText()) === '3 looser settings need your answer', 'settings: the stub counts them')
+  check((await p.locator('#stub').innerText()).includes('runs the plan without them'), 'settings: the stub says what typing lock does')
+  check(await p.locator('#stub [data-act=lock]').isDisabled(), 'settings: Lock waits for the answers')
+  await p.locator('#stub [data-act]').first().waitFor()
+  const rows = p.locator('.setl li')
+  check(await rows.count() === 5, 'settings: one row for each reason')
+  check((await rows.nth(0).innerText()).startsWith('This plan'), 'settings: the plan row is first')
+  check((await rows.nth(0).locator('.mini').innerText()) === 'fails-first off', 'settings: the plan row says what it turns off')
+  check(await rows.nth(1).locator('code').count() === 2, 'settings: same reason, same row')
+  check((await rows.nth(1).locator('.mini').innerText()) === 'Light', 'settings: the row says the weight')
+  check((await p.locator('.setl').innerText()).includes('Plan weight') === false && (await p.locator('#slip').innerText()).includes('Plan weight: Standard'), 'settings: the plan weight shows')
+  check(await p.locator('.setl code', { hasText: /^form$/ }).count() === 0, 'settings: a state at the plan weight has no row')
+  check((await rows.filter({ hasText: 'Thorough' }).locator('button').count()) === 0, 'settings: a stricter weight needs no answer')
+  check(await p.locator('.setl i').count() === 0, 'settings: a reason runs no markup')
+  check((await rows.filter({ hasText: 'dashboard-widths' }).locator('code').count()) === 2, 'settings: an addition groups its states')
+  await rows.nth(1).locator('[data-keep]').click()
+  await sent('Keep on a weight row', b => b.kind === 'setrow' && b.draft === 's1' && b.id.startsWith('weight|light|only changes text') && b.keep === true)
+  await rows.nth(1).locator('button', { hasText: 'Use Standard' }).click()
+  await sent('Use Standard on a weight row', b => b.kind === 'setrow' && b.id.startsWith('weight|light|only changes text') && b.keep === false)
+  await rows.filter({ hasText: 'dashboard-widths' }).locator('button', { hasText: 'Remove' }).click()
+  await sent('Remove on an addition', b => b.kind === 'setrow' && b.id.startsWith('add|dashboard-widths') && b.keep === false)
+  await rows.nth(0).locator('button', { hasText: 'Leave it on' }).click()
+  await sent('Leave it on, on a plan row', b => b.kind === 'setrow' && b.id === 'plan|fails-first' && b.keep === false)
+  await p.context().close()
+
+  // The task page: the state's weight and additions, and what a member misses.
+  p = await open('settings', '#task-copy')
+  const say = () => p.locator('.tp-main').textContent()
+  check((await say()).includes('Settings for this state') && (await say()).includes('only changes text'), 'task: the weight and its reason')
+  check((await say()).includes('It runs at Standard unless you keep this'), 'task: what it runs at until answered')
+  check(!(await say()).includes('member agent'), 'task: no member note on a Light state')
+  await p.context().close()
+  p = await open('settings', '#task-charge')
+  check((await say()).includes('+ dashboard-widths') && (await say()).includes('it shows the card form'), 'task: an addition and its reason')
+  await p.context().close()
+  p = await open('settings', '#task-export')
+  check((await say()).includes('member agent'), 'task: the member note on a Thorough state')
+  check(await p.locator('.tp-main i').count() === 0, 'task: a reason runs no markup')
+  await p.context().close()
+  p = await open('settings', '#task-form')
+  check(!(await say()).includes('Settings for this state'), 'task: a plain state has no section')
+  await p.context().close()
+  p = await open('settingsRun', '#task-copy')
+  check((await say()).includes('because nobody kept this on the draft'), 'task: a lock left it at the plan weight')
+  await p.context().close()
+  p = await open('settingsOff', '#task-copy')
+  check(!(await say()).includes('Settings for this state'), 'task: nothing with the switch off')
+  check(await p.locator('.setl').count() === 0, 'draft: no settings rows with the switch off')
+  check(await p.locator('#stub h2').count() === 0 || (await p.locator('#stub h2').innerText()) !== 'A looser setting needs your answer', 'draft: nothing owed with the switch off')
+  await p.context().close()
+
+  // Your own instruction with a list: the editor shows it, and it keeps its personal switch under a project weight.
+  const ownWeights = l => ({ ...l, instructions: l.instructions.map(i => (i.name === 'dashboard-widths' ? { ...i, weights: ['standard'] } : i)) })
+  p = await open('library', '#library')
+  await p.context().close()
+  VARIANTS.ownWeights = { ...VARIANTS.library, library: ownWeights(VARIANTS.library.library) }
+  p = await open('ownWeights', '#ins-dashboard-widths')
+  check(await p.locator('[name=iew][value=standard]').isChecked(), 'editor: your own list shows')
+  check(!await p.locator('[name=iew][value=light]').isChecked(), 'editor: only what it lists')
+  await p.context().close()
+  VARIANTS.ownHeld = { ...VARIANTS.ownWeights, library: { ...VARIANTS.ownWeights.library, project: { weight: 'standard' }, personal: { on: { 'dashboard-widths': false } } } }
+  p = await open('ownHeld', '#library')
+  check(!await p.locator('.irow[data-ins="project/dashboard-widths"] input').isChecked(), 'your own keeps its personal switch under a project weight')
+  check((await p.locator('#wLabel').textContent()) === 'This project: Standard', 'your own switch is no change to the weight')
+  await p.context().close()
+
+  // The editor: a list of weights goes in the file, and none means no list.
+  p = await open('library', '#ins-new')
+  await p.locator('#ien').fill('quick-weights')
+  await p.locator('#ietext').fill('Keep each check short.')
+  await p.locator('[name=iew][value=standard]').check()
+  await p.locator('[name=iew][value=thorough]').check()
+  check((await p.locator('#iejson').textContent()).includes('"thorough"'), 'editor: the file shows the weights')
+  await p.locator('[data-act=iesave]').click()
+  await sent('saveflow with weights', b => b.kind === 'saveflow' && b.flow.name === 'quick-weights' && b.flow.weights?.join() === 'standard,thorough')
+  await p.context().close()
+  p = await open('library', '#ins-new')
+  await p.locator('#ien').fill('quick-weights')
+  await p.locator('#ietext').fill('Keep each check short.')
+  await p.locator('[name=iew][value=light]').check()
+  await p.locator('[name=iew][value=light]').uncheck()
+  await p.locator('[data-act=iesave]').click()
+  await sent('saveflow without weights', b => b.kind === 'saveflow' && b.flow.name === 'quick-weights' && !('weights' in b.flow))
+  await p.context().close()
+
+  await layout('settings', '', 'settings-draft')
+  await layout('settings', '#task-export', 'settings-task')
   await layout('library', '#library', 'library')
   await layout('library', '#flows', 'flows')
   await layout('library', '#ins-new', 'editor')

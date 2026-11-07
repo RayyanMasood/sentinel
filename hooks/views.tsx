@@ -9,7 +9,7 @@ type Loop = VM['loops'][number]
 
 export type PaneActions = { pick: (v: View) => void; browser: () => void }
 // asking: Sentinel's question is open in the dialog now. answer asks it again, after Esc.
-export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; resume: () => void; answer: () => void; asking: boolean; system?: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
+export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; setRow: (row: string, keep: boolean) => void; resume: () => void; answer: () => void; asking: boolean; system?: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
 
 // The band above the prompt: what needs you, or where the plan stands, with the buttons to act on it.
 // No hotkeys: a bare digit in an empty prompt would press them while you start a message.
@@ -27,6 +27,8 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const inside = here.length ? ` · in ${here.length > 2 ? `${here.slice(0, 2).join(', ')} and ${here.length - 2} more` : and(here)}` : ''
   // What Claude added waits for an answer, one at a time, before the draft asks to be locked.
   const added = vm.phase === 'draft' ? vm.states.find(s => s.added && !s.okAt) : undefined
+  // So does a setting looser than the plan. A lock with it unanswered keeps the plan's weight.
+  const loose = vm.phase === 'draft' ? vm.settingRows?.find(x => x.owed) : undefined
   type Band = [string, Tone, [string, string, () => void][]]
   // A flow or an instruction Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
   const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
@@ -34,6 +36,7 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const drift: Band | undefined = drifted && !live && !f ? [`Sentinel: ${count(drifted, 'part')} changed since the map was drawn.`, 'warn', [['system', 'System', on.system ?? (() => on.open(false))]]] : undefined
   const [text, tone, buttons]: Band = drift ? drift : !a || !live ? flow!
     : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
+    : loose ? [`Sentinel: Claude asks for ${loose.kind === 'plan' ? (loose.weight ? `this plan on ${loose.weight}` : `${loose.name} off for this plan`) : `${loose.states.join(', ')} on ${loose.weight}`}, looser than the plan. "${loose.why ?? ''}"`, 'warn', [['keep', 'Keep it', () => on.setRow(loose.id, true)], ['takeout', loose.weight ? `Use ${vm.planWeight}` : 'Leave it on', () => on.setRow(loose.id, false)]]]
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
     : vm.paused ? [`Sentinel is paused at ${a.id}.`, 'warn', [['resume', 'Resume', on.resume], ['open', 'Open', () => on.open(false)]]]
     : vm.blocked ? [`Sentinel: needs you on ${a.id}. ${vm.blocked.what}`, 'warn', [['open', 'Open', () => on.open(true)]]]
