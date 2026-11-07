@@ -280,7 +280,20 @@ export const answered = (r: Run, kind?: Wait) => {
 // Hands-free, from /sentinel hands-free or the dashboard; off takes it back.
 export const handsFree = (r: Run, on: boolean, t: string): Run =>
   !isLive(r) || !!r.handsFree === on ? r
-    : touched({ ...r, handsFree: on || undefined, log: [...r.log, { t, icon: on ? '✓' : '?', tone: on ? 'ok' : 'ask', text: on ? 'Hands-free: Claude makes the calls that would wait for you' : 'Hands-free off: Claude asks you again' }] })
+    : touched({ ...(on ? freeWeights(r, t) : r), handsFree: on || undefined, log: [...r.log, { t, icon: on ? '✓' : '?', tone: on ? 'ok' : 'ask', text: on ? 'Hands-free: Claude makes the calls that would wait for you' : 'Hands-free off: Claude asks you again' }] })
+// Hands-free, nobody is there to answer: the lighter weights states asked for go through, and the dashboard lists them.
+// They stay when hands-free goes off, like the other calls Claude made.
+function freeWeights(r: Run, t: string): Run {
+  if (!r.library?.states) return r
+  const done = doneOf(r)
+  const owed = (s: StateDef) => !!s.weight && weightFor(r, s) !== s.weight && !done.includes(s.id)
+  const went = r.plan?.states.filter(owed) ?? []
+  return went.length ? {
+    ...r,
+    plan: { ...r.plan!, states: r.plan!.states.map(s => (owed(s) ? { ...s, weightOk: true as const } : s)) },
+    audit: [...r.audit, ...went.map(s => ({ step: r.step + 1, t, state: s.id, kind: 'decided' as const, text: `Went ${s.weight} hands-free: ${s.weightWhy}` }))],
+  } : r
+}
 // What Claude does while the user is hands-free, worded once for every message that says it.
 export const HANDS_FREE = 'The user is hands-free and away, so make the calls that would wait for them yourself (a proposal, a review of your own work, a breaking change, a question): pick what you would recommend, record each with decide, and go on. Sentinel lists them for the user to check later.'
 // Hands-free, the user is away: Sentinel pushes a stopped turn on a few more times before it gives up.
@@ -1131,7 +1144,7 @@ function addStates(r: Run, i: PlanInput, t: string): Acted {
     log: [...r.log, ...fresh.map(s => ({ t, icon: '+', tone: 'dim' as const, text: `Added ${s.id}${s.added ? ' · nothing asked for it' : ''}${s.look ? ' · asks you first' : ''}` }))],
   }
   const looks = fresh.filter(s => s.look).map(s => `${s.id} asks the user before it starts, because it could involve ${s.look}.`)
-  return { run, ok: true, text: [`Added ${fresh.map(s => s.id).join(', ')} to the plan: ${order.join(' → ')} → done.`, ...looks, here(run)].join('\n') }
+  return { run: r.handsFree ? freeWeights(run, t) : run, ok: true, text: [`Added ${fresh.map(s => s.id).join(', ')} to the plan: ${order.join(' → ')} → done.`, ...looks, here(run)].join('\n') }
 }
 
 function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): Acted {

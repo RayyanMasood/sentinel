@@ -1196,9 +1196,15 @@ try {
 
   p = await open('proofAnswered', '')
   check(await p.locator('#stub [data-act=lock]').isEnabled(), 'draft: Lock opens once all are answered')
+  check((await p.locator('#stub [data-act=lockfree]').innerText()) === 'Lock and go hands-free', 'draft: the hands-free lock sits beside Lock')
   check((await p.locator('#stub h2').innerText()) === 'Check the draft, then lock it', 'draft: the usual stub comes back')
   await p.locator('#stub [data-act=lock]').click()
-  await sent('lock after answers', b => b.kind === 'lock' && b.draft === 'p3')
+  await sent('lock after answers', b => b.kind === 'lock' && b.draft === 'p3' && b.free === undefined)
+  await p.context().close()
+
+  p = await open('proofAnswered', '')
+  await p.locator('#stub [data-act=lockfree]').click()
+  await sent('lock and go hands-free', b => b.kind === 'lock' && b.draft === 'p3' && b.free === true)
   await p.context().close()
 
   // The draft's links open the saved copy, at the state or at the first section nothing quotes.
@@ -1415,6 +1421,8 @@ try {
   check((await p.locator('#stub h2').innerText()) === '3 looser settings need your answer', 'settings: the stub counts them')
   check((await p.locator('#stub').innerText()).includes('runs the plan without them'), 'settings: the stub says what typing lock does')
   check(await p.locator('#stub [data-act=lock]').isDisabled(), 'settings: Lock waits for the answers')
+  check(await p.locator('#stub [data-act=lockfree]').isEnabled(), 'settings: Lock and go hands-free answers for you')
+  check((await p.locator('#stub').innerText()).includes('Lock and go hands-free lets them through'), 'settings: the stub says what the button does')
   await p.locator('#stub [data-act]').first().waitFor()
   const rows = p.locator('.setl li')
   check(await rows.count() === 6, 'settings: one row for each reason')

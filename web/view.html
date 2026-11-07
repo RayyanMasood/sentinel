@@ -1845,15 +1845,15 @@ function stub(kind, n, done) {
   if (owed.length) {
     const many = owed.length > 1
     return { k: 'Your sign-off', h: many ? `${owed.length} states need your answer` : 'One state needs your answer', p: `Keep or take out ${many ? 'the states' : 'the state'} Claude added, then lock the plan.`,
-      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which keeps ${many ? 'them' : 'it'}.` }
+      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], LOCK_FREE, ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which keeps ${many ? 'them' : 'it'}. Lock and go hands-free does too, and ${FREE_NOTE}` }
   }
   const loose = kind === 'draft' ? (vm.settingRows ?? []).filter(r => r.owed) : []
   if (loose.length) {
     return { k: 'Your sign-off', h: loose.length > 1 ? `${loose.length} looser settings need your answer` : 'A looser setting needs your answer', p: "Keep it or use the plan's setting, then lock the plan.",
-      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which runs the plan without ${loose.length > 1 ? 'them' : 'it'}.` }
+      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], LOCK_FREE, ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which runs the plan without ${loose.length > 1 ? 'them' : 'it'}. Lock and go hands-free lets ${loose.length > 1 ? 'them' : 'it'} through, and ${FREE_NOTE}` }
   }
   if (kind === 'draft') return { k: 'Your sign-off', h: 'Check the draft, then lock it', p: 'Locking holds Claude to these states. Edits outside the running state\'s files are refused.',
-    acts: [['Lock the plan', 'lock', 'pri', 'lock'], ['Ask for changes', null, '', 'changes'], ['Add a flow', 'plus', '', 'flowlist']], fine: `Or type ${code('/sentinel lock')} in the chat.` }
+    acts: [['Lock the plan', 'lock', 'pri', 'lock'], LOCK_FREE, ['Ask for changes', null, '', 'changes'], ['Add a flow', 'plus', '', 'flowlist']], fine: `Or type ${code('/sentinel lock')} in the chat. With Lock and go hands-free, ${FREE_NOTE}` }
   if (kind === 'stuck') return { k: 'Needs you', h: `Claude is ${PATTERN[vm.trap.pattern]}`, p: 'Tell Claude what it may be missing, or pause the plan and take over.',
     acts: [['Tell Claude what to try', 'chat', 'pri', 'try'], ['Pause the plan', 'pause', '', 'pause']] }
   if (kind === 'paused') return { k: 'Paused', h: `Paused at ${esc(a.id)}`, p: 'Resume to hold Claude to the plan again. Nothing is lost while it is paused.',
@@ -2148,9 +2148,9 @@ function onAct(e) {
   if (act === 'sendchg') return send({ kind: 'changes', state: a, text: text('chg') }, { q: titleOf(a), ans: 'Changes asked for', where: 'Claude asks you again once they are in.' })
   if (act === 'ready') return send({ kind: 'ready', state: a, at: vm.blocked.at }, { q: vm.blocked.what, ans: 'It is ready', where: 'Claude goes on.' })
   if (act === 'hint') return send({ kind: 'hint', state: a, trap: vm.trap.step, text: text('try') }, { q: `Claude is ${PATTERN[vm.trap.pattern]} on ${a}`, ans: 'Your note is with Claude', where: 'The run stays red until the check moves.' })
-  if (act === 'lock') {
+  if (act === 'lock' || act === 'lockfree') {
     const picked = (vm.depth ?? []).filter(x => depthPicked.has(x.id)).map(x => x.id)
-    return send({ kind: 'lock', draft: vm.draftKey, ...(vm.depth?.length ? { picked } : {}), ...(planKeep ? { keep: 'project' } : {}) }, { q: vm.title, ans: 'Locked', where: 'Claude starts on the first state.' })
+    return send({ kind: 'lock', draft: vm.draftKey, ...(act === 'lockfree' ? { free: true } : {}), ...(vm.depth?.length ? { picked } : {}), ...(planKeep ? { keep: 'project' } : {}) }, { q: vm.title, ans: act === 'lockfree' ? 'Locked, hands-free' : 'Locked', where: 'Claude starts on the first state.' })
   }
   if (act === 'planweight') {
     const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
@@ -4435,6 +4435,8 @@ const libItems = () => [...(vm.library?.instructions ?? []), ...(vm.flows ?? [])
 // The experimental switch: a built-in with its own row, which no weight turns on.
 const XS = 'state-settings'
 // What a weight sets. Your own items keep their switches, even with a list of weights.
+const LOCK_FREE = ['Lock and go hands-free', null, '', 'lockfree']
+const FREE_NOTE = 'Claude makes the calls that would wait for you, and lists them for you to check.'
 const weighted = i => i.weights && !i.own && i.name !== XS
 const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
 // What a weight picked on the draft moves: what it sets, and your own with a list unless you switched them, as libraryOn has it.

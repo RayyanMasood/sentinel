@@ -77,7 +77,7 @@ export const BUILTINS: readonly Builtin[] = [
       + 'adds, a list of { name, why } naming Library instructions that fire per state. On the plan: settings, a list of { weight } or { name, on }, '
       + 'each with why or quote. A quote is compared with what the user typed: for an instruction turned on or a stricter weight, its name and one more '
       + 'word will do; anything looser needs at least 5 words that name it. A stricter setting applies with its reason shown. A looser one with only a reason waits '
-      + 'for the user on the draft. Leave alone a state that fits the plan.',
+      + 'for the user on the draft; hands-free it goes through and is listed for them. Leave alone a state that fits the plan.',
   },
 ]
 

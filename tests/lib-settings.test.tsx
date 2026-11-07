@@ -17,7 +17,7 @@
 // 13. A setting applied once applies again and undoes the user's pick on the draft.
 import { expect, mock } from 'claude-code/testing'
 import { checkSetting } from '../hooks/quote'
-import { STATE_SETTINGS, act, emptyRun, planSettings, settledStates, startCheck, weightFor } from '../hooks/core'
+import { STATE_SETTINGS, act, emptyRun, handsFree, planSettings, settledStates, startCheck, weightFor } from '../hooks/core'
 import { BUILTINS } from '../hooks/builtins'
 import type { PlanInput, PlanLibrary, Run } from '../types'
 import { ROOT, TOOL, engine, said, test } from './kit'
@@ -330,6 +330,60 @@ test('an answer stands while the setting stays the same', () => {
 
 const ASK = 'Please build the copy and the form'
 const quoted = { tool: TOOL, action: 'define', title: 'P', states: [{ ...COPY, asked: [ASK] }, { ...FORM, asked: [ASK] }] }
+
+test('going hands-free lets the lighter weights through, lists each, and leaves the rest', async ($: any, on: any) => {
+  const { signOff, running, sentinel } = await session($, on)
+  await signOff()
+  const sent = await $.tool.call(plan({}, { states: [{ ...COPY, weight: 'light', weightWhy: 'only text' }, { ...FORM, weight: 'thorough', weightWhy: 'money' }] }))
+  expect(said(sent)).toMatch(/wait for the user's answer/)
+  // Locked with it unanswered, it stands at the plan's weight until the user goes hands-free.
+  // The file is written once a tool call returns, so each command is followed by one.
+  const typedThen = async (args: string) => {
+    await sentinel(args)
+    await $.tool.call({ tool: TOOL, action: 'status' })
+  }
+  await typedThen('lock')
+  const copy = () => running().plan!.states[0]!
+  expect(weightFor(running(), copy())).toBe('standard')
+  await typedThen('hands-free')
+  expect(weightFor(running(), copy())).toBe('light')
+  expect(running().plan!.states[1]!.weightOk).toBeUndefined()
+  const listed = () => running().audit.filter(a => a.kind === 'decided' && /hands-free/.test(a.text)).map(a => [a.state, a.text])
+  expect(listed()).toEqual([['copy', 'Went light hands-free: only text']])
+  // Taking hands-free back keeps what Claude chose, and a second time lists nothing new.
+  await typedThen('hands-free off')
+  expect(weightFor(running(), copy())).toBe('light')
+  await typedThen('hands-free')
+  expect(listed()).toHaveLength(1)
+})
+
+test('going hands-free leaves a state that is done alone', () => {
+  const library = { weight: 'standard', on: [], told: [], states: { hand: {}, weights: {}, spare: [] } } as PlanLibrary
+  const states = [{ ...COPY, weight: 'light' as const, weightWhy: 'old' }, { ...FORM, weight: 'light' as const, weightWhy: 'new' }]
+  const r: Run = { ...emptyRun(), plan: { title: 'P', states, loops: [], lockedAt: '09:00' }, active: 'form', library }
+  const out = handsFree(r, true, '09:01')
+  expect(out.plan!.states.map(s => !!s.weightOk)).toEqual([false, true])
+  expect(out.audit.filter(a => /hands-free/.test(a.text)).map(a => a.state)).toEqual(['form'])
+  // Going off lets nothing through.
+  expect(handsFree({ ...r, handsFree: true }, false, '09:01').plan!.states.some(s => s.weightOk)).toBe(false)
+  // A run with the switch off has nothing to let through.
+  const off = { ...r, library: { ...library, states: undefined } }
+  expect(handsFree(off, true, '09:01').audit).toEqual(off.audit)
+})
+
+test('hands-free, a state added mid-run can be lighter too, and it is listed', async ($: any, on: any) => {
+  const { signOff, running, eng, typed, sentinel } = await session($, on)
+  eng.quoting()
+  await typed(ASK)
+  await signOff()
+  await $.tool.call(quoted)
+  await sentinel('hands-free')
+  await $.tool.call({ tool: TOOL, action: 'status' })
+  const r = await $.tool.call({ tool: TOOL, action: 'revise', order: ['copy', 'form', 'extra'], states: [{ id: 'extra', label: 'Extra', files: ['extra/**'], added: 'r', weight: 'light', weightWhy: 'only a note' }] })
+  expect(r.deny).toBeUndefined()
+  expect(weightFor(running(), running().plan!.states.find(s => s.id === 'extra')!)).toBe('light')
+  expect(running().audit.some(a => a.kind === 'decided' && a.state === 'extra' && a.text === 'Went light hands-free: only a note')).toBe(true)
+})
 
 test('a state added mid-run takes the plan\'s weight unless it names a stricter one, and never stops', async ($: any, on: any) => {
   const { signOff, running, eng, typed } = await session($, on)

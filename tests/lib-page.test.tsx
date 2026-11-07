@@ -212,6 +212,72 @@ test('a pick on the cards takes the setting it overrules with it, and a later an
   expect(drafted().library!.on).not.toContain('sources-first')
 })
 
+const lockedFree = async (eng: any, clock: any, drafted: () => Run) => {
+  await until(clock, () => !!drafted()?.plan && eng.snap().draftKey)
+  eng.page({ kind: 'lock', draft: eng.snap().draftKey, free: true })
+  await until(clock, () => !!eng.files[`${ROOT}/.sentinel/run.json`] && JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]).handsFree)
+  return JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]) as Run
+}
+
+test('lock and go hands-free: what waits for you goes through, each listed, and Claude hears it once', async ($: any, on: any) => {
+  const { eng, clock, define, drafted } = await session($, on)
+  await define({ action: 'define', title: 'P', states: [st('copy', { weight: 'light', weightWhy: 'only text' }), st('pay')], settings: [{ name: 'failure-list', on: false, why: 'slow here' }] })
+  const r = await lockedFree(eng, clock, drafted)
+  expect(r.active).toBe('copy')
+  expect(weightFor(r, r.plan!.states[0]!)).toBe('light')
+  expect(r.library!.on).not.toContain('failure-list')
+  expect(r.library!.settings![0]!.held).toBeUndefined()
+  const list = r.audit.filter(a => a.kind === 'decided').map(a => a.text)
+  expect(list).toContain('Went light hands-free: only text')
+  expect(list).toContain('Turned failure-list off hands-free: slow here')
+  await until(clock, () => eng.submitted.some((t: string) => /locked "P"/.test(t)))
+  const told = eng.submitted.filter((t: string) => /locked "P"/.test(t))
+  expect(told).toHaveLength(1)
+  expect(told[0]).toMatch(/hands-free and away/)
+  expect(told[0]).not.toMatch(/Left at the plan's weight/)
+  expect(eng.submitted.filter((t: string) => /Continue with the plan/.test(t))).toEqual([])
+})
+
+test('the plain Lock stays out of hands-free', async ($: any, on: any) => {
+  const { eng, clock, define, drafted } = await session($, on)
+  await define({ action: 'define', title: 'P', states: [st('copy', { weight: 'light', weightWhy: 'only text' }), st('pay')] })
+  await until(clock, () => !!drafted()?.plan && eng.snap().draftKey)
+  eng.page({ kind: 'lock', draft: eng.snap().draftKey })
+  await until(clock, () => eng.submitted.some((t: string) => /locked "P"/.test(t)))
+  await define({ action: 'status' })
+  const r = JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`] ?? '{}') as Run
+  expect(r.handsFree).toBeUndefined()
+  expect(weightFor(r, r.plan!.states[0]!)).toBe('standard')
+})
+
+test('lock and go hands-free takes the whole plan lighter, and the states Claude added stay', async ($: any, on: any) => {
+  const { eng, clock, define, drafted } = await session($, on)
+  await define({ action: 'define', title: 'P', states: [st('a')], settings: [{ weight: 'light', why: 'a small job' }] })
+  const r = await lockedFree(eng, clock, drafted)
+  expect(r.library!.weight).toBe('light')
+  expect(r.audit.filter(a => a.kind === 'decided').map(a => a.text)).toContain('Went light for the whole plan hands-free: a small job')
+})
+
+test('lock and go hands-free with the switch off: it locks and goes hands-free, and nothing else', async ($: any, on: any) => {
+  const { eng, clock, define, drafted } = await session($, on)
+  eng.files[`${ROOT}/.sentinel/library.json`] = '{}'
+  await define({ action: 'define', title: 'P', states: [st('a')] })
+  const r = await lockedFree(eng, clock, drafted)
+  expect(r.handsFree).toBe(true)
+  expect(r.library!.states).toBeUndefined()
+  expect(r.audit.filter(a => a.kind === 'decided')).toEqual([])
+})
+
+test('a stale page can\'t lock and go hands-free', async ($: any, on: any) => {
+  const { eng, clock, define, drafted } = await session($, on)
+  await define({ action: 'define', title: 'P', states: [st('a')] })
+  await until(clock, () => !!drafted()?.plan && eng.snap().draftKey)
+  eng.page({ kind: 'lock', draft: 'old', free: true })
+  await clock.advance(50)
+  expect(JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`] ?? '{}').handsFree).toBeFalsy()
+  expect(drafted().plan).toBeDefined()
+})
+
 test('a stale page changes nothing', async ($: any, on: any) => {
   const { rowOf, drafted, define, clock, eng } = await session($, on)
   await define(DEFINE)

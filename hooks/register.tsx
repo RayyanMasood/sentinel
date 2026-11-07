@@ -690,7 +690,7 @@ async function openPane($: $, focus: boolean) {
 // Locks the draft with the depth answers the user ticked, by id; none are ticked unless picked. A state that an
 // unticked answer names comes out first, unless a ticked one names it too. /sentinel lock, the band's Lock and the
 // dashboard's all come here.
-async function lockNow($: $, picked: string[] = []): Promise<string> {
+async function lockNow($: $, picked: string[] = [], free = false): Promise<string> {
   const r = await read($, run)
   const depth = (r.draft && r.held?.depth) || []
   const ticked = (id: string) => picked.some(p => p.toLowerCase() === id.toLowerCase())
@@ -701,7 +701,7 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
   }
   const chosen = depth.filter(x => ticked(x.id))
   const unanswered = (r.draft?.plan?.states ?? []).filter(s => s.added && !s.okAt).map(s => s.id)
-  const looser = r.draft ? looserLeft(r.draft.library, r.draft.plan?.states ?? []) : []
+  const looser = r.draft && !free ? looserLeft(r.draft.library, r.draft.plan?.states ?? []) : []
   const stands = looser.length ? `Left at the plan's weight: ${looser.join(', ')}, looser settings Claude asked for that nobody answered.` : ''
   const left = depth.filter(x => !ticked(x.id))
   const gone = [...new Set(left.flatMap(x => (x.state && !chosen.some(c => c.state === x.state) ? [x.state] : [])))]
@@ -710,13 +710,17 @@ async function lockNow($: $, picked: string[] = []): Promise<string> {
     if (why) return `Sentinel couldn't take out ${gone.join(', ')}: ${why}`
   }
   let d: Run | undefined
-  await change($, x => (x.draft ? (d = lockDraft(x, now())) : x))
+  await change($, x => {
+    if (!x.draft) return x
+    const locked = lockDraft(x, now())
+    return (d = free ? handsFree(locked, true, now()) : locked)
+  })
   if (!d) return 'No draft to lock.'
   void after($)
   const unsaved = d.drawing ? await saveMap($, d.drawing.map) : undefined
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
   const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, stands, unsaved ?? ''].filter(Boolean).join(' ')
-  later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
+  later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''}${free ? ` ${HANDS_FREE}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
   return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${unsaved ? ` ${unsaved}` : ''}`
 }
 
@@ -2619,8 +2623,16 @@ async function fromPage($: $, m: Record<string, unknown>) {
   const toast = (t: string) => void $.ui.toast(`Sentinel: ${t}`)
   if (m.kind === 'lock' && r.draft && m.draft === draftKey(r)) {
     const pl = r.draft.library
-    const out = await lockNow($, Array.isArray(m.picked) ? m.picked.filter((x): x is string => typeof x === 'string') : [])
+    // Lock and go hands-free: what waits for the user goes through. The states' weights go with hands-free itself.
+    const free = m.free === true
+    const kept = free ? settingRows(r.draft).filter(x => x.kind === 'plan' && x.owed) : []
+    for (const row of kept) {
+      const why = await answerRow($, row.id, true)
+      if (why) return toast(why)
+    }
+    const out = await lockNow($, Array.isArray(m.picked) ? m.picked.filter((x): x is string => typeof x === 'string') : [], free)
     if (!out.startsWith('Locked')) return toast(out)
+    if (kept.length) await change($, x => ({ ...x, audit: [...x.audit, ...kept.map(row => ({ step: x.step, t: now(), state: x.active ?? '', kind: 'decided' as const, text: `${row.weight ? `Went ${row.weight} for the whole plan` : `Turned ${row.name} off`} hands-free: ${row.why}` }))] }))
     const why = m.keep === 'project' && pl ? await keepAsProject($, pl) : undefined
     return why ? toast(why) : undefined
   }
