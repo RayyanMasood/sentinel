@@ -1603,13 +1603,14 @@ export function snapWanted(r: Run): boolean {
 }
 
 // What the rerun at a forward advance needs: the visit's snapshot, and the files edited in the visit as tests and code.
-// None without a snapshot, or once Claude's own decide in this visit says why the check can't fail without the change.
-// An approval the user gave in the dialog or on the page is also a decided entry, and it excuses nothing. A string says
-// why it is skipped.
+// None without a snapshot, or once Claude's own decide in this visit has this check as its topic and says why it can't
+// fail without the change. A decide about anything else leaves the rerun on, even one whose choice or reason mentions the
+// check. An approval the user gave in the dialog or on the page is also a decided entry, and it excuses nothing. A string
+// says why it is skipped.
 export function rerunOf(r: Run): { sha: string; tests: string[]; code: string[] } | string | undefined {
   const st = stateOf(r)
   const snap = snapOf(r)
-  if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.by === 'claude' && a.state === st.id && a.step > r.enteredAt)) return undefined
+  if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.by === 'claude' && a.state === st.id && a.step > r.enteredAt && /fails[- ]without[- ]change/i.test(a.text.split(' → ')[0]!))) return undefined
   const files = [...new Set(visitOf(r).flatMap(c => (c.kind === 'edit' && !c.denied && c.file ? [c.file] : [])))]
   const tests = files.filter(isTestFile)
   const code = files.filter(f => !isTestFile(f))
@@ -1663,7 +1664,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
       return {
         run: { ...r, log: [...r.log, { t, icon: '!', tone: 'warn', text: `${st.id} · check passes without the change` }] }, ok: false,
         text: `\`${st.check}\` passes in a copy of the project that has ${st.id}'s test changes (${without.tests.join(', ')}) but not its code changes (${without.code.join(', ')}), so it doesn't show the change works. `
-          + `Tighten the test so it fails without the change, then advance again. If it can't, such as a refactor that has to keep passing, record why with "decide", then advance again.`,
+          + `Tighten the test so it fails without the change, then advance again. If it can't, such as a refactor that has to keep passing, record why with "decide" and the topic "fails-without-change", then advance again.`,
       }
     }
     // Finished work goes to the user once, and again if it changed after they saw it. Hands-free, it passes and is
@@ -2061,6 +2062,120 @@ export function startClock(r: Run, at = Date.now()): Run {
   const last = own?.visits.at(-1)
   if (!own || !last || last.to === undefined || !isUnfinished(r)) return r
   return { ...r, tasks: { ...r.tasks, [r.active!]: { ...own, visits: [...own.visits, { from: at, cont: true }] } } }
+}
+
+// ---- when a state has run long ----
+
+// The first mark of a state's working time. Each mark after it is double the one before.
+export const FIRST_MARK_MS = 30 * 60_000
+
+export type TimeMark = { state: string; mark: number; ms: number }
+
+// 45 min, or 2 h 10 min. It rounds down, so it never reads as more than has passed.
+function timeText(ms: number): string {
+  const min = Math.floor(ms / 60_000)
+  const rest = min % 60
+  return min < 60 ? `${min} min` : `${(min - rest) / 60} h${rest ? ` ${rest} min` : ''}`
+}
+
+// The time a state has been worked on, across its visits. The clock stops while the plan waits, so a closed stretch
+// leaves the wait out.
+export function workingMs(r: Run, id: string, now: number): number {
+  return (taskIn(r.tasks, id)?.visits ?? []).reduce((sum, v) => sum + (v.to ?? now) - v.from, 0)
+}
+
+// The active state has passed a mark that hasn't been said yet. A jump past several gives only the highest.
+export function timeDue(r: Run, now: number): TimeMark | undefined {
+  if (!isLive(r) || waitingOn(r)) return undefined
+  const state = r.active!
+  const ms = workingMs(r, state, now)
+  if (ms < FIRST_MARK_MS) return undefined
+  let mark = FIRST_MARK_MS
+  while (mark * 2 <= ms) mark *= 2
+  return (r.timeSaid?.[state] ?? 0) >= mark ? undefined : { state, mark, ms }
+}
+
+export function timeMarked(r: Run, due: TimeMark, t: string): Run {
+  return { ...r, timeSaid: { ...r.timeSaid, [due.state]: due.mark }, log: [...r.log, { t, icon: '!', tone: 'warn', text: `${due.state} · ${timeText(due.ms)} of working time` }] }
+}
+
+// Where a state's time went, from what the ledger recorded across its visits. A stretch counts only between two calls
+// next to each other in the ledger, so the time another state worked between two visits is left out.
+// ponytail: a call's t holds HH:MM with no date, so a stretch includes any wait for the user in it and one over 24 h reads
+// short, and the ledger keeps the last 400 calls, so a longer state counts only those. Stamp calls in ms if that misleads.
+export function timeFacts(r: Run, id: string): string {
+  const own = r.calls.filter(c => c.state === id)
+  const checks = own.filter(c => c.kind === 'check')
+  const failed = checks.filter(c => !c.pass).length
+  const edits = own.filter(c => c.kind === 'edit' && !c.denied)
+  const files = new Set(edits.map(c => c.file)).size
+  const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))
+  let longest = 0
+  let ended = ''
+  r.calls.forEach((c, k) => {
+    const before = r.calls[k - 1]
+    if (c.state !== id || before?.state !== id) return
+    // Across midnight the clock goes back to 00:00.
+    const gap = (minutes(c.t) - minutes(before.t) + 1440) % 1440
+    if (gap > longest) [longest, ended] = [gap, c.label]
+  })
+  const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`
+  return [
+    checks.length ? `${many(checks.length, 'check run')}${failed ? `, ${failed} failed` : ''}` : '',
+    edits.length ? `${many(edits.length, 'edit')} to ${many(files, 'file')}` : '',
+    longest ? `longest stretch between calls ${timeText(longest * 60_000)} by the clock, ended by ${ended.replace(/\s+/g, ' ').slice(0, 60)}` : '',
+  ].filter(Boolean).join('; ')
+}
+
+// What Claude is told at a mark. It goes on working: the note only asks it to look.
+export function timeNote(r: Run, due: TimeMark): string {
+  const facts = timeFacts(r, due.state)
+  return `[sentinel] ${due.state} has taken ${timeText(due.ms)} of working time.${facts ? ` The ledger shows ${facts}.` : ''} This does not stop the run. Look at where the time went: carry on if it is reasonable, speed it up if you can, and fix anything hung or failing. Record what you found with "decide" and the topic "time on ${due.state}", and go on.`
+}
+
+// What an overseer starts with: a fresh agent knows nothing of the run but this and what it reads. others: other agents
+// at work in the session.
+export function overseerPrompt(r: Run, due: TimeMark, diff: string, others: string[]): string {
+  const st = stateOf(r, due.state)
+  const facts = timeFacts(r, due.state)
+  const calls = r.calls.filter(c => c.state === due.state).slice(-25).map(c => `${c.t} ${c.kind}${c.kind === 'check' ? (c.pass ? ' passed' : ' failed') : ''}${c.denied ? ' refused' : ''}: ${c.label}`)
+  const fail = r.lastFail && r.lastFail.step > r.enteredAt ? r.lastFail.text.slice(-2000) : ''
+  const part = (name: string, text?: string) => (text ? [`${name}:`, text, ''] : [])
+  return [
+    "You are Sentinel's overseer. Another Claude conversation is working through a signed-off plan, and one state of it has run long. Sentinel asked you to look in from outside, so that conversation isn't judging its own time. It keeps working while you look.",
+    '',
+    'Read only. Edit nothing, start nothing that keeps running, stop nothing. You may read files and logs and run read-only commands such as git log.',
+    '',
+    'Decide which of these holds:',
+    '- FINE: the time is reasonable for this work and it is moving.',
+    '- FASTER: the work is on course, and a specific change would save real time, such as a narrower test run.',
+    '- WRONG: something is hung, looping, failing for the same reason each time, or off what the state asked for.',
+    '',
+    'The first word of your final answer is that word. After it, at most five lines: what you saw, and what the main conversation should do, naming files and commands. The main conversation hears only FASTER and WRONG, and it reads your answer with none of your context.',
+    '',
+    `Plan: ${r.plan!.title}${r.plan!.source ? ` (written in ${r.plan!.source})` : ''}`,
+    `State: ${due.state}${st ? ` (${st.label})` : ''}${st?.ref ? `, details at ${st.ref}` : ''}`,
+    ...(st?.problem ? [`What is needed: ${st.problem}`] : []),
+    ...(st?.approach ? [`How: ${st.approach}`] : []),
+    ...(st?.check ? [`Done when this exits 0: ${st.check}`] : []),
+    ...(st?.files?.length ? [`Files it may edit: ${st.files.join(', ')}`] : []),
+    `Working time so far: ${timeText(due.ms)}.${facts ? ` The ledger shows ${facts}.` : ''}`,
+    '',
+    ...part('Its recent calls, oldest first', calls.join('\n')),
+    ...part('The last failure in this state', fail),
+    ...part('Uncommitted changes (git diff --stat)', diff.trim().slice(0, 3000)),
+    ...part('Other agents at work', others.join('\n')),
+  ].join('\n').trim()
+}
+
+// What an overseer answered, by its first word. An answer with no such word still counts as something to hear, as it may
+// report what the word was meant for; a look that was stopped or said nothing has nothing to hear.
+export type OverseerWord = 'fine' | 'faster' | 'wrong' | 'unclear' | 'silent'
+export function overseerSays(answer: string): { word: OverseerWord; rest: string } {
+  const text = answer.trim()
+  if (!text) return { word: 'silent', rest: '' }
+  const m = /^\W*(fine|faster|wrong)\b[\s*_:.,-]*/i.exec(text)
+  return m ? { word: m[1]!.toLowerCase() as OverseerWord, rest: text.slice(m[0].length) } : { word: 'unclear', rest: text }
 }
 
 // What the views need for a task's clock and outcome.

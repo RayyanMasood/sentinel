@@ -3921,7 +3921,7 @@ test('library: a check that passes without the code change is refused', async ($
   await write(TEST_FILE, 'test v1')
   const refused = await advance('verify')
   expect(refused).toMatch(/`npm test -- refund` passes in a copy of the project that has service's test changes \(tests\/refund\.test\.ts\) but not its code changes \(src\/refund\.ts\), so it doesn't show the change works\./)
-  expect(refused).toMatch(/record why with "decide"/)
+  expect(refused).toMatch(/record why with "decide" and the topic "fails-without-change"/)
   // The copy is a worktree at the snapshot with the test copied in. It goes once the check has run there.
   const [add] = gitDid(eng, 'worktree', 'add')
   const path = add!.argv[4]!
@@ -3936,7 +3936,7 @@ test('library: a check that passes without the code change is refused', async ($
   expect(run.log.map(l => l.text)).toContain('service · check passes without the change')
 
   // A decide in this visit says why, and the advance goes through without another copy.
-  await $.tool.call({ tool: TOOL, action: 'decide', topic: 'refund test', choice: 'keep it', reason: 'a refactor that keeps the output' })
+  await $.tool.call({ tool: TOOL, action: 'decide', topic: 'fails-without-change', choice: 'keep it', reason: 'a refactor that keeps the output' })
   expect(await advance('verify')).toMatch(/Moved to verify/)
   expect(gitDid(eng, 'worktree', 'add')).toHaveLength(1)
 

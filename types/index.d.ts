@@ -380,6 +380,8 @@ export type Run = {
   startedAt?: number
   endedAt?: number
   tasks?: Record<string, Task>
+  // The last working-time mark (ms) said for each state. A run saved before it existed has said none.
+  timeSaid?: Record<string, number>
   trips?: Trip[]
   // When .sentinel/run.json was last written. Only the saved file has it.
   savedAt?: number
@@ -399,6 +401,8 @@ export type Run = {
 declare module 'claude-code' {
   interface PluginState {
     // said: the session's typed messages and the files Claude wrote. Never saved, unlike run.
-    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }> }
+    // overseers: the agents started to look into a long state, by agent id, with what each answered. They die with the
+    // session's process, and so does this.
+    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }>; overseers: Shaped<Record<string, { state: string; word?: string }>> }
   }
 }

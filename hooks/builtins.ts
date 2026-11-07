@@ -50,7 +50,7 @@ export const BUILTINS: readonly Builtin[] = [
   {
     name: 'fails-without-change', title: 'Check fails without the change', at: 'close', kind: 'checks', runs: 2, slow: true, weights: ['thorough'],
     text: "Before a state closes, Sentinel reruns its check in a scratch copy that has the state's test changes but not its "
-      + 'code changes. If the check still passes there, the advance is refused until the check is tightened or Claude records why with decide. '
+      + 'code changes. If the check still passes there, the advance is refused until the check is tightened or Claude records why with a decide about this check. '
       + "If it fails, Sentinel runs it once more with the code changes in, to tell a real failure from a copy that can't run the check.",
   },
   {

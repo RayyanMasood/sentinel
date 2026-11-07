@@ -10,6 +10,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -26,6 +27,8 @@ const view = atom({ plugin: 'sentinel', key: 'view' } as const, 'focus' as View,
 // ponytail: $.state doesn't outlive the process, so messages and writes from before a restart are gone: such a message
 // can't be quoted, and such a file counts as unwritten. Save the paths if that shows.
 const said = atom({ plugin: 'sentinel', key: 'said' } as const, { messages: [], wrote: [] }, { shape: 'said-1' })
+// The overseers started in this session. An id stays after its agent ends, as its hand-back arrives later than its answer.
+const overseers = atom({ plugin: 'sentinel', key: 'overseers' } as const, {}, { shape: 'overseers-1' })
 // ponytail: the last 100 typed messages, so an older one can't be quoted. Raise it if long sessions miss quotes.
 const MAX_SAID = 100
 // ponytail: a file over 1 MB isn't copied, as run.json is written on every call and the engine refuses a write over 4 MiB.
@@ -191,6 +194,8 @@ export const register: Register = on => {
     await change($, r => (r.sweep || r.checking ? { ...r, sweep: undefined, checking: undefined } : r))
     void libraryView($).catch(() => undefined)
     void lookAll($).catch(() => undefined)
+    tick?.cancel()
+    tick = $.clock.every(60_000, () => void overseerLook($).catch(() => undefined))
     // A new session starts empty; say so when the project holds an unfinished plan.
     void after($).then(async () => {
       const r = await read($, run)
@@ -449,11 +454,18 @@ export const register: Register = on => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) turning = false
+    if (e.agentId === undefined) {
+      turning = false
+      stoppedByUser = e.reason === 'aborted'
+    }
     const done = await next(e)
     // A helper agent's turn ends: its lane is done until another call of it. A member's work gets checked and brought back.
     if (e.agentId !== undefined) {
       await change($, r => laneDone(r, e.agentId!))
+      if ((await read($, overseers))[e.agentId]) {
+        await overseerAnswered($, e.agentId, e.isAborted ? '' : e.answer)
+        return done
+      }
       const r = await read($, run)
       const member = memberByAgent(r, e.agentId)
       if (member) void handBack($, member, e.answer).catch(() => undefined)
@@ -480,9 +492,11 @@ export const register: Register = on => {
     }
     // Background agents answer into this conversation by themselves. A failed list counts as none. Other background
     // work holds the push for HOLD_MS at most; past that the push names it, and a check comes once all of it is past.
-    const live = flight('')?.tasks ?? []
+    const looks = await read($, overseers)
+    // The Stop input lists a running overseer too, and it holds nothing up. Its id there may not be the agent's.
+    const live = (flight('')?.tasks ?? []).filter(t => !looks[t.id] && !Object.values(looks).some(l => t.what === `overseer ${l.state}`.slice(0, 80)))
     const held = holding(live)
-    const busy = !!held.length || (await agents($)).some(working)
+    const busy = !!held.length || (await agentsAtWork($))
     backBusy = busy
     void after($)
     if (held.length) {
@@ -490,7 +504,7 @@ export const register: Register = on => {
       $.clock.after(Math.max(0, Math.max(...held.map(t => firstSeen.get(t.id)! + HOLD_MS)) - Date.now()) + 1000, () => void (async () => {
         if (turns !== at || turning) return
         // Past HOLD_MS a shell or a monitor no longer counts as work: a server or a watcher never ends.
-        backBusy = (await agents($)).some(working)
+        backBusy = await agentsAtWork($)
         void after($)
         if (!backBusy) await push($, false, held)
       })().catch(() => undefined))
@@ -512,6 +526,11 @@ export const register: Register = on => {
     // The notice that one of Sentinel's own check runs ended is Sentinel's; the model never started that run.
     const task = e.origin.kind === 'task-notification' ? /<task-id>([^<]+)<\/task-id>/.exec(e.text)?.[1] : undefined
     if (task && ownTasks.has(task)) return { drop: 'Sentinel read this check run itself' }
+    // An overseer's hand-back: Sentinel already has its answer and passes on what the main conversation needs. The user
+    // sees this reason as one dim line, and the model doesn't.
+    const from = ['composer', 'bridge', 'sdk'].includes(e.origin.kind) ? undefined : /^<agent-message from="([^"]+)">/.exec(e.text)?.[1]
+    const look = from ? (await read($, overseers))[from] : undefined
+    if (look) return { drop: `overseer: ${look.word ?? 'answered'}` }
     const res = await next(e)
     if (!('drop' in res) && (e.origin.kind === 'composer' || e.origin.kind === 'bridge')) {
       await userSpoke($)
@@ -752,6 +771,47 @@ const later = ($: $, text: string) => void $.clock.after(0, () => tell($, text))
 // The session's agents; a failed list counts as none.
 const agents = ($: $) => $.agent.list().catch(() => [])
 const working = (a: { status: string }) => a.status === 'pending' || a.status === 'running' || a.status === 'waiting'
+// Agents still at work, leaving out an overseer: it holds off neither Auto-continue nor the clock.
+const agentsAtWork = async ($: $) => {
+  const looks = await read($, overseers)
+  return (await agents($)).some(a => working(a) && !looks[a.id])
+}
+
+// The minute tick. A state past a mark goes on record first, so a slow git can't start a second agent, and a mark passed
+// while an agent still looks is on record with no new agent.
+// ponytail: the active state only, so a member's state gets no overseer. Walk r.running too if a member drags on.
+async function overseerLook($: $) {
+  const due = timeDue(await read($, run), await clockMs($))
+  if (!due) return
+  await change($, r => timeMarked(r, due, now()))
+  const looks = await read($, overseers)
+  const list = await agents($)
+  if (list.some(a => working(a) && looks[a.id])) return
+  const diff = await git($, await $.session.root(), ['diff', '--stat', 'HEAD']).catch(() => '')
+  const r = await read($, run)
+  const others = list.filter(working).map(a => a.description ?? a.id)
+  const description = `overseer ${due.state}`
+  const spawned = await $.agent.spawn({ prompt: overseerPrompt(r, due, diff, others), description, subagentType: 'Explore', model: 'opus' })
+    .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err), agentId: undefined }))
+  if (spawned.deny !== undefined) return nudge($, timeNote(r, due), holdsNudge(r))
+  // Core sets agentId. A spawn a hook answered carries none, and the list still finds the agent.
+  const id = spawned.agentId ?? (await agents($)).findLast(a => a.description === description)?.id
+  if (id) await update($, overseers, m => ({ ...m, [id]: { state: due.state } }))
+}
+
+// An overseer answered. It all goes in the log, as FINE goes nowhere else. The main conversation hears the rest, unless
+// the state has since finished.
+async function overseerAnswered($: $, id: string, answer: string) {
+  const state = (await read($, overseers))[id]!.state
+  const { word, rest } = overseerSays(answer)
+  await update($, overseers, m => ({ ...m, [id]: { state, word } }))
+  const line = rest.replace(/\s+/g, ' ').slice(0, 140)
+  await change($, r => ({ ...r, log: [...r.log, { t: now(), icon: '!', tone: word === 'fine' || word === 'silent' ? 'dim' : 'warn', text: `${state} · overseer: ${word}${line ? ` · ${line}` : ''}` }] }))
+  const r = await read($, run)
+  if (word === 'fine' || word === 'silent' || !isLive(r) || r.active !== state) return
+  $.ui.toast(`Sentinel: the overseer found something on ${state}`)
+  nudge($, `${TAG} Sentinel's overseer, a read-only agent that looks in when a state runs long, says about ${state}: ${word === 'unclear' ? '' : `${word.toUpperCase()}\n`}${rest}\nThis does not stop the run. If it holds, act on it. Record what you found with "decide" and the topic "time on ${state}", and go on.`, holdsNudge(r))
+}
 
 const runFile = async ($: $) => `${await $.session.root()}/.sentinel/run.json`
 const draftFile = async ($: $) => `${await $.session.root()}/.sentinel/draft.json`
@@ -2444,6 +2504,15 @@ const takeHint = () => {
   hint = undefined
   return h
 }
+const nudge = ($: $, h: string, hold = turning) => {
+  if (hold) hint = hint ? `${hint}\n${h}` : h
+  else tell($, h)
+}
+// Nobody asked for what Sentinel says by itself, so it starts no turn after the user stopped one, or while the plan waits
+// on them. It rides on the next tool result, whenever that comes.
+let stoppedByUser = false
+const holdsNudge = (r: Run) => turning || stoppedByUser || waitingOn(r)
+let tick: { cancel: () => void } | undefined
 
 function serve($: $): Promise<string | undefined> {
   return (served ??= new Promise(ready => {
@@ -2568,17 +2637,13 @@ async function fromPage($: $, m: Record<string, unknown>) {
   if (m.kind === 'ahead' && typeof m.on === 'boolean') return void (await setFree($, m.on))
   if (m.kind === 'ready' && blockedOn(r)?.at === m.at) {
     await change($, x => heard(x, Date.now()))
-    const h = `${TAG} The user says this is ready: ${r.blocked!.what} Carry on with ${st.id}.`
-    if (turning) hint = hint ? `${hint}\n${h}` : h
-    else tell($, h)
+    nudge($, `${TAG} The user says this is ready: ${r.blocked!.what} Carry on with ${st.id}.`)
     void after($)
     return
   }
   if (m.kind === 'hint' && text && (openTrap(r) ?? (r.hung?.state === st.id ? r.hung : undefined))?.step === m.trap) {
     await change($, x => heard(x, Date.now()))
-    const h = `${TAG} The user sent a hint from the dashboard about ${st.id}: ${text}`
-    if (turning) hint = hint ? `${hint}\n${h}` : h
-    else tell($, h)
+    nudge($, `${TAG} The user sent a hint from the dashboard about ${st.id}: ${text}`)
     return
   }
   // Only what the state asked and the user hasn't answered: a proposal, or finished work.

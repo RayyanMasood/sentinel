@@ -34,7 +34,7 @@ Sentinel keeps its own copy of each source, so later edits to a file change noth
 
 A state can wait for you. With `wait: "before"` you approve the approach first, as for a design or a risky change: Claude calls `propose` and stops, and its edits there are refused until you answer. With `wait: "after"` you review the finished work, as before a publish. You answer in the chat or on the dashboard. If a later fix sends the plan back along a loop, a finished state you already reviewed keeps your earlier review while none of its own files has been edited since. Sentinel says so in its reply and names the files edited elsewhere. A state with no files of its own, and a review passed hands-free, ask again.
 
-Questions are held too. Claude can ask you something only after it declares a breaking change (a public API, an unplanned migration, deleting data, a new dependency, auth, secrets, CI or deploy), or when the active state waits for you. Everything else it decides itself and records with `decide`. Only Claude's own `decide` can excuse a check from the `fails-without-change` rerun. Your approval of a stop does not.
+Questions are held too. Claude can ask you something only after it declares a breaking change (a public API, an unplanned migration, deleting data, a new dependency, auth, secrets, CI or deploy), or when the active state waits for you. Everything else it decides itself and records with `decide`. Only a `decide` of Claude's about the check can excuse it from the `fails-without-change` rerun. One about something else does not, and neither does your approval of a stop.
 
 When the work waits on something outside, such as a locked machine or someone's reply, Claude files a blocked report that names what is needed. It shows as "needs you" on the status line, the band and the dashboard, Sentinel stops telling Claude to continue (hands-free too), and questions stay held. Reply in the chat or press It's ready, go on in the dashboard, and Claude goes on.
 
@@ -47,6 +47,10 @@ When you want to step away, go hands-free: type `/sentinel hands-free`, press Go
 Sentinel labels each tool call by whether it moved the work forward. Over the last 8 calls it works out a health score, `H = 1 − p·max(S, R)`: `S` is the share of calls that made no progress, `R` the share that repeated an earlier call, and `p` how much the last check failure weighs (fully when it is the same failure as before). An edit loses its credit when the next check fails the same way.
 
 At `H ≤ 0.25` the run is stuck. Claude gets a note that names the pattern (cycle, drift or static), the file version it went back to and the failure that keeps coming back, with what to try next. The dashboard turns red and offers a field for your own hint, which reaches Claude with its next tool result, and a Pause button.
+
+A state can also drag on with nothing going in circles, so Sentinel watches the time as well. When a state's working time passes 30 minutes, then 1, 2 and 4 hours, Sentinel starts an overseer: a read-only Opus agent that looks at the evidence from outside while the run goes on. It answers FINE, FASTER or WRONG. FINE goes in the dashboard's log. FASTER and WRONG also reach Claude with its next tool result, or start a turn if Claude has stopped by itself, and you get a toast. Nothing stops the run, and time spent waiting on you doesn't count. If the agent can't start, Claude gets the same facts as a note.
+
+A look runs on Opus for several requests. In a small test repo, one took 4,000 to 8,000 tokens of output, 120,000 written to the cache and 280,000 to 460,000 read from it. A state run by a member gets no overseer yet, and an overseer ends with the session that started it. In a terminal you may see one dim line such as `Prompt dropped by a hook: overseer: fine`, which is Sentinel keeping the agent's own report out of the chat.
 
 ## The System map
 
