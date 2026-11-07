@@ -27,8 +27,8 @@ export const BUILTINS: readonly Builtin[] = [
       + 'built or tested.',
   },
   {
-    name: 'fast-checks', title: 'Fastest check that proves it', at: 'start', kind: 'told', weights: ['light'],
-    text: 'Give this state the fastest check that proves its work: one test file, a type check or a build. Leave whole suites for the final checks.',
+    name: 'fast-checks', title: 'Fastest check that proves it', at: 'draft', kind: 'told', weights: ['light', 'standard', 'thorough'],
+    text: 'Give each state the fastest check that proves its own work: one test file, a type check or a build. Run the whole suite once, in the last state.',
   },
   {
     name: 'failure-list', title: 'Failure list first', at: 'start', kind: 'told', weights: ['standard', 'thorough'],

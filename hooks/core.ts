@@ -304,6 +304,16 @@ export function notYet(r: Run): string | undefined {
     ? `${st.id} waits for the user's answer to your proposal. Stop your turn and wait for them.`
     : `${st.id} asks the user before you start. Call plan with action "propose" and "intent": what you will do there. Then stop your turn; edits open once they answer.`
 }
+// A review the user already gave of the active state, still good after a loop back: none of the state's own files has been
+// edited since. A state with no files of its own can't show that, so it asks again. elsewhere: the files edited since in
+// other states, which the user did not look at. Only what the ledger recorded counts, as with the map's marks.
+export function keptReview(r: Run, st: StateDef): { elsewhere: string[] } | undefined {
+  const at = r.reviewed?.[st.id]
+  if (at === undefined || !st.files.length) return undefined
+  const since = r.calls.filter(c => c.kind === 'edit' && !c.denied && c.file !== undefined && c.step > at)
+  if (since.some(c => st.files.some(g => globMatch(g, c.file!)))) return undefined
+  return { elsewhere: [...new Set(since.map(c => c.file!))] }
+}
 export const shortCount = (n: number) => (n < 1e3 ? String(n) : n < 1e6 ? `${+(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(n < 1e7 ? 2 : 1)}M`)
 
 export function fnv(text: string): string {
@@ -1593,12 +1603,13 @@ export function snapWanted(r: Run): boolean {
 }
 
 // What the rerun at a forward advance needs: the visit's snapshot, and the files edited in the visit as tests and code.
-// None without a snapshot, or once a decide in this visit says why the check can't fail without the change. A string
-// says why it is skipped.
+// None without a snapshot, or once Claude's own decide in this visit says why the check can't fail without the change.
+// An approval the user gave in the dialog or on the page is also a decided entry, and it excuses nothing. A string says
+// why it is skipped.
 export function rerunOf(r: Run): { sha: string; tests: string[]; code: string[] } | string | undefined {
   const st = stateOf(r)
   const snap = snapOf(r)
-  if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.state === st.id && a.step > r.enteredAt)) return undefined
+  if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.by === 'claude' && a.state === st.id && a.step > r.enteredAt)) return undefined
   const files = [...new Set(visitOf(r).flatMap(c => (c.kind === 'edit' && !c.denied && c.file ? [c.file] : [])))]
   const tests = files.filter(isTestFile)
   const code = files.filter(f => !isTestFile(f))
@@ -1622,6 +1633,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
   const outcome = clip(i.outcome)
   // A loop edge that is also the next state is a forward move: it needs the check, and keeps its outcome.
   const back = isLoop && to !== next
+  let keptNote: string | undefined
   if (to !== next && !isLoop) {
     // A join: what is left needs the work of members that still run.
     if (next === undefined) return refuse(r, `Every state left needs work that members are still doing (${Object.keys(r.running ?? {}).join(', ')}). Stop here. Sentinel checks their work, brings it back and tells you when the next state can start.`)
@@ -1661,7 +1673,13 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
     else if (waitOf(st) === 'after') {
       const p = pendingOf(r)
       const seen = p?.kind === 'after' && !visit.some(c => c.kind === 'edit' && c.ver !== undefined && c.step > p.step)
-      if (!seen || !answered(r, 'after')) {
+      // Not asked in this visit, but the user reviewed it in an earlier one and none of its files changed since.
+      const kept = p ? undefined : keptReview(r, st)
+      if (kept) {
+        const some = kept.elsewhere.slice(0, 6).join(', ') + (kept.elsewhere.length > 6 ? ` and ${kept.elsewhere.length - 6} more` : '')
+        keptNote = `Your earlier review of ${st.id} stands: none of its files has changed since the user looked.${some ? ` Files edited since, in other states: ${some}.` : ''}`
+        r = { ...r, log: [...r.log, { t, icon: '✓', tone: 'ok', text: `${st.id} · earlier review kept` }] }
+      } else if (!seen || !answered(r, 'after')) {
         if (seen) return { ...refuse(r, `The user hasn't answered your review of ${st.id} yet. Stop your turn and wait for them.`), stop: 'after' }
         const text = clip(outcome ?? evidence, 1500)
         const run: Run = {
@@ -1670,7 +1688,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
           log: [...r.log, { t, icon: '?', tone: 'ask', text: `${st.id} · ready for your review` }],
         }
         return { run, ok: false, stop: 'after', text: `${st.id} is done, and the user reviews it before it moves on. They see your outcome above the prompt and on the dashboard. Say in your reply what was done and what they should check, then stop your turn and wait. Call advance again once they answer.` }
-      }
+      } else r = { ...r, reviewed: { ...r.reviewed, [st.id]: r.step } }
     }
     if (without && 'skipped' in without) r = { ...r, log: [...r.log, { t, icon: '–', tone: 'dim', text: `${st.id} · rerun without the change skipped: ${without.skipped}` }] }
   } else if (to !== next && !evidence) return refuse(r, `Going back along ${st.id} → ${to} needs a reason in evidence.`)
@@ -1713,7 +1731,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
     // The reason for a way back was checked above; keep it for the task page of the state returned to.
     ...(back ? { trips: [...(r.trips ?? []), { from: st.id, to, at: now, t, reason: clip(evidence)! }] } : {}),
   }
-  return { run, ok: true, event: to === 'done' ? 'complete' : undefined, text: `Moved to ${to}.\n${here(run)}` }
+  return { run, ok: true, event: to === 'done' ? 'complete' : undefined, text: `${keptNote ? `${keptNote}\n` : ''}Moved to ${to}.\n${here(run)}` }
 }
 
 // The final sweep found done states whose checks fail now: st is done, and they open again in place of completing.
@@ -1774,7 +1792,7 @@ function decide(r: Run, i: PlanInput, t: string): Acted {
   // A choice made after an escalation settles it.
   const run: Run = {
     ...r, escalatedAt: undefined,
-    audit: [...r.audit, { step: r.step + 1, t, state: r.active ?? undefined, kind: 'decided', text }],
+    audit: [...r.audit, { step: r.step + 1, t, state: r.active ?? undefined, kind: 'decided', text, by: 'claude' }],
     log: [...r.log, { t, icon: '◆', tone: 'acc', text: `Decided · ${text}` }],
   }
   return { run, ok: true, text: 'Recorded. Continue with the plan.' }

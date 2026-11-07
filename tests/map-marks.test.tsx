@@ -155,8 +155,9 @@ test('a marks file that cannot be written stops nothing', async ($: any, on: any
 test('a git that fails stops nothing and writes nothing', async ($: any, on: any) => {
   const eng = engine(on)
   eng.files[SYSTEM] = MAP
-  eng.setDuring('hash-object', async () => { throw new Error('git: fatal: unable to read') })
-  expect(await toService($, eng)).toMatch(/Moved to service/)
+  // The lock looks at the files of the parts too, so the failure is set after the lock, for the baseline.
+  const fail = () => eng.setDuring('hash-object', async () => { throw new Error('git: fatal: unable to read') })
+  expect(await toService($, eng, STATES, fail)).toMatch(/Moved to service/)
   expect(eng.files[MARKS]).toBeUndefined()
 })
 

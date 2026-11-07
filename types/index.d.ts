@@ -218,7 +218,8 @@ export type Trap = {
 
 export type AuditKind = 'refused' | 'blocked' | 'decided' | 'amended' | 'auto' | 'asked' | 'escalated'
 // state: the state that was active when it happened; none for what was decided at the lock.
-export type Audit = { step: number; t: string; kind: AuditKind; text: string; state?: string }
+// by: 'claude' marks a choice Claude recorded with decide, which is the only kind that can excuse a rerun.
+export type Audit = { step: number; t: string; kind: AuditKind; text: string; state?: string; by?: 'claude' }
 
 export type Tone = 'ok' | 'err' | 'warn' | 'acc' | 'ask' | 'dim'
 export type LogLine = { t: string; icon: string; tone: Tone; text: string }
@@ -327,6 +328,9 @@ export type Run = {
   // work (after). `ok` is set once the stop goes through the question dialog: then only the Yes label or the dashboard's
   // Approve settles it (true), and a typed message does not (false). Without `ok`, an answer after `at` settles it.
   pending?: { state: string; at: number; step: number; kind: Wait; text?: string; ok?: boolean }
+  // The call step at which the user last approved each finished state's review. A loop back keeps that review for a
+  // state whose own files have not been edited since.
+  reviewed?: Record<string, number>
   // When the model last escalated (ms). Until the user answers, a stopped turn is not pushed on.
   escalatedAt?: number
   // What a blocked report says the run waits for, outside Sentinel and Claude. It counts while the escalation of the same `at` waits.

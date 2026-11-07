@@ -47,7 +47,7 @@ After the user approves a plan (plan mode, or /sentinel lock), call action "defi
 - source: where the plan is written (file and section), and a "ref" on each state pointing to its details, so they survive compaction.
 - group: for more than about 8 states, a group name on each, such as "auth" or "marking/runs". Keep a group's states together.
 - title, problem, approach: plain lines for the state's task page, for someone who doesn't read code. Title under 8 words; problem and approach a sentence or two.
-- wait: "before" on a state the user OKs before you start (a design, a risky change): there, call "propose" with "intent" (what you will do), then stop your turn; edits open once they answer. "after" on a state they review when done: advance tells them, then stop your turn until they answer.
+- wait: "before" on a state the user OKs before you start (a design, a risky change): there, call "propose" with "intent" (what you will do); edits open once they answer. "after" on a state they review when done: advance asks them. Stop your turn only when the reply says to.
 - needs: the ids of the states a state builds on. Without it, a state needs the one listed before it. List every state after its needs. States where neither needs the other can run at the same time, so their files must not overlap.
 
 If part of the plan is already done, list the whole plan anyway: set "start" to the first unfinished state (Sentinel runs the checks before it and refuses the lock if one fails), give a finished state without a check "evidence", and add the "decisions" already made (topic, choice, reason).
@@ -596,6 +596,10 @@ const bgBy = new Map<string, string>()
 // The states whose member's work is being checked and brought back.
 const bringing = new Set<string>()
 
+// What the nudge says to a conversation that is not hands-free. A question only the user can answer is an escalation of kind
+// blocked: then nothing pushes the conversation on while it waits.
+export const PUSH_HOW = 'Unless you need a breaking-change decision (escalate), continue with the next step. If your last reply asked the user something only they can answer, call plan "escalate" with kind "blocked" and a reason instead, then stop.'
+
 // Pushes a stopped main conversation on, unless it waits for the user or for work that wakes it. long: background
 // work that has run past HOLD_MS, named so the model can tell a server from a stuck run.
 async function push($: $, busy: boolean, long: Flying[]) {
@@ -617,7 +621,7 @@ async function push($: $, busy: boolean, long: Flying[]) {
   if (!go) return
   void after($)
   const still = long.length ? ` Background work has run for over ${HOLD_MS / 60_000} minutes: ${long.map(t => t.what).join('; ')}. If it is a server or a watcher, carry on with the plan beside it.` : ''
-  const how = free ? `${HANDS_FREE} Continue with the next step.` : 'Unless you need a breaking-change decision (escalate), continue with the next step.'
+  const how = free ? `${HANDS_FREE} Continue with the next step.` : PUSH_HOW
   tell($, `${TAG} The plan is locked and not finished (state ${state}). ${how}${still} Auto-continue ${n} of ${cap}.` )
 }
 
@@ -1015,10 +1019,14 @@ async function drawn($: $, was: Run, input: PlanInput, outside = false): Promise
   const states = input.action === 'define' ? input.states : input.action === 'revise' ? (revised(was, input) as PlanInput).states : was.plan?.states
   const built = new Set((states ?? []).flatMap(s => (Array.isArray(s.parts) ? s.parts : [])))
   const groups = new Set(map.parts.flatMap(p => (p.parent ? [p.parent] : [])))
-  const look = map.parts.filter(p => p.files?.length && !groups.has(p.id) && !built.has(p.id))
+  // Before a state has started, any files a part has were there before the plan, even if a state will change them: the
+  // part reads Will change, and Already there if the state leaves it alone. Later, files of a built part may be the plan's.
+  const fresh = input.action === 'define' || (input.action === 'revise' && !!was.draft)
+  const look = map.parts.filter(p => p.files?.length && !groups.has(p.id) && (fresh || !built.has(p.id)))
   const found = await Promise.all(look.slice(0, EXISTS_CAP).map(async p => {
-    const fp = await fingerprint(p.files, inRoot)
-    return 'files' in fp && fp.files > 0 ? p.id : undefined
+    // A git that fails here stops nothing: the part just isn't counted as there.
+    const fp = await fingerprint(p.files, inRoot).catch(() => undefined)
+    return fp && 'files' in fp && fp.files > 0 ? p.id : undefined
   }))
   const exists = [...found.filter((id): id is string => !!id), ...look.slice(EXISTS_CAP).map(p => p.id)]
   return { input: { ...rest, drawn: { map, exists } }, guessed }

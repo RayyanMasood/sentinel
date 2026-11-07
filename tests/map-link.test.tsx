@@ -254,7 +254,7 @@ test('a drawing locks with the plan, joins the project map and is saved with the
   expect(eng.files[SYSTEM]).toMatch(/^\{\n"version": 1,\n"name": "Shop",/)
   // The run holds the map the file holds, which is saved sorted.
   const drawing = eng.memory.run!.drawing!
-  expect(drawing).toMatchObject({ warnings: [], exists: [] })
+  expect(drawing).toMatchObject({ warnings: [], exists: ['refunds'] })
   expect(drawing.locked).toEqual(drawing.map)
   expect(parseSystem(formatSystem(drawing.map))).toEqual({ ok: true, map })
 })
@@ -404,7 +404,7 @@ test('a draft leaves the file alone until the user locks it, and a revise builds
   expect(ids(map)).toContain('mail')
   expect(map.lines).toEqual([line])
   const drawing = eng.memory.run!.drawing!
-  expect(drawing).toMatchObject({ warnings: [], exists: [] })
+  expect(drawing).toMatchObject({ warnings: [], exists: ['refunds'] })
   expect(drawing.locked).toEqual(drawing.map)
   expect(parseSystem(formatSystem(drawing.map))).toEqual({ ok: true, map })
 })

@@ -3389,13 +3389,13 @@ test('library: an instruction file is checked like a flow', () => {
 })
 
 test('library: a weight sets the built-ins and switches win over it', () => {
-  const standard = ['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
+  const standard = ['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
   expect(libraryOn(ITEMS)).toEqual({ weight: 'standard', on: standard })
   expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'quote-the-source', 'mine'] })
   expect(libraryOn(ITEMS, { weight: 'thorough' }, { weight: 'light' }).on)
-    .toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
+    .toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
   // sources-first and close-phase are in no weight; a switch turns them on.
-  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
+  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
   // The project's switch beats the user's, for their own items and for built-ins.
   expect(libraryOn(ITEMS, { on: { mine: false } }, { on: { mine: true } }).on).not.toContain('mine')
   expect(libraryOn(ITEMS, {}, { on: { mine: false } }).on).not.toContain('mine')
@@ -3591,7 +3591,7 @@ test("library: define stores the library the switches give, never the model's", 
     weight: 'light',
     on: ['fast-checks', 'sources-first', 'widths'],
     told: [
-      { name: 'fast-checks', at: 'start', text: textOf('fast-checks') },
+      { name: 'fast-checks', at: 'draft', text: textOf('fast-checks') },
       { name: 'sources-first', at: 'draft', text: textOf('sources-first') },
       { name: 'widths', description: 'Widths', at: 'start', files: ['web/**'], text: 'Check three widths.' },
     ],
@@ -3614,8 +3614,8 @@ test("library: define stores the library the switches give, never the model's", 
   await $.tool.call({ tool: 'ExitPlanMode' })
   await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
   const standard = heldRun(eng).draft!.library!
-  expect(standard.on).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
-  expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'draw-system', 'failure-list', 'break-it-once', 'widths'])
+  expect(standard.on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
+  expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'break-it-once', 'widths'])
 })
 
 test('library: a flow that is off is not added by its rule, but can be added by hand', async ($: any, on: any) => {
@@ -3655,7 +3655,7 @@ test('library: the system prompt carries the draft and always instructions', asy
   const section = async () => (await sections()).find((s: any) => s.id === 'sentinel:library')
   eng.files[`${ROOT}/.sentinel/instructions/prose.json`] = JSON.stringify({ at: 'always', text: 'Plain prose.' })
   await sentinel('trust prose')
-  const depth = `While you draft a plan:\n${told(textOf('depth-before-size'))}\n${told(textOf('draw-system'))}`
+  const depth = `While you draft a plan:\n${told(textOf('depth-before-size'))}\n${told(textOf('draw-system'))}\n${told(textOf('fast-checks'))}`
   // No plan: the Library as it is now, after the engine's own sections.
   const all = await sections()
   expect(all.map((s: any) => s.id)).toEqual(['intro', 'sentinel:library'])
@@ -3675,12 +3675,13 @@ test('library: the system prompt carries the draft and always instructions', asy
   // No plan again: prose is off now, so only the draft block is left.
   await sentinel('reset')
   expect((await section()).text).toBe(`${depth}\n${RULES}`)
-  // Light tells Claude nothing at either moment: no section at all.
+  // Light tells Claude one draft instruction (fast-checks) and nothing every turn.
   await sentinel('weight light')
-  expect(await section()).toBeUndefined()
+  expect((await section()).text).toBe(`While you draft a plan:\n${told(textOf('fast-checks'))}\n${RULES}`)
   // A plan locked with no always instructions adds none either.
   await $.tool.call({ tool: 'ExitPlanMode' })
-  await $.tool.call({ tool: TOOL, ...PLAN })
+  await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
+  await sentinel('lock')
   expect(await section()).toBeUndefined()
   expect((await sections()).map((s: any) => s.id)).toEqual(['intro'])
 })
