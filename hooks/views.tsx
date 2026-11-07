@@ -9,7 +9,7 @@ type Loop = VM['loops'][number]
 
 export type PaneActions = { pick: (v: View) => void; browser: () => void }
 // asking: Sentinel's question is open in the dialog now. answer asks it again, after Esc.
-export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; setRow: (row: string, keep: boolean) => void; resume: () => void; answer: () => void; asking: boolean; system?: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
+export type BandActions = { open: (focus: boolean) => void; lock: () => void; keep: (state: string) => void; takeOut: (state: string) => void; setRow: (row: string, keep: boolean) => void; resume: () => void; answer: () => void; closed?: string; answerClosed?: () => void; asking: boolean; system?: () => void; saveFlow: (scope: 'project' | 'personal') => void; discardFlow: () => void }
 
 // The band above the prompt: what needs you, or where the plan stands, with the buttons to act on it.
 // No hotkeys: a bare digit in an empty prompt would press them while you start a message.
@@ -20,7 +20,9 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const live = !!a && vm.phase !== 'none' && vm.phase !== 'complete'
   // With nothing running, the update check's finding: parts whose files changed since the map was drawn.
   const drifted = vm.system?.drift?.count ?? 0
-  if (!live && !f && !drifted) return undefined
+  // A question of Claude's that the user closed with Esc. The old state stands, so it waits behind what needs them in the plan.
+  const closed: [string, Tone, [string, string, () => void][]] | undefined = on.closed && !on.asking ? [`Sentinel: ${on.closed} You closed this question.`, 'warn', [['answer', 'Answer', on.answerClosed!]]] : undefined
+  if (!live && !f && !drifted && !closed) return undefined
   const hl = vm.health
   // The parts of the system map Claude is working on, two at most.
   const here = vm.system?.here.map(p => p.name) ?? []
@@ -34,7 +36,7 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
     [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save personal', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
   const drift: Band | undefined = drifted && !live && !f ? [`Sentinel: ${count(drifted, 'part')} changed since the map was drawn.`, 'warn', [['system', 'System', on.system ?? (() => on.open(false))]]] : undefined
-  const [text, tone, buttons]: Band = drift ? drift : !a || !live ? flow!
+  const [text, tone, buttons]: Band = closed && (!a || !live) ? closed : drift ? drift : !a || !live ? flow!
     : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
     : loose ? [`Sentinel: Claude asks for ${loose.kind === 'plan' ? (loose.weight ? `this plan on ${loose.weight}` : `${loose.name} off for this plan`) : `${loose.states.join(', ')} on ${loose.weight}`}, looser than the plan. "${loose.why ?? ''}"`, 'warn', [['keep', 'Keep it', () => on.setRow(loose.id, true)], ['takeout', loose.weight ? `Use ${vm.planWeight}` : 'Leave it on', () => on.setRow(loose.id, false)]]]
     : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
@@ -43,6 +45,7 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
     : vm.trap ? [`Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`, 'err', [['open', 'Open', () => on.open(true)]]]
     : vm.waiting && on.asking ? [`Sentinel: ${a.id} is asking for your ${vm.waiting.kind === 'before' ? 'OK' : 'review'} in the question box.`, 'warn', [['open', 'Open', () => on.open(true)]]]
     : vm.waiting ? [vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts.` : `Sentinel: ${a.id} is ready for your review.`, 'warn', [['answer', 'Answer', on.answer], ['open', 'Open', () => on.open(true)]]]
+    : closed ? closed
     : flow ? flow
     : vm.sweep ? [`Sentinel: final checks · ${sweepLine(vm.sweep)}`, 'acc', [['open', 'Open', () => on.open(false)]]]
     : vm.checking?.length ? [`Sentinel: ${a.id} ${a.pos}/${a.of}${inside} · ${checkLine(vm.checking.at(-1)!)}`, vm.checking.at(-1)!.quiet ? 'warn' : 'dim', [['open', 'Open', () => on.open(false)]]]

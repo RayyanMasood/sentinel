@@ -808,7 +808,8 @@ export function stopText(p: NonNullable<Run['pending']>, a: Answer, late = false
 // keeps it on the map, and so does a missing reason. Those are refused without asking.
 export function signedDrops(r: Run, i: PlanInput): string[] {
   const d = r.drawing
-  if (!d?.locked || !r.plan || !clip(i.reason)) return []
+  // With no plan running the map call is refused whatever the user answers, so there is nothing to ask.
+  if (!isLive(r) || !d?.locked || !r.plan || !clip(i.reason)) return []
   const drop = [...new Set((i.drop ?? []).map(x => String(x).trim()).filter(Boolean))]
   return drop.filter(id => d.locked!.parts.some(p => p.id === id) && d.map.parts.some(p => p.id === id) && !r.plan!.states.some(s => s.parts?.includes(id)))
 }
@@ -826,7 +827,7 @@ export function dropText(ids: string[], a: Answer): string {
   const stay = `${ids.join(', ')} ${one ? 'stays' : 'stay'} on the map. Keep building ${one ? 'it' : 'them'}.`
   return a.how === 'no' ? `The user said no, so ${stay}`
     : a.how === 'words' ? `The user answered with: "${a.words}". ${stay}`
-    : `The user closed the question without answering, so ${stay} Tell them in your reply what you wanted to change.`
+    : `The user closed the question without answering, so ${stay} Tell them in your reply what you wanted to change, and that the Answer button above the prompt asks them again.`
 }
 
 // ---- redraw: the user asked for an area to be reread ----
@@ -853,7 +854,7 @@ export function redrawText(names: string[], a: Answer, same: boolean): string {
   return a.how === 'yes' ? (same ? `The user marked ${area} as up to date.` : `The user kept the new drawing of ${area}. Its marker moved to today.`)
     : a.how === 'no' ? `The user said no, so the old drawing of ${area} stays. Ask what they want changed.`
     : a.how === 'words' ? `The user answered with: "${a.words}". The old drawing of ${area} stays. Answer them, then redraw again if they ask.`
-    : `The user closed the question without answering, so the old drawing of ${area} stays. Tell them in your reply what you found, and that they can ask you to redraw again.`
+    : `The user closed the question without answering, so the old drawing of ${area} stays. Tell them in your reply what you found, and that the Answer button above the prompt asks them again, so nothing has to be reread.`
 }
 
 // The user skips a state: the active one moves on, a later one no longer has to run, and a done one keeps its work. A

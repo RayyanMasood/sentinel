@@ -546,6 +546,58 @@ test('No, words and Esc keep the old drawing exactly, and Claude hears which', a
   expect(eng.files[SYSTEM]).toBe(DRAWN)
 })
 
+test('after Esc on a redraw the band keeps an Answer button, and a yes keeps the drawing with no second read', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  eng.files[SYSTEM] = DRAWN
+  dialog(eng, () => ESC)
+  expect(said(await redraw($))).toMatch(/Answer button above the prompt/)
+  expect(eng.files[SYSTEM]).toBe(DRAWN)
+  const ui = await $.ui.mount({ plugin: 'sentinel', component: 'AbovePrompt', props: { hasSurvey: false }, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Claude redrew Refunds\. You closed this question\./ })).toBeDefined()
+  const seen = dialog(eng, yes)
+  await ui.press({ key: 'answer' })
+  await until(clock, () => eng.submitted.some(t => /kept the new drawing of Refunds/.test(t)))
+  expect(seen).toHaveLength(1)
+  expect(seen[0]!.options.map(o => o.label)).toEqual(['Yes, keep it', 'No, keep the old one'])
+  expect(partIn(eng, 'refunds').desc).toBe('Refunds and the queue behind them')
+  expect(await ui.find({ type: 'Button', text: 'Answer' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('after Esc on a redraw, a no leaves the old drawing and Claude hears it', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  eng.files[SYSTEM] = DRAWN
+  dialog(eng, () => ESC)
+  await redraw($)
+  const ui = await $.ui.mount({ plugin: 'sentinel', component: 'AbovePrompt', props: { hasSurvey: false }, surface: 'terminal' })
+  dialog(eng, no)
+  await ui.press({ key: 'answer' })
+  await until(clock, () => eng.submitted.some(t => /said no, so the old drawing of Refunds stays/.test(t)))
+  expect(eng.files[SYSTEM]).toBe(DRAWN)
+  expect(await ui.find({ type: 'Button', text: 'Answer' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a closed redraw question is dropped once the map has changed, so it can\'t write over the newer one', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  eng.files[SYSTEM] = DRAWN
+  dialog(eng, () => ESC)
+  await redraw($)
+  const newer = JSON.stringify({ version: 1, name: 'Shop', actors: [], lines: [], parts: SHOP.parts.map(p => (p.id === 'guide' ? { ...p, desc: 'Edited by hand' } : p)) })
+  eng.files[SYSTEM] = newer
+  const ui = await $.ui.mount({ plugin: 'sentinel', component: 'AbovePrompt', props: { hasSurvey: false }, surface: 'terminal' })
+  const seen = dialog(eng, yes)
+  await ui.press({ key: 'answer' })
+  await until(clock, () => eng.toasts.some((t: string) => /no longer applies/.test(t)))
+  expect(seen).toHaveLength(0)
+  expect(eng.files[SYSTEM]).toBe(newer)
+  expect(await ui.find({ type: 'Button', text: 'Answer' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('with a draft open a redraw is refused without a question: the draft carries the drawing', async ($: any, on: any) => {
   const eng = engine(on)
   const seen = dialog(eng, yes)

@@ -300,6 +300,8 @@ export const register: Register = on => {
       resume: () => void resume($),
       answer: () => void answerNow($),
       asking: stopOpen !== undefined,
+      closed: closedAsk?.ask.question.split('\n')[0],
+      answerClosed: () => void answerClosed($),
       saveFlow: scope => void keepFlow($, scope).then(t => $.ui.toast(`Sentinel: ${t}`)),
       discardFlow: () => void flowCommand($, 'discard').then(t => $.ui.toast(`Sentinel: ${t}`)),
     })
@@ -886,7 +888,8 @@ async function saved($: $): Promise<Run | undefined> {
 
 // user: the user asked for this call themselves (/sentinel skip, Skip on the dashboard). signal: aborts when the user
 // stops the model's call, which then changes nothing.
-async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal): Promise<Result> {
+// agreed: the user already said yes to the parts this call drops, from the band's Answer button.
+async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal, agreed = false): Promise<Result> {
   const typed = user || spoke()
   // What a plan is locked with comes from the switches files, never from the model.
   const { library: _library, named: _named, messages: _messages, drawn: _drawn, approved: _approved, ...sent } = raw
@@ -998,10 +1001,21 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     ;({ input, guessed } = d)
   }
   // A part the user signed off on comes off the map only if they say yes in the dialog. Anything but a yes leaves it there.
-  if (input.action === 'map' && !was.handsFree) {
+  if (input.action === 'map' && (agreed || !was.handsFree)) {
     const ids = signedDrops(was, input)
     if (ids.length) {
-      const answer = await askIn($, dropAsk(was, ids, input.reason ?? ''))
+      const sent = input
+      const answer: Answer = agreed ? { how: 'yes' } : await askHeld($, dropAsk(was, ids, input.reason ?? ''), {
+        still: async () => {
+          const r = await read($, run)
+          return signedDrops(r, sent).length > 0
+        },
+        settle: async a => {
+          if (a.how !== 'yes') return dropText(ids, a)
+          const out = await planCall($, raw, user, undefined, true)
+          return `The user said yes after all. ${String(out.deny ?? out.result)}`
+        },
+      })
       if (answer.how !== 'yes') return record($, { deny: dropText(ids, answer) }, { kind: 'plan', label, denied: true })
       input = { ...input, approved: ids }
     }
@@ -1171,12 +1185,23 @@ async function redrawMap($: $, input: PlanInput, label: string): Promise<Result>
   const ids = redrawIds(was, input.redraw) as string[]
   const names = ids.map(id => was.parts.find(p => p.id === id)!.name)
   const changes = changesOf(was, map)
-  const answer = await askIn($, redrawAsk(names, changes))
-  const told = redrawText(names, answer, redrawSame(changes))
+  const same = redrawSame(changes)
+  const keep = async (told: string) => {
+    const saved = await saveMap($, map)
+    await lookAll($)
+    return saved ? `${told}\n${saved}` : told
+  }
+  const answer = await askHeld($, redrawAsk(names, changes), {
+    // Saved over a plan or a newer map, a late yes would lose work.
+    still: async () => {
+      const r = await read($, run)
+      return !isUnfinished(r) && !r.draft && JSON.stringify(await mapNow($)) === JSON.stringify(was)
+    },
+    settle: async a => (a.how === 'yes' ? keep(redrawText(names, a, same)) : redrawText(names, a, same)),
+  })
+  const told = redrawText(names, answer, same)
   if (answer.how !== 'yes') return refuse(told)
-  const saved = await saveMap($, map)
-  await lookAll($)
-  return record($, { result: saved ? `${told}\n${saved}` : told }, { kind: 'plan', label, denied: false })
+  return record($, { result: await keep(told) }, { kind: 'plan', label, denied: false })
 }
 
 // What the model reads of the map in a status reply: the outline, or one area, and the notes the drawing checks left.
@@ -2818,6 +2843,33 @@ async function answerNow($: $) {
   if (answer.how === 'none') return
   await change($, x => stopSettled(x, answer, now(), Date.now()))
   tell($, `${TAG} ${stopText(p, answer, true)}`)
+}
+
+// A question that ends Claude's call whatever the answer, as the old state stands. After Esc it stays open for the band's
+// Answer button: still says it can be answered, settle acts on the answer and says what Claude hears.
+// ponytail: held in memory, so a reload or a new session loses the button and Claude has to ask again; keep it in the run if that bites.
+type HeldAsk = { still: () => Promise<boolean>; settle: (a: Answer) => Promise<string> }
+let closedAsk: (HeldAsk & { ask: StopAsk }) | undefined
+async function askHeld($: $, ask: StopAsk, held: HeldAsk): Promise<Answer> {
+  closedAsk = undefined
+  const answer = await askIn($, ask)
+  if (answer.how === 'none') closedAsk = { ...held, ask }
+  void after($)
+  return answer
+}
+async function answerClosed($: $) {
+  const held = closedAsk
+  if (!held || stopOpen !== undefined) return
+  if (!(await held.still())) {
+    closedAsk = undefined
+    void after($)
+    return void $.ui.toast('Sentinel: that question no longer applies. Ask Claude again if you still want it.')
+  }
+  const answer = await askIn($, held.ask)
+  if (answer.how === 'none') return
+  closedAsk = undefined
+  void after($)
+  tell($, `${TAG} ${await held.settle(answer)}`)
 }
 
 // The page's answers: one non-empty string for each question, keyed by its text. Anything else is dropped.

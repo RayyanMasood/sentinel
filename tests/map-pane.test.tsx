@@ -244,7 +244,7 @@ const text = (n: any): string => {
   return text(kids)
 }
 const paneOf = (r: Run, v: View = 'system', look?: MapLook) => text(renderPane(EL, summarize(r, look), v, OFF))
-const bandOf = (r: Run, look?: MapLook) => text(renderBand(EL, summarize(r, look), { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, answer: () => {}, asking: false, saveFlow: () => {}, discardFlow: () => {} }))
+const bandOf = (r: Run, look?: MapLook) => text(renderBand(EL, summarize(r, look), { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, setRow: () => {}, resume: () => {}, answer: () => {}, asking: false, saveFlow: () => {}, discardFlow: () => {} }))
 const rows = (s: string) => s.split('\n')
 const row = (s: string, name: string) => rows(s).find(l => l.includes(name))!
 
