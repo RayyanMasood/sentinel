@@ -75,6 +75,7 @@ const settingsPlan = {
     { id: 'charge', label: 'Charge the card', check: 'npm test -- charge', files: ['src/charge/**'], adds: [{ name: 'dashboard-widths', why: 'it shows the card form' }] },
     { id: 'refund', label: 'Handle refunds', check: 'npm test -- refund', files: ['src/refund/**'], adds: [{ name: 'dashboard-widths', why: 'it shows the card form' }] },
     { id: 'export', label: 'Rewrite saved data', check: 'npm test -- export', files: ['src/export/**'], weight: 'thorough', weightWhy: 'rewrites saved data <i>on disk</i>' },
+    { id: 'asked', label: 'Asked for by name', check: 'npm test -- asked', files: ['src/asked/**'], weight: 'light', weightQuote: 'keep this one light please', weightOk: true },
     { id: 'long-state-name-that-keeps-going-past-the-column-it-sits-in', label: 'A long name', check: 'npm test -- long', files: ['long/**'], weight: 'light', weightWhy: 'a much longer reason than the others, written out in full so the row has to wrap at every width it is shown at' },
   ],
 }
@@ -1416,7 +1417,9 @@ try {
   check(await p.locator('#stub [data-act=lock]').isDisabled(), 'settings: Lock waits for the answers')
   await p.locator('#stub [data-act]').first().waitFor()
   const rows = p.locator('.setl li')
-  check(await rows.count() === 5, 'settings: one row for each reason')
+  check(await rows.count() === 6, 'settings: one row for each reason')
+  const asked = rows.filter({ hasText: 'You asked' })
+  check(await asked.locator('[data-keep]').count() === 0 && await asked.locator('button', { hasText: 'Use Standard' }).count() === 1, 'settings: words you typed can still be taken back')
   check((await rows.nth(0).innerText()).startsWith('This plan'), 'settings: the plan row is first')
   check((await rows.nth(0).locator('.mini').innerText()) === 'fails-first off', 'settings: the plan row says what it turns off')
   check(await rows.nth(1).locator('code').count() === 2, 'settings: same reason, same row')
@@ -1475,6 +1478,24 @@ try {
   p = await open('ownHeld', '#library')
   check(!await p.locator('.irow[data-ins="project/dashboard-widths"] input').isChecked(), 'your own keeps its personal switch under a project weight')
   check((await p.locator('#wLabel').textContent()) === 'This project: Standard', 'your own switch is no change to the weight')
+  await p.context().close()
+
+  // A weight picked on the cards moves your own with a list, as the Library's weights do, unless you switched it.
+  const ownDraft = sw => ({ ...VARIANTS.draft, library: { ...ownWeights(VARIANTS.draft.library), ...sw } })
+  VARIANTS.ownCard = ownDraft({})
+  p = await open('ownCard', '')
+  await p.locator('#slip [data-act=planweight][data-pw=light]').click()
+  await sent('your own list follows the cards', b => b.kind === 'libplan' && b.weight === 'light' && !b.on.includes('dashboard-widths'))
+  await p.context().close()
+  VARIANTS.ownCardOff = { ...VARIANTS.draft, library: ownWeights(VARIANTS.draft.library), draftLibrary: { ...VARIANTS.draft.draftLibrary, on: VARIANTS.draft.draftLibrary.on.filter(n => n !== 'dashboard-widths') } }
+  p = await open('ownCardOff', '')
+  await p.locator('#slip [data-act=planweight][data-pw=standard]').click()
+  await sent('your own list comes on at its weight', b => b.kind === 'libplan' && b.weight === 'standard' && b.on.includes('dashboard-widths'))
+  await p.context().close()
+  VARIANTS.ownCardHeld = ownDraft({ personal: { on: { 'dashboard-widths': true } } })
+  p = await open('ownCardHeld', '')
+  await p.locator('#slip [data-act=planweight][data-pw=light]').click()
+  await sent('your own switch holds on the cards', b => b.kind === 'libplan' && b.weight === 'light' && b.on.includes('dashboard-widths'))
   await p.context().close()
 
   // The editor: a list of weights goes in the file, and none means no list.

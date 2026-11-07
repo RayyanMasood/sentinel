@@ -13,6 +13,8 @@
 //  9. Settings change the user's own switch files, or reach beyond this plan.
 // 10. A revise or a change on the draft forgets an answer, or a setting that is no longer the same keeps its answer.
 // 11. A state added mid-run stops for a looser weight, or settings change a plan that already runs.
+// 12. Any five words the user typed unlock a looser setting, whatever they are about.
+// 13. A setting applied once applies again and undoes the user's pick on the draft.
 import { expect, mock } from 'claude-code/testing'
 import { checkSetting } from '../hooks/quote'
 import { STATE_SETTINGS, act, emptyRun, planSettings, settledStates, startCheck, weightFor } from '../hooks/core'
@@ -110,6 +112,24 @@ test('a quote the user never typed is refused, whatever the plan says', async ($
   const r = await $.tool.call(plan({ weight: 'light', weightQuote: 'some words nobody ever typed here' }))
   expect(said(r)).toMatch(/isn't in what the user typed/)
   expect(eng.files[`${ROOT}/.sentinel/run.json`] ?? '').not.toContain('"copy"')
+})
+
+test('a quote for something looser has to name it, as any five words would otherwise unlock it', async ($: any, on: any) => {
+  const msg = 'Take card payments and handle refunds'
+  expect(checkSetting(msg, 'Take card payments and handle', 'light', false)).toBe('unnamed')
+  expect(checkSetting(msg, msg, 'light', false)).toBe('unnamed')
+  expect(checkSetting(msg, 'Take card payments and handle', 'failure-list', false)).toBe('unnamed')
+  expect(checkSetting('Keep the copy state light', 'Keep the copy state light', 'light', false)).toBe('ok')
+  // Five words about anything still count for what is stricter, which needs no answer.
+  expect(checkSetting(msg, 'Take card payments and handle', 'thorough', true)).toBe('ok')
+  const { typed, signOff } = await session($, on)
+  await typed(msg)
+  await signOff()
+  const r = await $.tool.call(plan({ weight: 'light', weightQuote: 'Take card payments and handle' }))
+  expect(said(r)).toMatch(/doesn't name light/)
+  expect(said(r)).not.toMatch(/Locked/)
+  const set = await $.tool.call(plan({}, { settings: [{ name: 'failure-list', on: false, quote: 'Take card payments and handle' }] }))
+  expect(said(set)).toMatch(/doesn't name failure-list/)
 })
 
 test('a short quote: a name and one more word for what is stricter, five words for what is looser', () => {
@@ -215,6 +235,26 @@ test('a plan\'s settings: stricter applies, looser waits, and the user\'s words 
   // Turned off by hand: Claude's reason can't bring it back, the user's own words can.
   expect(setting([{ name: 'break-it-once', on: true, why: 'x' }])).toMatch(/switched break-it-once off/)
   expect((setting([{ name: 'break-it-once', on: true, quote: 'use break-it-once here' }], ['use break-it-once here']) as any).on).toContain('break-it-once')
+})
+
+test('a setting applies once: another setting doesn\'t bring it back over the user\'s pick', () => {
+  const lib = { weight: 'standard', on: ['failure-list', 'fails-first'], told: [], states: { hand: {}, weights: {}, spare: [] }, settings: [{ weight: 'light', quote: 'please keep this one light' }] } as PlanLibrary
+  const got = planSettings(lib, [{ name: 'sources-first', on: true, why: 'a TRD exists' }], ITEMS, []) as any
+  expect(got.weight).toBe('standard')
+  expect(got.on).toContain('fails-first')
+  expect(got.on).toContain('sources-first')
+  // The same setting sent again changes nothing. A different one does.
+  expect((planSettings(lib, [{ weight: 'light', quote: 'please keep this one light' }], ITEMS, ['please keep this one light']) as any).weight).toBe('standard')
+  expect((planSettings(lib, [{ weight: 'thorough', why: 'money' }], ITEMS, []) as any).weight).toBe('thorough')
+})
+
+test('a stricter weight from Claude leaves what the user flipped on the draft as they left it', () => {
+  // At Standard the user unticked fails-first and ticked sources-first.
+  const lib = { weight: 'standard', on: ['failure-list', 'sources-first'], told: [], states: { hand: {}, weights: {}, spare: [] } } as PlanLibrary
+  const got = planSettings(lib, [{ weight: 'thorough', why: 'money' }], ITEMS, []) as any
+  expect(got.on).toContain('sources-first')
+  expect(got.on).not.toContain('fails-first')
+  expect(got.on).toContain('fails-without-change')
 })
 
 test('settings reach this plan only, and the plan runs by them', async ($: any, on: any) => {

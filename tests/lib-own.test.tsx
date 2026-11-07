@@ -22,6 +22,31 @@ const LATE = { name: 'late', at: 'final', text: 'Late.', kind: 'told', weights: 
 const COPY = { name: 'fails-first', at: 'start', text: 'Copy.', kind: 'checks', weights: ['standard', 'thorough'] as Weight[], trusted: true, scope: 'project' }
 const ITEMS = [...BUILTINS.filter(b => b.name !== 'fails-first').map(b => ({ ...b, scope: 'built-in', trusted: true })), COPY, SEC, OPEN, LATE] as any[]
 
+test('a card untick of your own instruction counts as by hand, so Claude can\'t add it back on a reason', () => {
+  const items = [{ name: 'sec', at: 'start', kind: 'told', text: 's', own: true, trusted: true }, { name: 'nope', at: 'start', kind: 'told', text: 'n', own: true, trusted: false }] as any[]
+  const s = planStates(items, 'standard', [], {})
+  expect(s.hand).toEqual({ sec: false })
+  expect(s.spare).toEqual([])
+  expect(planStates(items, 'standard', ['sec'], {}).hand).toEqual({})
+})
+
+test('a file switch a weight pick on the cards overrides gives way, and one it leaves alone stays', () => {
+  const items = [
+    { name: 'fails-without-change', at: 'close', kind: 'sentinel', weights: ['thorough'], trusted: true },
+    { name: 'failure-list', at: 'start', kind: 'told', text: 'f', weights: ['standard', 'thorough'], trusted: true },
+    { name: 'plan-wide', at: 'draft', kind: 'told', text: 'p', weights: ['standard', 'thorough'], trusted: true },
+  ] as any[]
+  // What a state's weight doesn't move counts as the list has it.
+  expect(planStates(items, 'light', ['plan-wide'], { 'plan-wide': false }).hand).toEqual({ 'plan-wide': true })
+  // On in the Library, then Light on the cards: it follows the weight, so a Thorough state still gets the rerun.
+  expect(planStates(items, 'light', [], { 'fails-without-change': true }).hand).toEqual({})
+  // The cards left it on, so the switch still decides.
+  expect(planStates(items, 'light', ['fails-without-change'], { 'fails-without-change': true }).hand).toEqual({ 'fails-without-change': true })
+  // Off in the Library and off at this weight's list too, or against it: still off by hand.
+  expect(planStates(items, 'standard', [], { 'failure-list': false }).hand).toEqual({ 'failure-list': false })
+  expect(planStates(items, 'light', [], { 'failure-list': false }).hand).toEqual({ 'failure-list': false })
+})
+
 test('an instruction can list its weights', () => {
   const of = (weights: unknown) => instructionOf({ name: 'x', at: 'start', text: 'y', weights })
   expect(of(['thorough', 'light'])).toEqual({ name: 'x', at: 'start', text: 'y', weights: ['thorough', 'light'] })

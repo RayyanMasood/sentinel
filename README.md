@@ -117,7 +117,7 @@ With it on, a plan can differ from its one weight where a state calls for it:
 - **A skip:** Claude can skip a told instruction that makes no sense for a state, with `decide` and a reason, and it shows under Decided without asking you. The ones Sentinel checks still run.
 - **The plan's own settings:** `settings` sets the plan's weight or turns an instruction on or off, each with a reason or your own words.
 
-A stricter setting applies with its reason shown. A looser one waits for you: the draft card lists what differs, one row for each reason, with Keep and Use Standard, or Remove on an addition, and the band above the prompt asks the same. Words you typed count as your answer, once Sentinel has found them in your messages (at least 5 words for anything looser). If you lock with one unanswered, the plan runs without it. A state added mid-run takes the plan's weight unless it names a stricter one.
+A stricter setting applies with its reason shown. A looser one waits for you: the draft card lists what differs, one row for each reason, with Keep and Use Standard, or Remove on an addition, and the band above the prompt asks the same. Words you typed count as your answer, once Sentinel has found them in your messages. For anything looser that takes at least 5 words that name it, and a state's row keeps a button to take it back, since Sentinel compares words and not what they mean. If you lock with one unanswered, the plan runs without it. A state added mid-run takes the plan's weight unless it names a stricter one.
 
 Each state's task page shows its weight and additions. A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
 

@@ -3950,7 +3950,8 @@ test('library: a check that passes without the code change is refused', async ($
   await write(`${ROOT}/tests/old.test.ts`, 'old')
   delete eng.files[`${ROOT}/tests/old.test.ts`]
   const ran = eng.commands.length
-  expect(await advance('verify')).toMatch(/Moved to verify/)
+  expect(await advance('verify')).toMatch(/failed, as it should\.\nMoved to verify/)
+  expect((await savedRun($, eng)).log.map(l => l.text)).toContain('service · check fails without the change')
   const second = gitDid(eng, 'worktree', 'add')
   expect(second).toHaveLength(2)
   expect(eng.commands.slice(ran).filter(c => c.includes('/sentinel-wo-'))).toHaveLength(2)

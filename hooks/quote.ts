@@ -82,14 +82,17 @@ export function checkQuote(doc: string, quote: string): Verdict {
 }
 
 // A quote for one setting. short: what it sets and one more word will do, which suits an instruction turned on or a
-// stricter weight. Anything looser keeps the 5-word rule, as "go light" sits inside "don't go light on this".
-export function checkSetting(doc: string, quote: string, name: string, short: boolean): Verdict {
+// stricter weight. Anything looser keeps the 5-word rule, as "go light" sits inside "don't go light on this", and has to
+// name what it loosens, as any five words the user typed would otherwise unlock it.
+// ponytail: compares words, not meaning, so "don't go light on this" counts; the draft shows it with a button to undo it.
+export function checkSetting(doc: string, quote: string, name: string, short: boolean): Verdict | 'unnamed' {
   const v = checkQuote(doc, quote)
-  if (v !== 'short' || !short) return v
   const words = (t: string) => squash(t).split(/[ -]/).map(bare).filter(Boolean)
   const said = words(quote)
   const want = words(name)
-  return said.length > want.length && said.some((_, k) => want.every((w, j) => said[k + j] === w)) ? 'ok' : 'short'
+  const named = said.some((_, k) => want.every((w, j) => said[k + j] === w))
+  if (v === 'short' && short) return named && said.length > want.length ? 'ok' : 'short'
+  return v === 'ok' && !short && !named ? 'unnamed' : v
 }
 
 export const sectionOf = (doc: string, quote: string): string | undefined => {

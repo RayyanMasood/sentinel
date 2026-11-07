@@ -10,7 +10,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
-  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 
@@ -2631,7 +2631,7 @@ async function fromPage($: $, m: Record<string, unknown>) {
     // The experimental switch isn't one of the draft's choices: it stays as the plan was drafted.
     const picked = [...l.items, ...l.flows].filter(x => x.trusted && x.name !== STATE_SETTINGS && (m.on as unknown[]).includes(x.name)).map(x => x.name)
     const on = r.held?.library?.on.includes(STATE_SETTINGS) ? [...picked, STATE_SETTINGS] : picked
-    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, personal: l.personal, settings: held.library?.settings }) }), '')
+    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, personal: l.personal, settings: cardSettings(held.library?.settings, m.weight as Weight, on) }) }), '')
     return why ? toast(why) : undefined
   }
   // An answer on the draft card's settings. The row comes from the draft as it stands, so a stale page changes nothing.

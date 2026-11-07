@@ -76,7 +76,7 @@ export const BUILTINS: readonly Builtin[] = [
       + 'doesn\'t list them. On a state: weight (light, standard or thorough) with weightWhy, one line on why, or weightQuote, the user\'s words; and '
       + 'adds, a list of { name, why } naming Library instructions that fire per state. On the plan: settings, a list of { weight } or { name, on }, '
       + 'each with why or quote. A quote is compared with what the user typed: for an instruction turned on or a stricter weight, its name and one more '
-      + 'word will do; anything looser needs at least 5 words. A stricter setting applies with its reason shown. A looser one with only a reason waits '
+      + 'word will do; anything looser needs at least 5 words that name it. A stricter setting applies with its reason shown. A looser one with only a reason waits '
       + 'for the user on the draft. Leave alone a state that fits the plan.',
   },
 ]

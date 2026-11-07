@@ -184,9 +184,9 @@ test('what a plan keeps for its states: the hand switches, the five weights, and
   expect(spare).not.toContain('prove-end-to-end')
   expect(spare).not.toContain('fails-first')
   expect(spare).not.toContain('sources-first')
-  // A switch the draft card changed counts as the card has it, and a box it flipped against the weight counts as by hand.
+  // A file's switch the draft card overrode gives way to the weight, and a box it flipped against the weight counts as by hand.
   const card = planStates(ITEMS, 'standard', ['fails-first', 'break-it-once'], { 'fails-first': false })
-  expect(card.hand['fails-first']).toBe(true)
+  expect(card.hand['fails-first']).toBeUndefined()
   expect(card.hand['failure-list']).toBe(false)
   expect(card.hand['break-it-once']).toBeUndefined()
 })

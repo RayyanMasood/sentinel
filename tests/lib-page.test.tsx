@@ -11,6 +11,8 @@
 //  7. A stale page answers for a draft that has since changed.
 //  8. A change on the draft's instructions forgets Claude's settings, or flips the experimental switch.
 //  9. The terminal has no way to answer, so a looser setting can only be left to the lock.
+// 10. A pick on the draft's cards leaves the setting it overrules on the card, or a later answer undoes the pick.
+// 11. Words the user typed can't be taken back on the draft.
 import { expect, mock } from 'claude-code/testing'
 import { STATE_SETTINGS, act, answerSetting, emptyRun, settingRows, summarize, weightFor } from '../hooks/core'
 import type { PlanInput, PlanLibrary, Run } from '../types'
@@ -42,12 +44,13 @@ test('the rows: only what differs, grouped by what it says', () => {
   const rows = settingRows(draftOf({ ...MIXED, library: lib() }).draft!)
   const of = (id: string) => rows.find(r => r.states.includes(id))
   expect(rows).toHaveLength(5)
-  expect(of('copy')).toMatchObject({ kind: 'weight', weight: 'light', why: 'only changes text', states: ['copy', 'docs'], owed: true })
+  expect(of('copy')).toMatchObject({ kind: 'weight', weight: 'light', why: 'only changes text', states: ['copy', 'docs'], owed: true, looser: true })
   expect(of('export')).toMatchObject({ kind: 'weight', weight: 'thorough', why: 'rewrites saved data', states: ['export'], owed: false })
+  expect(of('export')!.looser).toBeUndefined()
   expect(of('charge')).toMatchObject({ kind: 'add', name: 'security-review', why: 'handles money', states: ['charge', 'refund'], owed: false })
   expect(of('other')).toMatchObject({ states: ['other'], owed: true })
   // The user's own words count as their answer, and their row shows them.
-  expect(of('asked')).toMatchObject({ states: ['asked'], quote: 'the words the user typed here', owed: false })
+  expect(of('asked')).toMatchObject({ states: ['asked'], quote: 'the words the user typed here', owed: false, looser: true })
   expect(of('form')).toBeUndefined()
   expect(of('same')).toBeUndefined()
   // A row answered apart from another with the same words stands apart.
@@ -103,6 +106,10 @@ test('an answer on a plan setting leaves the flows on the plan\'s list alone', (
   const out = answerSetting(lib({ on: ['failure-list', 'a-flow'], settings: [{ weight: 'light', why: 'small', held: true }] }), '#weight', true, items)
   expect(out.weight).toBe('light')
   expect(out.on).toEqual(['a-flow'])
+  // An answer settles its own row, and nothing else comes back with it.
+  const other = lib({ on: ['failure-list'], settings: [{ weight: 'light', quote: 'keep this plan nice and light' }, { name: 'break-it-once', on: true, why: 'x', held: true }] })
+  expect(answerSetting(other, 'break-it-once', false, items).weight).toBe('standard')
+  expect(answerSetting(other, 'break-it-once', true, items).weight).toBe('standard')
 })
 
 async function session($: any, on: any) {
@@ -182,6 +189,27 @@ test('an answer on a plan setting changes what the plan runs with', async ($: an
   await until(clock, () => eng.snap().draftKey)
   await answer('plan|failure-list', false)
   expect(drafted().library!.settings).toEqual([{ weight: 'light', why: 'small' }])
+})
+
+test('a pick on the cards takes the setting it overrules with it, and a later answer leaves the pick alone', async ($: any, on: any) => {
+  const { answer, drafted, define, clock, eng } = await session($, on)
+  await $.prompt.submit({ text: 'keep this plan nice and light please', origin: { kind: 'composer' } })
+  await define({ action: 'define', title: 'P', states: [st('a')], settings: [{ weight: 'light', quote: 'keep this plan nice and light' }, { name: 'break-it-once', on: true, why: 'x' }, { name: 'sources-first', on: true, why: 'a TRD' }, { name: 'fast-checks', on: false, why: 'y' }] })
+  await until(clock, () => !!drafted()?.plan && eng.snap().draftKey)
+  expect(drafted().library!.weight).toBe('light')
+  const was = JSON.stringify(drafted())
+  // The user picks Standard on the cards, with sources-first ticked off.
+  const list = drafted().library!.on.filter(n => n !== 'sources-first' && n !== STATE_SETTINGS)
+  eng.page({ kind: 'libplan', draft: eng.snap().draftKey, weight: 'standard', on: [...list, 'failure-list', 'fails-first'] })
+  await until(clock, () => JSON.stringify(drafted()) !== was)
+  expect(drafted().library!.weight).toBe('standard')
+  // Their pick overrules these, so the rows go. What still waits for them stays.
+  expect(drafted().library!.settings!.map(s => s.weight ?? s.name)).toEqual(['break-it-once', 'fast-checks'])
+  await until(clock, () => eng.snap().draftKey)
+  await answer('plan|fast-checks', false)
+  expect(drafted().library!.weight).toBe('standard')
+  expect(drafted().library!.on).toContain('fails-first')
+  expect(drafted().library!.on).not.toContain('sources-first')
 })
 
 test('a stale page changes nothing', async ($: any, on: any) => {

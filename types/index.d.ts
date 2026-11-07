@@ -58,7 +58,7 @@ export type Switches = { weight?: Weight; on?: Record<string, boolean> }
 export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; held?: true }
 // One row of the draft card's settings: what differs from the plan, for the states it covers. owed: it waits for the user.
 // kept: they kept a looser one. id: what an answer names.
-export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true }
+export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true; looser?: true }
 export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[] }
 // The system map, saved in .sentinel/system.json (committed). A part is flat with a parent id, so one part is one line
 // and two people editing different parts merge cleanly.

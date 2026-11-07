@@ -1511,8 +1511,10 @@ export function withWeight(s: Switches, weight: Weight, builtins: readonly strin
 export function planStates(items: readonly (LibItem & InstructionDef & { kind: string })[], weight: Weight, on: readonly string[], hand: Record<string, boolean>): NonNullable<PlanLibrary['states']> {
   const perState = (x: InstructionDef) => x.at === 'start' || x.at === 'close'
   const moved = items.filter(x => x.weights && (WEIGHT_MOVES.includes(x.name) || (x.own && perState(x))))
-  const flipped = moved.filter(x => x.weights!.includes(weight) !== on.includes(x.name)).map(x => [x.name, on.includes(x.name)])
-  const allHand = { ...Object.fromEntries(Object.keys(hand).map(n => [n, on.includes(n)])), ...Object.fromEntries(flipped) } as Record<string, boolean>
+  const flipped = [...moved.filter(x => x.weights!.includes(weight) !== on.includes(x.name)), ...items.filter(x => !x.weights && x.trusted !== false && !on.includes(x.name))].map(x => [x.name, on.includes(x.name)])
+  // A file's switch the list overrides gives way to the weight, as picking a weight in the Library clears it. flipped has it back if the list is against the weight.
+  const stands = Object.keys(hand).filter(n => on.includes(n) === hand[n] || !moved.some(x => x.name === n))
+  const allHand = { ...Object.fromEntries(stands.map(n => [n, on.includes(n)])), ...Object.fromEntries(flipped) } as Record<string, boolean>
   const spare = items.filter(x => x.kind === 'told' && perState(x) && x.trusted !== false && !on.includes(x.name) && allHand[x.name] !== false)
   return { hand: allHand, weights: Object.fromEntries(moved.map(x => [x.name, [...x.weights!]])), spare: spare.map(toldEntry) }
 }
@@ -1555,6 +1557,7 @@ export const SETTINGS_OFF = "The Library's per-state settings are off, so Sentin
 function notTyped(typed: readonly string[], quote: string, name: string, short: boolean): string | undefined {
   const verdicts = typed.map(m => checkSetting(m, quote, name, short))
   if (verdicts.includes('ok')) return undefined
+  if (verdicts.includes('unnamed')) return `"${shown(quote)}" doesn't name ${name}, so it doesn't show the user asked for it. Quote words that name it, or send your own reason instead: it then waits for them.`
   if (verdicts.includes('short')) return `"${shown(quote)}" is too short to count: quote at least ${MIN_WORDS} words${short ? `, or ${name} and one more word` : ''}, or a whole message.`
   return `"${shown(quote)}" isn't in what the user typed, word for word. Copy their words, or send your own reason instead: a stricter setting then applies and a looser one waits for them.`
 }
@@ -1624,6 +1627,7 @@ export function planSettings(lib: PlanLibrary, sent: unknown, items: readonly { 
   if (!Array.isArray(sent)) return '"settings" is a list of { weight } or { name, on }, each with "why" or "quote".'
   const hand = lib.states?.hand ?? {}
   const list = new Map((lib.settings ?? []).map(s => [settingKey(s), s]))
+  const had = new Map(list)
   for (const x of sent as PlanSetting[]) {
     const name = typeof x?.name === 'string' ? x.name.trim() : undefined
     const weight = x?.weight
@@ -1643,19 +1647,22 @@ export function planSettings(lib: PlanLibrary, sent: unknown, items: readonly { 
     const entry: PlanSetting = { ...(name ? { name, on: x.on! } : { weight: weight! }), ...(why ? { why } : {}), ...(quote ? { quote } : {}), ...(held ? { held: true as const } : {}) }
     list.set(settingKey(entry), entry)
   }
-  return applied(lib, [...list.values()], items)
+  const settings = [...list.values()]
+  return applied(lib, settings.filter(s => JSON.stringify(s) !== JSON.stringify(had.get(settingKey(s)))), settings, items)
 }
 
-// The plan's weight and list with these settings in effect, apart from the ones held for the user.
-function applied(lib: PlanLibrary, settings: PlanSetting[], items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[]): { weight: Weight; on: string[]; settings: PlanSetting[] } {
+// The plan's weight and list once these settings take effect, apart from the ones held for the user. settings: the list it keeps.
+// Only what just arrived or was just answered takes effect, so a pick on the draft stays. So does anything the list has
+// against the plan's weight, which the user flipped.
+function applied(lib: PlanLibrary, now: PlanSetting[], settings: PlanSetting[], items: readonly { name: string; weights?: readonly Weight[]; trusted?: boolean }[]): { weight: Weight; on: string[]; settings: PlanSetting[] } {
   const hand = lib.states?.hand ?? {}
-  const live = settings.filter(s => !s.held)
+  const live = now.filter(s => !s.held)
   let { weight } = lib
   const on = new Set(lib.on)
   for (const s of live.filter(x => x.weight)) {
     weight = s.weight!
     for (const it of items) {
-      if (it.weights && it.trusted !== false && !Object.hasOwn(hand, it.name)) void (it.weights.includes(weight) ? on.add(it.name) : on.delete(it.name))
+      if (it.weights && it.trusted !== false && !Object.hasOwn(hand, it.name) && it.weights.includes(lib.weight) === on.has(it.name)) void (it.weights.includes(weight) ? on.add(it.name) : on.delete(it.name))
     }
   }
   for (const s of live.filter(x => x.name)) void (s.on ? on.add(s.name!) : on.delete(s.name!))
@@ -1669,8 +1676,10 @@ export function answerSetting(lib: PlanLibrary, key: string, keep: boolean, item
     const { held: _held, ...rest } = s
     return keep ? [rest] : []
   })
-  return applied(lib, settings, items)
+  return applied(lib, keep ? settings.filter(s => settingKey(s) === key) : [], settings, items)
 }
+// The user's pick on the draft's cards beats a setting it overrules: that one goes, and its row with it. What still waits for them stays.
+export const cardSettings = (settings: PlanSetting[] | undefined, weight: Weight, on: readonly string[]) => settings?.filter(s => s.held || (s.weight ? s.weight === weight : !!s.on === on.includes(s.name!)))
 
 // What differs from the plan, for the draft card and the band: the plan's own settings, then the states grouped by what they say.
 export function settingRows(r: Run): SettingRow[] {
@@ -1690,8 +1699,9 @@ export function settingRows(r: Run): SettingRow[] {
   for (const st of r.plan?.states ?? []) {
     if (st.weight && st.weight !== l.weight) {
       const owed = weightFor(r, st) !== st.weight
-      const kept = !owed && WEIGHT_RANK[st.weight] < WEIGHT_RANK[l.weight] && !st.weightQuote
-      put(`weight|${st.weight}|${st.weightWhy ?? ''}|${st.weightQuote ?? ''}|${owed}|${kept}`, { kind: 'weight', weight: st.weight, ...fields(st.weightWhy, st.weightQuote), owed, ...(kept ? { kept: true as const } : {}) }, st.id)
+      const looser = WEIGHT_RANK[st.weight] < WEIGHT_RANK[l.weight]
+      const kept = !owed && looser && !st.weightQuote
+      put(`weight|${st.weight}|${st.weightWhy ?? ''}|${st.weightQuote ?? ''}|${owed}|${kept}`, { kind: 'weight', weight: st.weight, ...fields(st.weightWhy, st.weightQuote), owed, ...(kept ? { kept: true as const } : {}), ...(looser ? { looser: true as const } : {}) }, st.id)
     }
     for (const a of st.adds ?? []) put(`add|${a.name}|${a.why}`, { kind: 'add', name: a.name, why: a.why, owed: false }, st.id)
   }
@@ -1934,6 +1944,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
       } else r = { ...r, reviewed: { ...r.reviewed, [st.id]: r.step } }
     }
     if (without && 'skipped' in without) r = { ...r, log: [...r.log, { t, icon: '–', tone: 'dim', text: `${st.id} · rerun without the change skipped: ${without.skipped}` }] }
+    if (without && 'pass' in without) r = { ...r, log: [...r.log, { t, icon: '✓', tone: 'ok', text: `${st.id} · check fails without the change` }] }
   } else if (to !== next && !evidence) return refuse(r, `Going back along ${st.id} → ${to} needs a reason in evidence.`)
   // A loop to a state listed further on skips the states between, as the listed order did before needs. It can't
   // skip or land on a state a member is still doing.
@@ -1974,7 +1985,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
     // The reason for a way back was checked above; keep it for the task page of the state returned to.
     ...(back ? { trips: [...(r.trips ?? []), { from: st.id, to, at: now, t, reason: clip(evidence)! }] } : {}),
   }
-  return { run, ok: true, event: to === 'done' ? 'complete' : undefined, text: `${keptNote ? `${keptNote}\n` : ''}Moved to ${to}.\n${here(run)}` }
+  return { run, ok: true, event: to === 'done' ? 'complete' : undefined, text: `${keptNote ? `${keptNote}\n` : ''}${without && 'pass' in without ? 'Sentinel ran the check in a copy without your code changes, and it failed, as it should.\n' : ''}Moved to ${to}.\n${here(run)}` }
 }
 
 // The final sweep found done states whose checks fail now: st is done, and they open again in place of completing.

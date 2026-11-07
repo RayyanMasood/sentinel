@@ -2050,7 +2050,7 @@ function settingsBlock() {
   const btn = (r, label, keep) => `<button type="button" class="btn sm${keep ? ' pri' : ''}" data-act="setrow" data-row="${esc(r.id)}"${keep ? ' data-keep="1"' : ''}>${label}</button>`
   const tag = r => r.kind === 'add' ? `+ ${r.name}` : r.weight ? cap(r.weight) : `${r.name} ${r.on ? 'on' : 'off'}`
   const who = r => r.quote ? `You asked: “${esc(r.quote)}”` : r.kept ? `You kept it. Claude's reason: “${esc(r.why ?? '')}”` : esc(r.why ?? '')
-  const acts = r => r.kind === 'add' ? btn(r, 'Remove') : r.owed ? btn(r, 'Keep', true) + btn(r, r.weight ? `Use ${pw}` : 'Leave it on') : r.kept ? btn(r, `Use ${pw}`) : ''
+  const acts = r => r.kind === 'add' ? btn(r, 'Remove') : r.owed ? btn(r, 'Keep', true) + btn(r, r.weight ? `Use ${pw}` : 'Leave it on') : r.looser ? btn(r, `Use ${pw}`) : ''
   return `<div class="wide"><h3>Settings Claude chose</h3><p class="lead">Plan weight: ${pw}. A state not listed here runs at it.</p><ul class="setl">${rows.map(r => `<li${r.owed ? ' class="open"' : ''}><span class="sts">${r.states.length ? r.states.map(s => code(s)).join(' ') : 'This plan'}</span><span><span class="mini${r.owed ? ' need' : ''}">${esc(tag(r))}</span></span><span class="why">${who(r)}</span><span class="row">${acts(r)}</span></li>`).join('')}</ul></div>`
 }
 
@@ -2154,7 +2154,7 @@ function onAct(e) {
   }
   if (act === 'planweight') {
     const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
-    return planSend(w, pl.on.filter(n => !ins.some(i => weighted(i) && i.name === n)).concat(ins.filter(i => weighted(i) && i.weights.includes(w) && i.trusted !== false).map(i => i.name)))
+    return planSend(w, pl.on.filter(n => !ins.some(i => moves(i) && i.name === n)).concat(ins.filter(i => moves(i) && i.weights.includes(w) && i.trusted !== false).map(i => i.name)))
   }
   if (act === 'setrow') return send({ kind: 'setrow', draft: vm.draftKey, id: b.dataset.row, keep: b.dataset.keep === '1' })
   if (act === 'keepadded' || act === 'dropadded') return send({ kind: act, draft: vm.draftKey, state: b.dataset.st })
@@ -4436,12 +4436,14 @@ const libItems = () => [...(vm.library?.instructions ?? []), ...(vm.flows ?? [])
 const XS = 'state-settings'
 // What a weight sets. Your own items keep their switches, even with a list of weights.
 const weighted = i => i.weights && !i.own && i.name !== XS
+const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
+// What a weight picked on the draft moves: what it sets, and your own with a list unless you switched them, as libraryOn has it.
+const moves = i => weighted(i) || (i.own && i.weights?.length && pick(switches().project, i.name) === undefined && pick(switches().personal, i.name) === undefined)
 const switches = () => ({ project: vm.library?.project ?? {}, personal: vm.library?.personal ?? {} })
 const shownIn = (i, scope) => scope === 'project' || i.scope !== 'project'
 // Which items are on, as libraryOn in hooks/core.ts works it out: for this project, or for your default alone.
 function onMap(scope, sw = switches()) {
   const project = scope === 'project' ? sw.project : {}, personal = sw.personal, weight = project.weight ?? personal.weight ?? 'standard'
-  const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
   const on = {}
   for (const i of libItems()) on[i.name] = i.trusted !== false && (pick(project, i.name) ?? (weighted(i) && project.weight ? undefined : pick(personal, i.name)) ?? (i.weights ? i.weights.includes(weight) : true))
   return { weight, on }
