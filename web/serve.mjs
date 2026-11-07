@@ -15,7 +15,9 @@ let host = ''
 
 const same = (a, b) => typeof a === 'string' && Buffer.byteLength(a) === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 const end = (res, code) => { res.writeHead(code); res.end() }
-const FILES = { '/': [() => PAGE, 'text/html; charset=utf-8'], '/state.js': [() => STATE, 'text/javascript; charset=utf-8'] }
+// The state file's path may name the port, which is known once listening, so each session's page reads its own.
+let state = STATE
+const FILES = { '/': [() => PAGE, 'text/html; charset=utf-8'], '/state.js': [() => state, 'text/javascript; charset=utf-8'] }
 // The page shows text the model wrote, and what it sends becomes a prompt, so only its own inline script may run. The
 // browser hashes the script with its line ends turned to LF, so the hash here does too.
 const csp = html => `default-src 'self'; script-src 'self' ${[...String(html).matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => `'sha256-${createHash('sha256').update(m[1].replace(/\r\n?/g, '\n')).digest('base64')}'`).join(' ')}; ` +
@@ -58,6 +60,7 @@ server.once('listening', () => {
   server.removeAllListeners('error')
   const { port } = server.address()
   host = `127.0.0.1:${port}`
+  state = STATE.replace('{port}', port)
   process.stdout.write(JSON.stringify({ port, token }) + '\n')
 })
 

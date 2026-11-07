@@ -78,7 +78,7 @@ const store = {
   set: (k, v) => { try { localStorage.setItem('sentinel.' + k, v) } catch {} },
 }
 const NEED = ['Needs you', 'need']
-const STATUS = { ask: NEED, wait: NEED, draft: NEED, blocked: NEED, stuck: ['Stuck', 'bad'], done: ['Done', 'fin'], paused: ['Paused', 'calm'] }
+const STATUS = { ask: NEED, wait: NEED, draft: NEED, blocked: NEED, flow: NEED, stuck: ['Stuck', 'bad'], done: ['Done', 'fin'], paused: ['Paused', 'calm'] }
 // Each tab, by its session's port: its button and frame, and what its page last said.
 const tabs = new Map()
 let current = null

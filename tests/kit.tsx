@@ -53,11 +53,12 @@ export function engine(on: any) {
   let root = ROOT
   on('session.root', () => ({ value: root }))
   // What the engine reports of the limits and the session's cost.
-  let usage: object = { rateLimits: [] }
+  // A promise holds the reading back until the test settles it.
+  let usage: object | Promise<object> = { rateLimits: [] }
   let usageFails = false
-  on('session.usage', () => {
+  on('session.usage', async () => {
     if (usageFails) throw new Error('no reading')
-    return { value: { startedAt: 0, context: {}, ...usage } }
+    return { value: { startedAt: 0, context: {}, ...(await usage) } }
   })
   on('session.cwd', () => ({ value: cwd }))
   const key = (path: string) => path.replace(/\\/g, '/')
@@ -193,8 +194,10 @@ export function engine(on: any) {
   const pageLines: string[] = []
   let wake = () => {}
   let helperFails = false
-  on('process.spawn', async function* () {
+  let helperEnv: Record<string, string> | undefined
+  on('process.spawn', async function* (_: unknown, e: any) {
     if (helperFails) throw new Error('node not found')
+    helperEnv = e.env
     yield { stream: 'stdout', text: `{"port":41234,"token":"${TOKEN}"}\n` }
     for (;;) {
       while (pageLines.length) yield { stream: 'stdout', text: pageLines.shift()! }
@@ -254,8 +257,8 @@ export function engine(on: any) {
   })
   return {
     files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory, store,
-    setRoot: (d: string) => (root = d), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
-    setUsage: (u: object) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f),
+    helperEnv: () => helperEnv, setRoot: (d: string) => (root = d), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
+    setUsage: (u: object | Promise<object>) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f),
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
     setDialog: (d?: (e?: any) => Promise<unknown>) => (dialog = d), setWriteFails: (re?: RegExp) => (writeFails = re), setHead: (h?: string) => (head = h),

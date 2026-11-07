@@ -4,8 +4,8 @@
 //
 // Whoever holds a session's token can answer Sentinel's questions, so tokens stay in this process's memory, and its own
 // token goes only to the browser. No file holds them, as Claude can read files.
-// ponytail: Claude could still catch a token by holding this port before the hub starts, or read the address from the
-// browser's history, as it already can today; move to a cookie and a checked hub if that becomes a concern.
+// ponytail: Claude could still catch a token by holding this port before the hub starts, or read the page's address from the
+// browser's history or command line, as it already can today; move to a cookie and a checked hub if that becomes a concern.
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -92,6 +92,7 @@ function hub() {
     if (!ok) return end(res, 400)
     const had = tabs.get(t.port)
     tabs.set(t.port, { port: t.port, token: t.token, name: t.name.trim().slice(0, 80), fails: had ? had.fails : 0 })
+    // ponytail: a second session asking in the seconds before the page connects opens a second page. Both work.
     if (pages.size) {
       focus.id = t.port
       focus.n++
@@ -128,12 +129,14 @@ function hub() {
     req.on('timeout', () => req.destroy())
   })
   const check = async () => {
-    const had = tabs.size
     await Promise.all([...tabs.values()].map(async t => {
       t.fails = (await alive(t)) ? 0 : t.fails + 1
-      if (t.fails >= 2) tabs.delete(t.port)
+      // A session that registered again while this check ran has a new entry, which this result says nothing about.
+      if (t.fails >= 2 && tabs.get(t.port) === t) {
+        tabs.delete(t.port)
+        tell()
+      }
     }))
-    if (tabs.size !== had) tell()
     if (tabs.size) emptySince = Date.now()
     else if (Date.now() - emptySince >= IDLE) process.exit(0)
     setTimeout(check, CHECK)

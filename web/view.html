@@ -1742,7 +1742,7 @@ function render(next) {
     document.body.dataset.state = vm.ask ? 'question' : 'working'
     document.title = (vm.ask ? 'Needs you · ' : '') + 'Sentinel'
     favicon(vm.ask ? 'ask' : '')
-    toBar({ kind: vm.ask ? 'ask' : '', plan: '' })
+    toBar({ kind: vm.ask ? 'ask' : flowNeed() ? 'flow' : '', plan: '' })
     slip()
     notifyNeed()
     $('emptyTitle').textContent = vm.signedOff ? 'Signed off' : 'No plan yet'
@@ -1820,7 +1820,7 @@ function fields(kind) {
   const u = vm.usage
   const toUse = !u ? '' : u.windows.map(w => f(esc(w.name), `${w.percent}%`, [
     w.resetsAt ? `Resets ${hm(Date.parse(w.resetsAt))}` : '',
-    w.was != null ? `Was ${w.was}% when this plan locked` : '',
+    w.was != null ? `Was ${w.was}% when you signed off` : '',
     'Counts every session on your account',
   ].filter(Boolean).join('. '))).join('') + (u.plan ? f('This plan', esc(u.plan), u.plan === 'estimating'
     ? `Cost $${u.usd.toFixed(2)} so far. A share of your week shows once your week has moved a few percent while Sentinel watched.`
@@ -1936,7 +1936,7 @@ function pass() {
   $('pmeta').title = signed + (vm.source ? ` · Plan: ${vm.source}` : '')
   document.title = ({ ask: 'Needs you · ', wait: 'Needs you · ', draft: 'Needs you · ', blocked: 'Needs you · ', stuck: 'Stuck · ', done: 'Done · ' }[kind] ?? '') + vm.title + ' · Sentinel'
   favicon(kind)
-  toBar({ kind, plan: vm.title })
+  toBar({ kind: n?.kind === 'flow' ? 'flow' : kind, plan: vm.title })
   freshness()
 }
 

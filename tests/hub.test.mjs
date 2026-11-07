@@ -249,6 +249,25 @@ test('a live session stays, even before its snapshot exists', async t => {
   assert.equal((await h.tabs(k)).tabs.length, 1)
 })
 
+test('a check under way when a session registers again does not drop its new tab', async t => {
+  const h = await hub(t)
+  const s = await session(t)
+  const k = await h.key(s)
+  // One check refused, the next one held open, and the ones after it answered.
+  let checks = 0, release
+  s.removeAllListeners('request')
+  s.on('request', (_, res) => {
+    const n = ++checks
+    if (n === 2) release = () => { res.writeHead(403); res.end('x') }
+    else { res.writeHead(n === 1 ? 403 : 200); res.end('x') }
+  })
+  await until(() => release, 'a check held open')
+  await h.open({ port: s.address().port, token: TOKEN, name: 'again' })
+  release()
+  await until(() => checks >= 5, 'more checks')
+  assert.deepEqual((await h.tabs(k)).tabs.map(x => x.name), ['again'])
+})
+
 test('each check has its own connection, so none keeps a stopped session answering', async t => {
   const h = await hub(t)
   const s = await session(t)

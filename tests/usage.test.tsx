@@ -11,7 +11,7 @@
 //  7. A small wobble in the reset time stops every measurement from finishing.
 //  8. A low price from sessions running at once wins over the true one, or the list grows without end.
 //  9. A bad value in the store breaks the reading.
-// 10. "What it was when the plan locked" is compared across a new week.
+// 10. "What it was when you signed off" is compared across a new week.
 // 11. A failed usage read stops the token count.
 import { expect, mock } from 'claude-code/testing'
 import { addUsage, emptyRun, summarize } from '../hooks/core'
@@ -196,6 +196,35 @@ function harness($: any, on: any) {
   }
   return { eng, clock, respond, lock }
 }
+
+test('a slow reading and a newer one stay in order, so the slow one is no drop in cost', async ($: any, on: any) => {
+  const { eng, clock, respond, lock } = harness($, on)
+  await lock()
+  await respond(10, [WEEK(50)])
+  await respond(11, [WEEK(50)])
+  const fire = async () => { for await (const _ of $.turn.step({ turnId: 't', index: 0, model: 'opus', effort: 'high', messageCount: 1 })) { /* the chunks */ } }
+  let settle = (_: object) => {}
+  eng.setUsage(new Promise<object>(ok => (settle = ok)))
+  await fire()
+  await clock.advance(1)
+  eng.setUsage({ rateLimits: [WEEK(50)], cost: { usd: 15 } })
+  await fire()
+  await clock.advance(1)
+  settle({ rateLimits: [WEEK(50)], cost: { usd: 13 } })
+  await until(clock, () => eng.snap().usage?.usd >= 5)
+  await clock.advance(5)
+  expect(eng.snap().usage.usd).toBe(5)
+})
+
+test('a plan resumed in a later session does not take on what that session spent before', async ($: any, on: any) => {
+  const { eng, clock, respond } = harness($, on)
+  eng.files[`${ROOT}/.sentinel/run.json`] = JSON.stringify({ ...running('a'), signedOff: true, usage: { usd: 1, last: 3, byState: { a: 1 }, windows: [], began: [] }, savedAt: Date.now() })
+  await respond(12, [WEEK(50)])
+  expect(said(await $.command.run({ command: 'sentinel', args: 'resume' }))).toMatch(/Resumed/)
+  await respond(13, [WEEK(50)])
+  await until(clock, () => eng.snap().usage?.usd >= 2)
+  expect(eng.snap().usage.usd).toBe(2)
+})
 
 test('a model response reads the figures, and the page gets them with the share of the week', async ($: any, on: any) => {
   const { eng, clock, respond, lock } = harness($, on)

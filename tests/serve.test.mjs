@@ -78,6 +78,16 @@ test('the page may run only its own inline script', async () => {
   assert.ok(headers['content-security-policy'].includes(`script-src 'self' 'sha256-${hash}';`))
 })
 
+test('a state path naming the port serves a copy of its own, so two sessions on one project stay apart', async t => {
+  const s = start({ SENTINEL_STATE: join(dir, 'state-{port}.js') })
+  t.after(() => s.child.kill())
+  const { port: at, token: key } = await s.ready
+  writeFileSync(join(dir, `state-${at}.js`), 'mine')
+  const r = await send(`/state.js?k=${key}`, { at })
+  assert.equal(r.status, 200)
+  assert.equal(r.text, 'mine')
+})
+
 test('only the hub may show the page in a frame', async () => {
   assert.ok((await send(`/?k=${token}`)).headers['content-security-policy'].includes('frame-ancestors http://127.0.0.1:40999;') || (await send(`/?k=${token}`)).headers['content-security-policy'].endsWith('frame-ancestors http://127.0.0.1:40999'))
   const s = start({ SENTINEL_HUB_PORT: '40123' })

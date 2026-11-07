@@ -779,6 +779,8 @@ async function resume($: $): Promise<string> {
   // The plan on disk takes over. A draft of this session stays on disk for afterwards.
   if (old) lastDraft = undefined
   const from = old ? ' from an earlier session' : ''
+  // What this session spent before the resume didn't go on this plan.
+  const cost = old ? await $.session.usage().then(u => u.cost?.usd, () => undefined) : undefined
   let r = cur
   await change($, x => {
     // A run left by a session that closed stopped working when it was last saved. The gap since then is not task time.
@@ -787,7 +789,7 @@ async function resume($: $): Promise<string> {
     const kept = old ? Object.keys(rest.running ?? {}).reduce((y, id) => memberOff(y, id, 'its session ended', now(), savedAt ?? Date.now()), rest) : rest
     const b = old && savedAt ? stopClock(kept, savedAt) : kept
     // Files may have changed while Sentinel wasn't watching, so no earlier check run stands in for a new one.
-    r = touched({ ...b, paused: false, auto: 0, log: [...b.log, { t: now(), icon: '▶', tone: 'ok' as const, text: `Resumed${from}` }] })
+    r = touched({ ...b, ...(b.usage && cost !== undefined ? { usage: { ...b.usage, last: cost } } : {}), paused: false, auto: 0, log: [...b.log, { t: now(), icon: '▶', tone: 'ok' as const, text: `Resumed${from}` }] })
     return r
   })
   void $.ui.open({ id: PANE, title: 'Sentinel' })
@@ -2451,13 +2453,16 @@ function attach(ran: Result, note: string | undefined): Result {
 // Never throws: it runs after the response has gone on its way.
 function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: boolean) {
   void change($, r => addSpend(r, u, effort === undefined ? undefined : String(effort), sub, new Date().toISOString()))
-    .then(() => metered($)).then(() => after($)).catch(() => undefined)
+    .then(() => meter($)).then(() => after($)).catch(() => undefined)
 }
 
 // The session's cost and the limits, read after each model response. The reading costs nothing. The price of 1% is learned
 // whether a plan runs or not, and all the user's projects share it, as the limit is the account's.
 const PRICES = 'usage-prices'
 let watching: Watch | undefined
+// One at a time, as a reading applied after a newer one would look like the session's cost dropping.
+let metering: Promise<unknown> = Promise.resolve()
+const meter = ($: $) => (metering = metering.then(() => metered($)).catch(() => undefined))
 async function metered($: $) {
   const u = await $.session.usage()
   if (!u.cost) return
@@ -2516,7 +2521,7 @@ function after($: $): Promise<void> {
       // ponytail: reads the Library's files on every write while the dashboard is up, so edits made outside Sentinel
       // show; watch the folders if that shows.
       if (serving) await libraryView($).catch(() => undefined)
-      await $.fs.write(`${dir}/state.js`, snapshot(r, parallelSeen ?? (await parallelOn($))))
+      await putState($, dir, snapshot(r, parallelSeen ?? (await parallelOn($))))
       if (r.plan) await $.fs.write(`${dir}/run.json`, JSON.stringify({ ...r, sweep: undefined, checking: undefined, savedAt: Date.now() }))
       const keep = kept ? JSON.stringify(kept) : lastDraft && '{}'
       if (keep && keep !== lastDraft) {
@@ -2561,9 +2566,9 @@ async function openBrowser($: $): Promise<string> {
   await libraryView($).catch(() => undefined)
   const dir = `${await $.session.root()}/.sentinel`
   await $.fs.write(`${dir}/.gitignore`, IGNORE)
-  await $.fs.write(`${dir}/state.js`, snapshot(await read($, run), await parallelOn($)))
   // The helper gets 3 s to start, since the wait counts against this hook's own time. Without it the page opens as a file.
   const url = await Promise.race([serve($), $.clock.sleep(3000).then(() => undefined)])
+  await putState($, dir, snapshot(await read($, run), await parallelOn($)))
   const file = `${dir}/view.html`
   if (!url) await $.fs.write(file, String(await $.fs.read(`${$.plugin.root}/web/view.html`)))
   const target = url ?? file
@@ -2596,6 +2601,14 @@ async function toHub($: $, url: string): Promise<boolean> {
 // cookie if the model reading that history becomes a concern.
 let served: Promise<string | undefined> | undefined
 let serving = false
+// What this session's page reads. state.js stays for the page opened as a file, and any session on the project may write it, so a
+// page reading it could show another session's question.
+// ponytail: the first session on a project reuses its port's file, and a second session's stays behind when it ends. Both are small and git ignores them.
+let ownState: string | undefined
+const putState = async ($: $, dir: string, text: string) => {
+  await $.fs.write(`${dir}/state.js`, text)
+  if (ownState) await $.fs.write(ownState, text)
+}
 // The question the page shows (its id comes back with the answer), and the last answer with where it was given.
 type Question = { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] }
 let asking: { id: string; questions: Question[]; t: string; state?: string; by?: 'sentinel' } | undefined
@@ -2632,7 +2645,7 @@ function serve($: $): Promise<string | undefined> {
         const root = await $.session.root()
         const child = $.process.spawn({
           argv: ['node', `${$.plugin.root}/web/serve.mjs`],
-          env: { SENTINEL_PAGE: `${$.plugin.root}/web/view.html`, SENTINEL_STATE: `${root}/.sentinel/state.js`, SENTINEL_PORT: String(41000 + (parseInt(fnv(root), 16) % 1000)) },
+          env: { SENTINEL_PAGE: `${$.plugin.root}/web/view.html`, SENTINEL_STATE: `${root}/.sentinel/state-{port}.js`, SENTINEL_PORT: String(41000 + (parseInt(fnv(root), 16) % 1000)) },
         })
         // The output comes in pieces, and a line may span two.
         let buf = ''
@@ -2644,6 +2657,7 @@ function serve($: $): Promise<string | undefined> {
             buf = buf.slice(i + 1)
             if (typeof m?.port === 'number' && /^[0-9a-f]{32}$/.test(String(m.token))) {
               serving = true
+              ownState = `${root}/.sentinel/state-${m.port}.js`
               void after($)
               ready(`http://127.0.0.1:${m.port}/?k=${m.token}`)
             } else if (m?.kind === 'ask') waiting.get(String(m.id))?.(m.answers)
@@ -2655,6 +2669,7 @@ function serve($: $): Promise<string | undefined> {
       }
       serving = false
       served = undefined
+      ownState = undefined
       ready(undefined)
     })())
   }))

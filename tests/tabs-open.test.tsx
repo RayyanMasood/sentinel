@@ -5,8 +5,9 @@
 //  2. The hub is asked and a browser tab opens as well, or the hub gets the wrong port, token or name.
 //  3. The hub can't start and nothing opens at all.
 //  4. The session's helper can't start and the hub is handed nothing.
+//  5. Two sessions on one project share what their pages read, so one tab shows the other's question.
 import { expect, mock } from 'claude-code/testing'
-import { engine, openPage, test, TOKEN } from './kit'
+import { engine, openPage, test, TOKEN, until } from './kit'
 
 const SESSION = `http://127.0.0.1:41234/?k=${TOKEN}`
 const hubRuns = (eng: any) => eng.runs.filter((r: any) => /web\/hub\.mjs$/.test(r.argv[1] ?? ''))
@@ -49,6 +50,19 @@ test('opening again from the same session asks the hub again, with the helper it
   await openPage($, clock)
   expect(hubRuns(eng).map((r: any) => r.env.SENTINEL_TAB_TOKEN)).toEqual([TOKEN, TOKEN])
   expect(openers(eng)).toEqual([])
+})
+
+test("each session keeps its own copy of what its page reads, and the file view's stays", async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const eng = engine(on)
+  await openPage($, clock)
+  expect(eng.helperEnv()!.SENTINEL_STATE).toBe('D:/proj/.sentinel/state-{port}.js')
+  const own = 'D:/proj/.sentinel/state-41234.js', shared = 'D:/proj/.sentinel/state.js'
+  await until(clock, () => eng.files[own])
+  expect(eng.files[own]).toBe(eng.files[shared])
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await until(clock, () => eng.files[own] !== undefined && eng.files[own]!.includes('"signedOff":true'))
+  expect(eng.files[own]).toBe(eng.files[shared])
 })
 
 test('if the hub fails, the session opens its own page as it did before', async ($: any, on: any) => {
