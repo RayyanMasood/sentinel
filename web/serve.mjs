@@ -6,6 +6,8 @@ import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 
 const { SENTINEL_PAGE: PAGE, SENTINEL_STATE: STATE, SENTINEL_PORT: PORT } = process.env
+// The hub shows this page in a frame, in its tab bar. Nothing else may.
+const HUB = Number(process.env.SENTINEL_HUB_PORT) || 40999
 const token = randomBytes(16).toString('hex')
 const MAX = 64 * 1024
 // Set once listening. A request naming any other host (a DNS rebinding page) is refused.
@@ -17,7 +19,7 @@ const FILES = { '/': [() => PAGE, 'text/html; charset=utf-8'], '/state.js': [() 
 // The page shows text the model wrote, and what it sends becomes a prompt, so only its own inline script may run. The
 // browser hashes the script with its line ends turned to LF, so the hash here does too.
 const csp = html => `default-src 'self'; script-src 'self' ${[...String(html).matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => `'sha256-${createHash('sha256').update(m[1].replace(/\r\n?/g, '\n')).digest('base64')}'`).join(' ')}; ` +
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:" + HUB
 
 const server = createServer((req, res) => void handle(req, res).catch(() => (res.headersSent ? res.destroy() : end(res, 400))))
 

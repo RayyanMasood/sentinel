@@ -1629,6 +1629,11 @@ const store = {
   set: (k, v) => { try { localStorage.setItem('sentinel.' + k, v) } catch {} },
 }
 
+// In the project tabs the bar holds the bell, the notifications and the theme, and shows this page's status on its tab. Only the
+// hub may hold this page in a frame (serve.mjs says so), so what goes to the parent goes there.
+const framed = parent !== window
+const toBar = m => { if (framed) parent.postMessage(m, '*') }
+
 // Dark or light follows the system until the button picks one; the pick is remembered on this computer.
 const root = document.documentElement, sysDark = matchMedia('(prefers-color-scheme: dark)')
 if (store.get('theme')) root.dataset.theme = store.get('theme')
@@ -1638,14 +1643,19 @@ const modeLabel = () => {
   $('themeBtn').innerHTML = `<svg class="ic" aria-hidden="true"><use href="#i-${isDark() ? 'sun' : 'moon'}"/></svg>`
   $('themeBtn').title = $('themeBtn').ariaLabel = isDark() ? 'Light theme' : 'Dark theme'
 }
-$('themeBtn').onclick = () => { root.dataset.theme = isDark() ? 'light' : 'dark'; store.set('theme', root.dataset.theme); modeLabel() }
+$('themeBtn').onclick = () => { root.dataset.theme = isDark() ? 'light' : 'dark'; store.set('theme', root.dataset.theme); modeLabel(); toBar({ theme: root.dataset.theme }) }
 sysDark.onchange = () => { if (!store.get('theme')) delete root.dataset.theme; modeLabel() }
 modeLabel()
+if (framed) addEventListener('message', e => {
+  if (e.source !== parent || !['light', 'dark'].includes(e.data?.theme)) return
+  root.dataset.theme = e.data.theme
+  modeLabel()
+})
 
 // The bell asks once for desktop notifications. It shows only while the browser has not been asked.
 function bell() {
   const b = $('bellBtn'), can = 'Notification' in window
-  b.hidden = !can || !online()
+  b.hidden = framed || !can || !online()
   if (b.hidden) return
   const p = Notification.permission
   b.setAttribute('aria-pressed', p === 'granted')
@@ -1732,6 +1742,7 @@ function render(next) {
     document.body.dataset.state = vm.ask ? 'question' : 'working'
     document.title = (vm.ask ? 'Needs you · ' : '') + 'Sentinel'
     favicon(vm.ask ? 'ask' : '')
+    toBar({ kind: vm.ask ? 'ask' : '', plan: '' })
     slip()
     notifyNeed()
     $('emptyTitle').textContent = vm.signedOff ? 'Signed off' : 'No plan yet'
@@ -1806,19 +1817,27 @@ function fields(kind) {
   const f = (k, v, t = '') => `<div class="fd"${t ? ` title="${esc(t)}"` : ''}><span class="label">${k}</span><b>${v}</b></div>`
   const S = vm.spend || [], tk = tokenSplit(S), ts = tasks()
   const toks = S.length ? f('Tokens', num(tk.cached + tk.uncached + tk.out), `${num(tk.cached)} cached in · ${num(tk.uncached)} uncached in · ${num(tk.out)} out, since the sign-off`) : ''
+  const u = vm.usage
+  const toUse = !u ? '' : u.windows.map(w => f(esc(w.name), `${w.percent}%`, [
+    w.resetsAt ? `Resets ${hm(Date.parse(w.resetsAt))}` : '',
+    w.was != null ? `Was ${w.was}% when this plan locked` : '',
+    'Counts every session on your account',
+  ].filter(Boolean).join('. '))).join('') + (u.plan ? f('This plan', esc(u.plan), u.plan === 'estimating'
+    ? `Cost $${u.usd.toFixed(2)} so far. A share of your week shows once your week has moved a few percent while Sentinel watched.`
+    : `Cost $${u.usd.toFixed(2)} so far. An estimate, from this plan's cost and what 1% of your week has cost you.`) : '')
   if (kind === 'draft') {
     const fl = [...new Set(ts.filter(s => s.flow).map(s => s.flow.as))]
     return f('States', ts.length) + (fl.length ? f('Flows', esc(and(fl))) : '')
       + f('Checks', new Set(ts.filter(s => s.check).map(s => s.check)).size) + f('Files it may edit', new Set(ts.flatMap(s => s.files || [])).size)
   }
-  if (kind === 'done') return (vm.startedAt && vm.endedAt ? f('Took', fmtDur(tookMs())) : '') + (par() ? '' : f('Tool calls', vm.step)) + f('Refused edits', vm.counts?.refused ?? 0) + toks
+  if (kind === 'done') return (vm.startedAt && vm.endedAt ? f('Took', fmtDur(tookMs())) : '') + (par() ? '' : f('Tool calls', vm.step)) + f('Refused edits', vm.counts?.refused ?? 0) + toks + toUse
   const h = vm.health, a = vm.active
   return (a ? f(kind === 'paused' ? 'Paused at' : 'Now at', code(a.id)) : '')
     + (vm.startedAt ? f('Elapsed', par() ? `<span data-wall>${fmtDur(wallMs())}</span>` : `<span data-run>${fmtDur(runMs())}</span>`) : '')
     + (vm.startedAt && par() ? f('Agent work', `<span data-run>${fmtDur(runMs())}</span>`, 'Time summed across the main conversation and member agents') : '')
     + (par() ? '' : f('Tool calls', vm.step))
     + (h ? `<div class="fd" title="${esc(healthSay(h))}"><button type="button" class="label lk" data-act="health">Health</button><b>${meter(h.H)}${h.H.toFixed(2)} ${cap(hWord(h.H))}</b></div>` : '')
-    + toks
+    + toks + toUse
 }
 
 // The stub: what the run needs from you and the buttons that answer it, or the answer you sent.
@@ -1915,8 +1934,9 @@ function pass() {
   const [file, ...rest] = short(vm.source || '').split(' ')
   put($('pmeta'), signed + (file ? ` · Plan: ${code(file)}${rest.length ? ' ' + esc(rest.join(' ')) : ''}` : ''))
   $('pmeta').title = signed + (vm.source ? ` · Plan: ${vm.source}` : '')
-  document.title = ({ ask: 'Needs you · ', wait: 'Needs you · ', draft: 'Needs you · ', stuck: 'Stuck · ', done: 'Done · ' }[kind] ?? '') + vm.title + ' · Sentinel'
+  document.title = ({ ask: 'Needs you · ', wait: 'Needs you · ', draft: 'Needs you · ', blocked: 'Needs you · ', stuck: 'Stuck · ', done: 'Done · ' }[kind] ?? '') + vm.title + ' · Sentinel'
   favicon(kind)
+  toBar({ kind, plan: vm.title })
   freshness()
 }
 
@@ -2197,9 +2217,11 @@ function notifyNeed() {
   const n = online() ? need() : null
   if (!n || n.key === told) { if (!n) told = ''; return }
   told = n.key
-  if (!document.hidden || n.kind === 'paused' || !('Notification' in window) || Notification.permission !== 'granted') return
+  if (n.kind === 'paused' || (!framed && (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted'))) return
   const body = { ask: () => vm.ask.questions[0].question, wait: () => vm.waiting.kind === 'before' ? `${vm.active.id} asks for your OK before it starts.` : `${vm.active.id} is ready for your review.`, blocked: () => `${vm.active.id} needs you: ${vm.blocked.what}`, stuck: () => `Claude is ${PATTERN[vm.trap.pattern]} on ${vm.active.id}.`, draft: () => 'The draft is ready for your check.', flow: () => `Claude drafted the ${isIns(vm.flowDraft) ? 'instruction' : 'flow'} ${vm.flowDraft.name}.` }[n.kind]()
-  const note = new Notification((vm.trap && n.kind === 'stuck' ? 'Stuck · ' : 'Needs you · ') + (vm.title || 'Sentinel'), { body, tag: 'sentinel' })
+  const title = (vm.trap && n.kind === 'stuck' ? 'Stuck · ' : 'Needs you · ') + (vm.title || 'Sentinel')
+  if (framed) return toBar({ note: { title, body } })
+  const note = new Notification(title, { body, tag: 'sentinel' })
   note.onclick = () => { focus(); note.close() }
 }
 
@@ -3455,8 +3477,10 @@ function taskPage(s, i, T) {
   }[k]
   const f = (lab, v, sub = '') => `<div class="fd"><span class="label">${lab}</span>${v}${sub}</div>`
   const by = s.spans?.length && T.some(x => x.spans?.some(p => p.by)) ? cap(s.spans.map(p => p.by ? 'a member agent' : 'the main conversation').filter((w, j, a) => w !== a[j - 1]).join(', then ')) : ''
+  const week = vm.usage?.steps?.[s.id]
   const stats = f('Status', `<b><span class="box ${s.skipped ? 'ahead' : k}"></span>${word}</b>`)
     + (by ? f('Runs in', `<b>${by}</b>`) : '')
+    + (week ? f('Used', `<b>${esc(cap(week))}${week === 'estimating' ? '' : ' of your week'}</b>`) : '')
     + (ms != null ? f('Took', `<b data-took="${esc(s.id)}">${fmtDur(ms)}</b>`, `<small data-share="${esc(s.id)}">${shareOf(ms, run)}</small>`)
       + f(open ? 'Started' : 'Started to finished', `<b>${hm(s.from)}${open ? '' : ' to ' + hm(s.to)}</b>`,
         `<small>${cap([s.visits > 1 ? `entered ${s.visits} times` : '', s.since ? 'still running' : '', held ? 'paused' : ''].filter(Boolean).join(', '))}</small>`) : '')

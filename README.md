@@ -227,8 +227,13 @@ The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off a
 
 `/sentinel browser` starts a small helper, `web/serve.mjs`, that serves the page on 127.0.0.1 and passes your answers back to the session. It needs Node.js on PATH; without it, the page opens as the file `.sentinel/view.html`, which shows the same view and takes no answers. The helper answers only requests that carry the random token in the page's address, and ends with the session.
 
+Each session you open this way gets a tab on one page, named after its folder, so all your projects share one browser tab. If the page is open it moves to that session's tab, and if not, Sentinel opens it. A tab shows when its project needs you, and the page's title says so too. There is one bell, on the bar, and its notification comes when a project needs you while you are on another tab or the page is in the background. A tab goes when its session ends.
+
+That page comes from a small background process, `web/hub.mjs`, on port 40999. It holds each session's token in memory, outlives the session that started it, and exits an hour after the last session ends. The page then says the sessions have ended, and the next `/sentinel browser` opens a new one. If the hub can't start, say because something else holds that port, the session opens its own page.
+
 - **The header** says what the run is doing and how many states are done, in a colour you can read from across the room, such as red while stuck and green when done.
 - **What needs you** sits under it whenever something waits on you, and answers it from the page: a question's options as cards, Approve and Ask for changes for a state, a hint and Pause for a stuck run, Resume, or Lock for a draft. The first answer counts, from the page or the chat. The tab's title and icon change while something waits, and notifications can tell you when the tab is in the background.
+- **Usage** sits beside Tokens: `Week 52%` and `This plan about 1.4%`, with `5 hours` too when Claude Code reports it. Hover for when each resets, what it was when the plan locked, and the plan's cost in dollars. Each state's page says `About 0.6% of your week`. The Map view in the terminal and the finished plan's summary show the same, under the tokens. Off a subscription, as with an API key, none of this shows.
 - **Plan** draws the machine three ways: a Map that wraps and folds groups to fit, One line, and a List you can copy from, where flows are added.
 - **Task pages** open from any state. Asked for comes first: the state's quotes in full and where they came from, or Claude's reason if it added the state. Then why it is needed, the approach, what was done, where it stands and what happened along the way, including any quote Sentinel refused. Claude writes that text in plain words with each state (`title`, `problem`, `approach`, and an `outcome` when it moves on); it is never sent back to Claude.
 - **The source page** shows Sentinel's saved copy with each quote marked and the state that quotes it beside it, a note on each section nothing quotes, the messages a quote uses, and what Claude added. Task pages and the draft card link to it.
@@ -261,6 +266,9 @@ States that run side by side each pass their own check, but nothing tests them t
 
 ## Limits
 
+- The weekly figure is Claude Code's own and counts every session on your account. A plan's share of it is an estimate: Sentinel notes what each 3 points of your week cost this session, keeps the highest of the last 20, and divides the plan's cost by that. Other sessions running at once only pull that price down, which is why it keeps the highest. Until it has one, the plan says `estimating`.
+- A member agent's cost counts for the state active in the main conversation, so with parallel states on, the shares per state are rough.
+- A page can't reliably bring itself to the front, so with the page open Sentinel moves it to the right tab, and you may have to click over to the browser.
 - The scope guard covers Edit, Write and NotebookEdit. A shell command that writes files (`cp`, `sed -i`, `>`) gets past it.
 - Failure signatures come from the check's output with times, addresses and line numbers stripped. A check whose output changes on every run will look like progress.
 - Subagent edits pass the scope guard; their other calls stay out of the health window, and auto-continue acts on the main conversation only.
@@ -284,17 +292,19 @@ States that run side by side each pass their own check, but nothing tests them t
 ```
 claude plugin validate .
 claude plugin test .
-node --test tests/serve.test.mjs
+node --test tests/serve.test.mjs tests/hub.test.mjs
 ```
 
 ```
 .claude-plugin/plugin.json    manifest
 hooks/register.tsx            hooks: tool gate, commands, pane, auto-continue, dashboard snapshot
 hooks/core.ts                 state machine, detector, view model (no engine calls)
+hooks/usage.ts                the usage figures: what 1% of the week costs, and a plan's share
 hooks/views.tsx               the band and the pane's views
 types/index.d.ts              state contract
 web/view.html                 the dashboard
 web/serve.mjs                 the dashboard's helper
+web/hub.mjs, web/hub.html     the one page with a tab per session
 tests/                        plugin and helper tests
 docs/media/src/               the clips in this README
 ```

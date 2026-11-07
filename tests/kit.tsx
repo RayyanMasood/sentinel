@@ -50,7 +50,15 @@ export function engine(on: any) {
   let tasks = 0
   let cwd = ROOT
   let quoting = false
-  on('session.root', () => ({ value: ROOT }))
+  let root = ROOT
+  on('session.root', () => ({ value: root }))
+  // What the engine reports of the limits and the session's cost.
+  let usage: object = { rateLimits: [] }
+  let usageFails = false
+  on('session.usage', () => {
+    if (usageFails) throw new Error('no reading')
+    return { value: { startedAt: 0, context: {}, ...usage } }
+  })
   on('session.cwd', () => ({ value: cwd }))
   const key = (path: string) => path.replace(/\\/g, '/')
   on('fs.read', (_: unknown, e: any) => {
@@ -76,7 +84,10 @@ export function engine(on: any) {
     return { value: names.map(name => ({ name, kind: Object.hasOwn(files, dir + name) ? 'file' : 'dir', size: 0, mtimeMs: 0, isLink: false })) }
   })
   on('env.get', (_: unknown, e: any) => ({ value: e.name === 'HOME' ? HOME : undefined }))
-  mock.store(on)
+  // The plugin's store, which a test can read and fill.
+  const store: Record<string, unknown> = {}
+  on('store.get', (_: unknown, e: any) => ({ value: store[e.key] }))
+  on('store.set', (_: unknown, e: any) => ((store[e.key] = e.value), { value: undefined }))
   // What the plugin holds in memory, as it last wrote it. A test reads it here, since $.state is the plugin's own.
   const memory: { run?: Run; said?: { messages: { text: string; at: string }[]; wrote: string[] } } = {}
   on('state.set', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => {
@@ -181,7 +192,9 @@ export function engine(on: any) {
   // The dashboard's helper: its ready line, then what the test sends from the page, each line in two pieces.
   const pageLines: string[] = []
   let wake = () => {}
+  let helperFails = false
   on('process.spawn', async function* () {
+    if (helperFails) throw new Error('node not found')
     yield { stream: 'stdout', text: `{"port":41234,"token":"${TOKEN}"}\n` }
     for (;;) {
       while (pageLines.length) yield { stream: 'stdout', text: pageLines.shift()! }
@@ -198,6 +211,8 @@ export function engine(on: any) {
   let patch = ''
   // What the member changed in all, by name.
   let names = ''
+  // How the hub's open command ends. Undefined: it can't run at all.
+  let hubExit: number | undefined = 0
   on('process.run', async (_: unknown, e: any) => {
     // Sentinel waits on a check by running sleep. It answers at once here, so Sentinel waits on its clock instead.
     if (e.argv[0] === 'sleep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
@@ -205,6 +220,10 @@ export function engine(on: any) {
     // Node deleting a flow file.
     if (e.argv[0] === 'node' && /rmSync/.test(e.argv[2])) delete files[key(e.argv[3])]
     runs.push({ argv: [...e.argv], cwd: e.init?.cwd, env: e.init?.env, stdin: e.init?.stdin })
+    if (/\/hub\.mjs$/.test(e.argv[1] ?? '')) {
+      if (hubExit === undefined) throw new Error('node not found')
+      return { value: { exitCode: hubExit, stdout: '', stderr: '' } }
+    }
     // The commit the project is at, or no git repo when it is unset.
     if (e.argv[0] === 'git' && e.argv.includes('rev-parse')) return { value: head === undefined ? { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' } : { exitCode: 0, stdout: `${head}\n`, stderr: '' } }
     // What changed since a commit, as git diff --name-status -M gives it. A commit not in setHistory is one git does not know.
@@ -234,7 +253,9 @@ export function engine(on: any) {
     return { model: 'm' }
   })
   return {
-    files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory,
+    files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory, store,
+    setRoot: (d: string) => (root = d), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
+    setUsage: (u: object) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f),
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
     setDialog: (d?: (e?: any) => Promise<unknown>) => (dialog = d), setWriteFails: (re?: RegExp) => (writeFails = re), setHead: (h?: string) => (head = h),

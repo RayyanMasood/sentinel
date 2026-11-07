@@ -1777,10 +1777,10 @@ test('a question shows on the dashboard too, and the first answer counts', async
   const clock = mock.clock(on)
   const eng = engine(on)
   const opened = await openPage($, clock)
-  // The model reads the command's reply, so the token stays out of it. The opener gets the address as it is.
+  // The model reads the command's reply, so the token stays out of it. The hub gets the session's token.
   expect(opened).toMatch(/Opened the dashboard/)
   expect(opened).not.toContain(TOKEN)
-  expect(eng.runs.at(-1)!.argv.at(-1)).toBe(`http://127.0.0.1:41234/?k=${TOKEN}`)
+  expect(eng.runs.at(-1)!.env?.SENTINEL_TAB_TOKEN).toBe(TOKEN)
 
   const q = 'Half-even or half-up?'
   const questions = [{ question: q, header: 'Rounding', multiSelect: false, options: [{ label: 'Half-even (Recommended)', description: 'Banker' }, { label: 'Half-up' }] }]

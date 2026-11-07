@@ -238,6 +238,22 @@ export type LogLine = { t: string; icon: string; tone: Tone; text: string }
 
 // Tokens the models used, one row per model, effort and loop (the main conversation, or its subagents).
 // input is uncached input; cacheRead and cacheWrite are input served from and written to the prompt cache.
+// A limit as Claude Code reports it: how much of it the whole account has used.
+export type UsageWindow = { kind: string; percentUsed: number; resetsAt?: string }
+// What this plan used, in the session's dollars. last: the session's cost at the last reading. began: each limit when counting began.
+export type Usage = { usd: number; last: number; byState: Record<string, number>; windows: UsageWindow[]; began: UsageWindow[]; perPoint?: number }
+export type UsageView = {
+  windows: { name: string; percent: number; resetsAt?: string; was?: number }[]
+  usd: number
+  // The share of the week, as words: about 1.4%. Left out with no weekly figure.
+  plan?: string
+  steps: Record<string, string>
+}
+// One measurement of what 1% of the week costs: usd spent while the figure moved points.
+export type Price = { usd: number; points: number; at: string }
+// The last reading of the weekly figure and the session's cost, and where the running measurement started.
+export type Watch = { pct: number; usd: number; resetsAt?: string; from?: { pct: number; usd: number } }
+
 export type Spend = { model: string; effort?: string; sub: boolean; requests: number; input: number; output: number; cacheRead: number; cacheWrite: number }
 
 // One helper agent's lane. Its calls stay out of `calls` and the health window. state: the state that was active at
@@ -403,6 +419,8 @@ export type Run = {
   // Tokens from the sign-off until the plan is complete, paused or not; spendFrom is when counting began (ISO).
   spend?: Spend[]
   spendFrom?: string
+  // What the plan used of the user's limits, counted over the same span.
+  usage?: Usage
   // The helper agents that called tools while the plan ran, one lane each.
   lanes?: Lane[]
   draft?: Run

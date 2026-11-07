@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { PlanSetting, Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight } from '../types'
+import type { PlanSetting, Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight, Watch } from '../types'
 import { areaOf, changesOf, driftOf, dropParts, envLeads, fingerprint, formatSystem, mergeDrawing, outlineOf, parseMarks, parsePlans, parseSystem, partsInside, unmappedFolders, verifyEvidence, withBase, withDrawn, withoutFine, withPlan, withProof, type Git } from './system'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
+import { WEEKLY, keptPrices, parsePrices, perPoint, watch } from './usage'
 import {
-  AUTO_CAP, RETRIES, VIEWS, blockedOn, act, addSpend, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, forwardState, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
+  AUTO_CAP, RETRIES, VIEWS, blockedOn, act, addSpend, addUsage, autoContinue, besideNote, briefRefusal, emptyRun, failSig, fnv, forwardCheck, forwardState, freshCount, healthWord, heard, isLive, isUnfinished, laneCall, handsFree, capOf, HANDS_FREE, laneDone, lockDraft, memberByAgent, memberByFile, memberFail, memberIn,
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, lineNote, PARALLEL_DRAFT, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, lastLines, withTail, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
@@ -2450,7 +2451,26 @@ function attach(ran: Result, note: string | undefined): Result {
 // Never throws: it runs after the response has gone on its way.
 function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: boolean) {
   void change($, r => addSpend(r, u, effort === undefined ? undefined : String(effort), sub, new Date().toISOString()))
-    .then(() => after($)).catch(() => undefined)
+    .then(() => metered($)).then(() => after($)).catch(() => undefined)
+}
+
+// The session's cost and the limits, read after each model response. The reading costs nothing. The price of 1% is learned
+// whether a plan runs or not, and all the user's projects share it, as the limit is the account's.
+const PRICES = 'usage-prices'
+let watching: Watch | undefined
+async function metered($: $) {
+  const u = await $.session.usage()
+  if (!u.cost) return
+  const usd = u.cost.usd
+  const at = new Date().toISOString()
+  let prices = parsePrices(await $.store.get(PRICES).catch(() => undefined))
+  const week = u.rateLimits.find(w => w.kind === WEEKLY)
+  if (week) {
+    const seen = watch(watching, week.percentUsed, usd, week.resetsAt, at)
+    watching = seen.watch
+    if (seen.price) await $.store.set(PRICES, (prices = keptPrices(prices, seen.price)))
+  }
+  await change($, r => addUsage(r, usd, u.rateLimits, perPoint(prices)))
 }
 
 // .sentinel/ holds Sentinel's run files, kept out of git, and the project's Library (flows, instructions and switches),
@@ -2548,12 +2568,23 @@ async function openBrowser($: $): Promise<string> {
   if (!url) await $.fs.write(file, String(await $.fs.read(`${$.plugin.root}/web/view.html`)))
   const target = url ?? file
   const openers = [['cmd', '/c', 'start', '', url ?? file.replace(/\//g, '\\')], ['open', target], ['xdg-open', target]]
-  for (const argv of openers) {
-    const ok = await $.process.run(argv, { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
-    if (ok) break
+  if (!url || !(await toHub($, url))) {
+    for (const argv of openers) {
+      const ok = await $.process.run(argv, { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
+      if (ok) break
+    }
   }
   // The address carries the session's token, and the model reads this reply, so it names no address.
   return url ? 'Opened the dashboard in your browser. You can answer Sentinel there as well.' : `Opened ${file}. Answering from the browser needs Node.js on PATH.`
+}
+
+// Hands this session to the hub (web/hub.mjs), which keeps one page with a tab per session. False if it can't, and then the
+// session opens its own page. The token goes in the environment, as the model can list command lines.
+async function toHub($: $, url: string): Promise<boolean> {
+  const [, port = '', token = ''] = /:(\d+)\/\?k=(\w+)$/.exec(url) ?? []
+  const name = (await $.session.root()).split(/[\\/]/).filter(Boolean).at(-1) ?? 'project'
+  const env = { SENTINEL_TAB_PORT: port, SENTINEL_TAB_TOKEN: token, SENTINEL_TAB_NAME: name }
+  return $.process.run(['node', `${$.plugin.root}/web/hub.mjs`, 'open'], { env, timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
 }
 
 // ---- answers from the dashboard ----

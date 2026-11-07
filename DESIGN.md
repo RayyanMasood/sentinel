@@ -359,7 +359,7 @@ The pass is the one cut shape: a dashed tear line between the left part and the 
 ## Components
 
 ### Pass and stub
-The top of the Run page. The left part holds the status word in the run's text colour, the sentence, the count at the right, a row of figures (Now at, Elapsed, Tool calls, Health, Tokens) over a hairline, and the trail. The stub takes the need's colour: sunk grey while working, amber for a question, review or draft, red when stuck, grey fill when paused, green when done. Its kicker names the need, its title says what, and its buttons sit at the bottom: a wash of the stub's ink, and the main button filled with it. A fine line under them says what else works ("Or reply in the chat") or what was sent and when. When the session is lost the buttons go and the fine line says how to reopen the dashboard.
+The top of the Run page. The left part holds the status word in the run's text colour, the sentence, the count at the right, a row of figures (Now at, Elapsed, Tool calls, Health, Tokens, then Week and This plan when Claude Code reports them) over a hairline, and the trail. The stub takes the need's colour: sunk grey while working, amber for a question, review or draft, red when stuck, grey fill when paused, green when done. Its kicker names the need, its title says what, and its buttons sit at the bottom: a wash of the stub's ink, and the main button filled with it. A fine line under them says what else works ("Or reply in the chat") or what was sent and when. When the session is lost the buttons go and the fine line says how to reopen the dashboard.
 
 ### Slip
 The detail behind the stub, shown under the pass only while something needs you: a panel outlined in the run's colour at 45%, with a header band that fades out from that colour. Its body is two columns: the question's options, Claude's proposal or outcome, the stuck run's failing output, or what locking a draft does, beside the answer box or the reasons. Options sit in until picked; Claude's recommended option carries a "Claude's pick" tag. Several questions get tabs, each ticked once answered.
@@ -369,6 +369,9 @@ Four nodes, each joined to the centre by a curve and to the next node by an arc 
 
 ### Shell and tabs
 The header is a 56px shell bar: logo, a hairline, the plan's title and meta, then the freshness line with its beat, the notification bell and the theme button (32px, r1, outlined in `shell-hair`). The page tabs float at the foot of the window: a shell-coloured bar (r4, 4px padding) with two 40px tabs in Libre Franklin capitals. The page you are on is a raised white tile, the same in both themes. A badge on Run counts what needs you, in an amber tile with a soft glow.
+
+### Project tabs
+One page holds every session, with a thin shell bar across its top: 40px with a hairline under it. Each project is a 32px tab in Saira Semi Condensed, named after its folder as the folder is written, with r3 corners like the page tabs, and the one you are on is the same raised white tile. A tab's status is a word in a small tile: Needs you in amber, Stuck in red, Done in green, Paused outlined. A project that is running shows nothing, by the Quiet Run Rule. The bell sits at the right, and the pages inside hide their own. Under the bar, each session's page sits in a frame, unchanged. Many tabs scroll sideways, and the page never does.
 
 ### Buttons
 - **Shape:** r1, 34px tall, 15px side padding; 28px for small buttons.
@@ -414,7 +417,7 @@ A nav tab that shows once the project has a map, with or without a plan running.
 Now (the current state's mark, id, title, a link to its task page, done-when, files, time on it, health and check runs), then Up next, Helper agents, Decided, Asked, Models and tokens, and the Log. While stuck, Now leads with the alert box: the check command and its failing output in red.
 
 ### Task page
-Opens in place of the plan for one state. A sticky bar with Back and the pager, then a row of stat boxes (Status, Runs in, Took, Started), a bar showing where the state sat in the run, and two columns: Asked for, why, approach, what was done, where it stands, what it needs, along the way and ways back on the left; done-when, files it may change and the flow that added it on the right. A live run offers Skip with a reason.
+Opens in place of the plan for one state. A sticky bar with Back and the pager, then a row of stat boxes (Status, Runs in, Used, Took, Started), a bar showing where the state sat in the run, and two columns: Asked for, why, approach, what was done, where it stands, what it needs, along the way and ways back on the left; done-when, files it may change and the flow that added it on the right. A live run offers Skip with a reason.
 - **Asked for:** comes first because it is the only part in the user's or the plan's words; everything under it is Claude's description. Each quote sits in a sunk block with its section and origin below in small grey, and one line says Sentinel found the words, with a link to the saved copy. A state Claude added has a grey Claude added tag and its reason instead; the tag is amber only while the draft still waits for an answer. A plan that doesn't compare quotes keeps its `Plan:` line above the title instead.
 - **Along the way:** a refused quote leads the list, with the same red Refused word as other refusals.
 
@@ -469,3 +472,4 @@ Two tabs, Instructions and Flows, and a "Switches for" choice between this proje
 These are in the build but are not part of the system, so new surfaces should not copy them.
 - Text at 11 to 11.5px: small tags, the Run badge and labels inside the SVG drawings. They sit below the 12.5px reading floor.
 - The steel gradient is a button face, not a colour token; the frontmatter falls back to `ink` for the main button.
+- The project tabs use the browser's own tooltips, as that bar has no hint card.

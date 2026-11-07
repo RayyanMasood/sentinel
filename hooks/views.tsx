@@ -143,6 +143,10 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
   const split = tokenSplit(vm.spend)
   const parts = `${shortCount(split.cached)} cached in · ${shortCount(split.uncached)} uncached in · ${shortCount(split.out)} out`
   const models = [...new Set(vm.spend.map(s => s.model))].join(', ')
+  // A row of its own under the tokens, as they already fill their line.
+  const usageRows = (label: string) => vm.usage
+    ? [line([label, 'dim'], [...vm.usage.windows.map(w => `${w.name === 'Week' ? 'week' : w.name} ${w.percent}%`), ...(vm.usage.plan ? [`this plan ${vm.usage.plan}`] : [])].join(' · '))]
+    : []
 
   const auditRows = (all: boolean) => {
     const rows = []
@@ -345,6 +349,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       stat('refused', c.refused + c.blocked, `${c.refused} actions, ${c.blocked} held questions`),
       stat('auto', c.auto, 'continued after a mid-plan stop'),
       stat('tokens', shortCount(total), `${parts} · ${models || 'none counted'}`),
+      ...usageRows('usage'.padEnd(11)),
     ]
     return [
       spread(line(vm.closed ? ['CLOSED BY YOU', 'warn', true] : ['COMPLETE', 'ok', true]), line([`${vm.step} steps`, 'dim'])),
@@ -428,6 +433,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       gap(),
       line(count(c.asked, 'asked'), ['  ·  ', 'dim'], count(c.blocked, 'blocked'), ['  ·  ', 'dim'], count(c.decided, 'decided'), ['  ·  ', 'dim'], count(c.amended, 'amended'), ['  ·  ', 'dim'], count(c.auto, 'auto')),
       line(['tokens  ', 'dim'], shortCount(total), [`  ${parts} · ${models || 'none yet'}`, 'dim']),
+      ...usageRows('usage   '),
       gap(),
       ...laneRows(),
       line(['log', 'dim']),

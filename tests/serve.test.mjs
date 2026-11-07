@@ -78,6 +78,15 @@ test('the page may run only its own inline script', async () => {
   assert.ok(headers['content-security-policy'].includes(`script-src 'self' 'sha256-${hash}';`))
 })
 
+test('only the hub may show the page in a frame', async () => {
+  assert.ok((await send(`/?k=${token}`)).headers['content-security-policy'].includes('frame-ancestors http://127.0.0.1:40999;') || (await send(`/?k=${token}`)).headers['content-security-policy'].endsWith('frame-ancestors http://127.0.0.1:40999'))
+  const s = start({ SENTINEL_HUB_PORT: '40123' })
+  const { port: at, token: k } = await s.ready
+  const { headers } = await send(`/?k=${k}`, { at })
+  s.child.kill()
+  assert.ok(headers['content-security-policy'].endsWith('frame-ancestors http://127.0.0.1:40123'))
+})
+
 test('a page checked out with CRLF line ends gets the hash the browser computes', async () => {
   writeFileSync(join(dir, 'crlf.html'), '<p>page</p><script>a()\r\nb()</script>\r\n')
   const s = start({ SENTINEL_PAGE: join(dir, 'crlf.html') })

@@ -1,12 +1,13 @@
-// The dashboard's Library page, instruction editor, draft card, task page, source page and System page in a real browser, served by the real web/serve.mjs:
+// The dashboard's Library page, instruction editor, draft card, task page, source page, System page and project tabs in a real browser, served by the real web/serve.mjs:
 //   npx -y -p playwright@1.64.1 -c 'node tests/page.check.mjs'
-// ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. DUMP=<variant> prints that variant's System view.
+// ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. ONLY=hub runs the project tabs and usage figures alone. DUMP=<variant> prints that variant's System view.
 // It fails on a console or policy error, a page wider than its window at 390, 860 or 1440 px (light and dark), a part
 // that doesn't show, or a message the page sends in the wrong shape. SHOTS=<dir> also saves a screenshot of each.
 // SERVE=<variant> (library, light, insDraft, draft or a proof variant) checks nothing: it keeps the server up on that variant for a
 // person to try, prints the address, and prints each message the page sends. No browser package is needed for it.
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -24,6 +25,9 @@ const check = (ok, what) => { if (!ok) fails.push(what) }
 // The page's own rules: one inline script with no attributes, and no on* handlers in the markup.
 check((html.match(/<script\b[^>]*>/g) ?? []).join() === '<script>', 'one bare <script>')
 check(!/<[a-z][^>]*\son[a-z]+\s*=\s*["']/i.test(html), 'no on*= attributes')
+const barHtml = readFileSync(new URL('../web/hub.html', import.meta.url), 'utf8')
+check((barHtml.match(/<script\b[^>]*>/g) ?? []).join() === '<script>', 'the bar has one bare <script>')
+check(!/<[a-z][^>]*\son[a-z]+\s*=\s*["']/i.test(barHtml), 'the bar has no on*= attributes')
 
 // ---- what Sentinel would send ----
 
@@ -128,6 +132,8 @@ const VARIANTS = {
   proofRun: page(midRun),
   proofNone: page(drafting([{ id: 'x', label: 'x', added: WHY }]), { draftKey: 'p4' }),
   proofDone: page({ ...midRun, active: 'done' }),
+  usageRun: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52, resetsAt: new Date(now + 3_600_000).toISOString(), was: 50 }, { name: '5 hours', percent: 23 }], usd: 4.2, plan: 'about 1.4%', steps: { pay: 'about 0.6%', refund: 'estimating' } } }),
+  usageNoShare: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52 }], usd: 0.01, plan: 'estimating', steps: {} } }),
   onceDraft: page(act({ ...emptyRun(), signedOff: true, review: true }, { ...plan, states: plan.states.map(s => (s.id === 'perf' ? { ...s, once: true } : s)) }, '', {}, now).run),
   blocked: page(act(act({ ...emptyRun(), signedOff: true }, plan, '', {}, now).run, { action: 'escalate', kind: 'blocked', reason: 'The Mac build machine is locked. Someone needs to unlock it.' }, '09:30', {}, now).run),
   closedDone: page(act(midRun, { action: 'finish', reason: 'Enough for now' }, '09:40', {}, Date.now(), true).run),
@@ -1030,7 +1036,249 @@ async function tasksPage() {
   await p.context().close()
 }
 
+// ---- usage ----
+
+async function usagePage() {
+  let p = await open('usageRun', '')
+  const fd = name => p.locator('#fields .fd', { hasText: name })
+  check((await fd('Week').innerText()).includes('52%'), 'the Run page shows the week')
+  check((await fd('5 hours').innerText()).includes('23%'), 'the Run page shows the 5 hours when reported')
+  check((await fd('This plan').innerText()).includes('about 1.4%'), 'the Run page shows the plan')
+  for (const word of ['Resets', 'Was 50% when this plan locked', 'every session']) check((await fd('Week').getAttribute('title')).includes(word), `the week's hover says ${word}`)
+  check((await fd('This plan').getAttribute('title')).includes('$4.20'), "the plan's hover gives its cost")
+  await p.context().close()
+  p = await open('usageRun', '#task-pay')
+  check((await p.locator('.fd', { hasText: 'Used' }).innerText()).includes('About 0.6% of your week'), 'a step page shows its share')
+  await p.context().close()
+  p = await open('usageRun', '#task-refund')
+  const est = await p.locator('.fd', { hasText: 'Used' }).innerText()
+  check(est.includes('Estimating') && !est.includes('of your week'), `a step with no share yet says so (${est})`)
+  await p.context().close()
+  p = await open('usageNoShare', '')
+  check((await p.locator('#fields .fd', { hasText: '5 hours' }).count()) === 0, 'no 5 hours when it is not reported')
+  check((await p.locator('#fields .fd', { hasText: 'This plan' }).innerText()).includes('estimating'), 'the plan says estimating at first')
+  await p.context().close()
+  p = await open('proofRun', '')
+  check((await p.locator('#fields .fd', { hasText: 'Week' }).count()) === 0, 'no figures, nothing shows')
+  await p.context().close()
+}
+
+// ---- the project tabs ----
+
+async function hubPage() {
+  const HUB = fileURLToPath(new URL('../web/hub.mjs', import.meta.url)), SERVE = fileURLToPath(new URL('../web/serve.mjs', import.meta.url))
+  const free = () => new Promise(ok => { const s = createServer().listen(0, '127.0.0.1', () => { const at = s.address().port; s.close(() => ok(at)) }) })
+  const hubPort = await free()
+  const log = join(dir, 'opened.log'), opener = join(dir, 'opener.mjs')
+  writeFileSync(opener, "import { appendFileSync } from 'node:fs'\nappendFileSync(process.argv[2], process.argv[3] + '\\n')\n")
+  const env = { ...process.env, SENTINEL_HUB_PORT: String(hubPort), SENTINEL_HUB_CHECK_MS: '100', SENTINEL_HUB_OPENER: JSON.stringify([process.execPath, opener, log]) }
+  const running = []
+  const helper = async vm => {
+    const state = join(dir, `state-${running.length}.js`)
+    const put = v => writeFileSync(state, `window.__sentinel && window.__sentinel(${JSON.stringify(v)})\n`)
+    put(vm)
+    const child = spawn(process.execPath, [SERVE], { env: { ...env, SENTINEL_PAGE: fileURLToPath(PAGE), SENTINEL_STATE: state }, stdio: ['ignore', 'pipe', 'inherit'] })
+    running.push(child)
+    const { port, token } = await new Promise(res => createInterface({ input: child.stdout }).once('line', l => res(JSON.parse(l))))
+    return { port, token, put, child, url: `http://127.0.0.1:${port}/?k=${token}` }
+  }
+  const hub = spawn(process.execPath, [HUB], { env, stdio: 'ignore' })
+  running.push(hub)
+  const openTab = (s, name) => new Promise(ok => spawn(process.execPath, [HUB, 'open'], { env: { ...env, SENTINEL_TAB_PORT: String(s.port), SENTINEL_TAB_TOKEN: s.token, SENTINEL_TAB_NAME: name }, stdio: 'ignore' }).once('exit', ok))
+  const opened = () => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [])
+  const a = await helper(VARIANTS.proofRun), b = await helper(VARIANTS.proofRun), stranger = await helper(VARIANTS.blocked)
+
+  try {
+    // The first session opens the browser, on the hub, with no session token in the address.
+    const soon = async (ok, what, ms = 7000) => {
+      for (const end = Date.now() + ms; Date.now() < end; await new Promise(r => setTimeout(r, 50))) if (await ok()) return true
+      fails.push(`${what} did not happen`)
+      return false
+    }
+    check((await openTab(a, 'shop')) === 0, 'the open command says it worked')
+    await soon(() => opened().length, 'the first session opening the browser')
+    const line = opened()[0]
+    check(new URL(line).hash === `#${a.port}`, 'the address names the first tab')
+    check(!line.includes(a.token), 'no session token in the address')
+
+    const newPage = async (opts = {}) => {
+      const ctx = await browser.newContext({ viewport: { width: opts.width ?? 1440, height: 900 }, colorScheme: opts.dark ? 'dark' : 'light', reducedMotion: 'reduce' })
+      // Records notifications, here and in the frames, where none should fire.
+      await ctx.addInitScript(() => {
+        window.__notes = []
+        window.Notification = class { static permission = 'granted'; constructor(title, o) { window.__notes.push({ title, ...o }) } close() {} }
+      })
+      const pg = await ctx.newPage()
+      pg.setDefaultTimeout(7000)
+      await pg.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
+      pg.on('console', m => { if (m.type() === 'error' && !pg.sendsFail) errors.push(`hub: ${m.text()}`) })
+      pg.on('pageerror', e => errors.push(`hub: ${e.message}`))
+      await pg.goto(line)
+      return pg
+    }
+    const p = await newPage()
+    const tab = name => p.locator('[role=tab]', { hasText: name })
+    const names = () => p.$$eval('[role=tab] .name', ts => ts.map(t => t.textContent))
+    const chosen = () => p.$eval('[role=tab][aria-selected=true] .name', t => t.textContent)
+    const word = async name => ((await tab(name).locator('.st').isHidden()) ? '' : tab(name).locator('.st').innerText())
+    const frame = s => p.frames().find(f => f.url().startsWith(`http://127.0.0.1:${s.port}/`))
+    const shown = () => p.locator('iframe.on').getAttribute('src')
+
+    await soon(async () => (await names()).join() === 'shop', 'the first tab showing')
+    check((await shown()) === a.url, 'the first tab shows its session')
+    await soon(() => frame(a)?.locator('#themeBtn').isVisible(), "the session's page showing in its frame")
+    check(await p.locator('#bell').isVisible(), 'the bar has the bell')
+
+    // A second session adds a tab and the page moves to it, with no new browser tab.
+    await openTab(b, 'blog')
+    await soon(async () => (await names()).join() === 'shop,blog', 'the second tab showing')
+    await soon(async () => (await chosen()) === 'blog', 'the page moving to the new tab')
+    check((await shown()) === b.url, 'the new tab shows its session')
+    check(opened().length === 1, 'the second session opens no second browser tab')
+
+    // Switching, by mouse and by keys, and the address keeps up.
+    await tab('shop').click()
+    check((await chosen()) === 'shop' && (await shown()) === a.url, 'a click switches tab')
+    await tab('blog').click()
+    check(new URL(p.url()).hash === `#${b.port}`, 'the address follows the tab')
+    await tab('shop').click()
+    check(await p.locator(`iframe[src="${b.url}"]`).evaluate(f => getComputedStyle(f).visibility === 'hidden'), 'the other frame is hidden')
+    await tab('shop').focus()
+    await p.keyboard.press('ArrowRight')
+    check((await chosen()) === 'blog', 'the arrow key moves on')
+    await p.keyboard.press('ArrowRight')
+    check((await chosen()) === 'shop', 'the arrow key wraps round')
+
+    // Status: the word on the tab and the browser tab's title. No notification for the tab you are on.
+    a.put(VARIANTS.blocked)
+    await soon(async () => (await word('shop')) === 'Needs you', "the tab's word")
+    await soon(async () => (await p.title()) === 'Needs you · Sentinel', "the browser tab's title")
+    check((await p.locator('#fav').getAttribute('href')).includes('f4b223'), 'the icon gets its plate')
+    check((await word('blog')) === '', 'the quiet tab has no word')
+    check(await frame(a).locator('#bellBtn').isHidden(), 'the page in a frame has no bell, once it is live')
+    check((await p.evaluate(() => window.__notes.length)) === 0, 'no notification for the tab you are on')
+
+    // On another tab it does, once, on the bar.
+    b.put(VARIANTS.blocked)
+    await soon(async () => (await word('blog')) === 'Needs you', "the other tab's word")
+    await soon(async () => (await p.evaluate(() => window.__notes.length)) === 1, 'a notification for another tab')
+    const [note] = await p.evaluate(() => window.__notes)
+    check(note?.title.startsWith('blog · Needs you') && note?.tag === `sentinel-${b.port}`, `the notification names the project (${JSON.stringify(note)})`)
+    check((await frame(b).evaluate(() => window.__notes.length)) === 0, 'the page in a frame raises none itself')
+    b.put(VARIANTS.closedDone)
+    await soon(async () => (await word('blog')) === 'Done', 'the Done word')
+    a.put(VARIANTS.proofRun)
+    await soon(async () => (await word('shop')) === '', 'the word going')
+    await soon(async () => (await p.title()) === 'Sentinel', 'the title going back')
+    check(!(await p.locator('#fav').getAttribute('href')).includes('f4b223'), 'the plate going')
+    b.put(VARIANTS.proofRun)
+    await soon(async () => (await word('blog')) === '', "the other tab's word going")
+    // A session with no plan can still have a question.
+    a.put({ ...VARIANTS.light, ask: { id: 'q1', questions: [{ question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }] }] } })
+    await soon(async () => (await word('shop')) === 'Needs you', 'the word for a question with no plan')
+    a.put(VARIANTS.proofRun)
+    await soon(async () => (await word('shop')) === '', 'the word going after the question')
+
+    // The theme goes across, and stays after a reload, from a pick made in any one frame.
+    const themeOf = s => frame(s).evaluate(() => document.documentElement.dataset.theme)
+    const barTheme = () => p.evaluate(() => document.documentElement.dataset.theme)
+    check((await barTheme()) === 'light', 'the bar starts on the system theme')
+    await frame(a).locator('#themeBtn').click()
+    await soon(async () => (await barTheme()) === 'dark', 'the bar taking the theme')
+    await soon(async () => (await themeOf(b)) === 'dark', 'the other frame taking the theme')
+    // shop is not the last to ask for the page, so only the address can bring it back.
+    await p.reload()
+    await soon(async () => (await names()).join() === 'shop,blog', 'the tabs after a reload')
+    check((await chosen()) === 'shop', 'a reload stays on the tab')
+    await soon(async () => (await barTheme()) === 'dark' && (await frame(b)?.locator('#themeBtn').isVisible()) && (await themeOf(b)) === 'dark', 'the theme after a reload')
+    await tab('blog').click()
+    await frame(b).locator('#themeBtn').click()
+    await soon(async () => (await barTheme()) === 'light' && (await themeOf(a)) === 'light', 'the theme coming back')
+
+    // Messages from anything but a tab's own frame are ignored.
+    await p.evaluate(() => postMessage({ kind: 'stuck', plan: 'x', theme: 'dark', note: { title: 'x', body: 'x' } }, '*'))
+    await p.evaluate(url => { const f = document.createElement('iframe'); f.id = 'stranger'; f.src = url; document.getElementById('frames').append(f) }, stranger.url)
+    await soon(async () => /Needs you/.test((await frame(stranger)?.title()) ?? ''), "the stranger's page saying it needs you")
+    await new Promise(r => setTimeout(r, 200))
+    check((await p.title()) === 'Sentinel', 'a stranger cannot change the title')
+    check((await word('shop')) === '' && (await word('blog')) === '', 'a stranger cannot change a tab')
+    check((await barTheme()) === 'light', 'a stranger cannot change the theme')
+    check((await p.evaluate(() => window.__notes.length)) === 0, 'a stranger cannot raise a notification')
+    await p.evaluate(() => document.getElementById('stranger').remove())
+    // A frame that has gone somewhere else no longer speaks for its tab.
+    await p.evaluate(([from, to]) => { document.querySelector(`iframe[src="${from}"]`).src = to }, [b.url, stranger.url])
+    await soon(async () => /Needs you/.test((await frame(stranger)?.title()) ?? ''), 'the frame showing somewhere else')
+    await new Promise(r => setTimeout(r, 200))
+    check((await p.title()) === 'Sentinel' && (await word('blog')) === '', 'a frame that left cannot change its tab')
+    await p.evaluate(([from, to]) => { document.querySelector(`iframe[src="${from}"]`).src = to }, [stranger.url, b.url])
+    await soon(() => frame(b)?.locator('#themeBtn').isVisible(), 'the frame coming back')
+    // And a page takes the theme only from the bar.
+    await frame(a).evaluate(() => postMessage({ theme: 'dark' }, '*'))
+    await new Promise(r => setTimeout(r, 100))
+    check((await themeOf(a)) === 'light', 'a page ignores a theme from anything but the bar')
+
+    // A session that ends takes its tab, and the page moves off it.
+    await tab('blog').click()
+    p.sendsFail = true
+    b.child.kill()
+    await soon(async () => (await names()).join() === 'shop', 'the tab going with its session')
+    check((await chosen()) === 'shop' && (await shown()) === a.url, 'the page moves off a tab that went')
+    p.sendsFail = false
+
+    // A new token for the same port loads the frame again.
+    const blank = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>x</title>') })
+    await new Promise(ok => blank.listen(0, '127.0.0.1', ok))
+    const other = { port: blank.address().port, token: 'c'.repeat(32) }
+    await openTab(other, 'other')
+    await soon(async () => (await names()).length === 2, 'the other tab')
+    await openTab({ ...other, token: 'd'.repeat(32) }, 'renamed')
+    await soon(async () => (await names()).join() === 'shop,renamed', 'the tab taking its new name')
+    check(await p.locator(`iframe[src$="${'d'.repeat(32)}"]`).count() === 1, 'the frame takes the new token')
+
+    // Sizes: many long names scroll sideways in the bar, and nothing else moves.
+    const extra = []
+    for (let i = 0; i < 6; i++) {
+      const s = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>x</title>') })
+      await new Promise(ok => s.listen(0, '127.0.0.1', ok))
+      extra.push(s)
+      await openTab({ port: s.address().port, token: 'e'.repeat(32) }, `a-rather-long-project-folder-name-${i}`)
+    }
+    a.put(VARIANTS.blocked)
+    if (!process.env.NOLAYOUT) for (const width of [390, 860, 1440]) for (const dark of [false, true]) {
+      const q = await newPage({ width, dark })
+      await q.waitForFunction(n => document.querySelectorAll('[role=tab]').length === n, 8)
+      await q.locator('[role=tab]', { hasText: 'Needs you' }).waitFor()
+      const m = await q.evaluate(() => {
+        const t = document.getElementById('tabs'), on = document.querySelector('[aria-selected=true]').getBoundingClientRect()
+        return { wide: document.documentElement.scrollWidth - innerWidth, tall: document.documentElement.scrollHeight - innerHeight, slides: t.scrollWidth - t.clientWidth, on: on.left >= 0 && on.right <= innerWidth, bell: document.getElementById('bell').getBoundingClientRect().right <= innerWidth, bar: document.querySelector('.bar').offsetHeight }
+      })
+      const at = `the bar at ${width}${dark ? ' dark' : ''}`
+      check(m.wide <= 0 && m.tall <= 0, `${at} fits (${m.wide}px over, ${m.tall}px below)`)
+      check(m.on && m.bell, `${at} keeps the chosen tab and the bell in view`)
+      check(m.bar <= 41, `${at} stays thin (${m.bar}px)`)
+      if (width === 390) check(m.slides > 0, 'at phone width the tabs scroll sideways')
+      if (shots) await q.screenshot({ path: join(shots, `hub-${width}${dark ? '-dark' : ''}.png`) })
+      await q.context().close()
+    }
+    extra.forEach(s => s.close())
+    blank.close()
+
+    // A hub that has gone: the page says so.
+    p.sendsFail = true
+    hub.kill()
+    await p.locator('#ended').waitFor({ timeout: 12_000 })
+    check((await names()).length === 0, 'the tabs go with the hub')
+    check(await p.locator('#bell').isHidden(), 'the bell goes with the hub')
+    await p.context().close()
+  } finally {
+    for (const c of running) c.kill()
+  }
+}
+
 try {
+  await hubPage()
+  await usagePage()
+  if (process.env.ONLY !== 'hub') {
   if (process.env.ONLY !== 'others') await systemPage()
   await historyPage()
   await tasksPage()
@@ -1539,6 +1787,9 @@ try {
   await layout('proofDone', '', 'proof-finish')
   await layout('blocked', '', 'blocked')
   await layout('closedDone', '', 'closed-finish')
+  await layout('usageRun', '', 'usage')
+  await layout('usageRun', '#task-pay', 'usage-task')
+  }
   }
 } catch (e) {
   fails.push(`stopped: ${String(e.stack ?? e).split('\n').slice(0, 6).join(' / ')}`)

@@ -1,7 +1,8 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
+import { usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
@@ -226,10 +227,10 @@ export const memberByAgent = (r: Run, agent?: string) => (agent ? members(r).fin
 export const counting = (r: Run) => r.signedOff || !!r.draft || isUnfinished(r)
 
 // A sign-off with nothing under way starts a new count, and the finished plan's sources end with it.
-export const freshCount = (r: Run, at: string): Partial<Run> => (counting(r) ? {} : { spend: [], spendFrom: at, sources: undefined, refused: undefined })
+export const freshCount = (r: Run, at: string): Partial<Run> => (counting(r) ? {} : { spend: [], spendFrom: at, usage: undefined, sources: undefined, refused: undefined })
 
 // A run rebuilt at the lock keeps the count it had.
-const keepCount = (r: Run): Partial<Run> => (r.spend ? { spend: r.spend, spendFrom: r.spendFrom } : {})
+const keepCount = (r: Run): Partial<Run> => ({ ...(r.spend ? { spend: r.spend, spendFrom: r.spendFrom } : {}), ...(r.usage ? { usage: r.usage } : {}) })
 
 type Usage = { model: string; input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
 
@@ -245,6 +246,27 @@ export function addSpend(r: Run, u: Usage, effort: string | undefined, sub: bool
   if (i < 0) rows.push(next)
   else rows[i] = next
   return { ...r, spend: rows, spendFrom: r.spendFrom ?? at }
+}
+
+// A reading of the session's cost and the limits. What the cost grew by goes to the plan and to the step running then. The
+// cost drops when /clear or a new session starts it over, and what the plan has stays.
+// ponytail: a member agent's cost goes to the step active in the main conversation; split it if parallel runs make that misleading.
+export function addUsage(r: Run, usd: number, windows: UsageWindow[], price: number | undefined): Run {
+  if (!counting(r)) return r
+  const u = r.usage
+  const grew = !u ? 0 : usd >= u.last ? usd - u.last : usd
+  const id = isUnfinished(r) ? r.active! : undefined
+  const had = u?.began ?? []
+  return {
+    ...r,
+    usage: {
+      usd: (u?.usd ?? 0) + grew, last: usd,
+      byState: grew && id ? { ...u!.byState, [id]: (u!.byState[id] ?? 0) + grew } : (u?.byState ?? {}),
+      windows: windows.length ? windows : (u?.windows ?? []),
+      began: [...had, ...windows.filter(w => !had.some(x => x.kind === w.kind))],
+      ...(price ? { perPoint: price } : {}),
+    },
+  }
 }
 
 export const tokensOf = (s: Spend) => s.input + s.output + s.cacheRead + s.cacheWrite
@@ -2222,6 +2244,7 @@ export type VM = {
   visitCalls: number
   spend: Spend[]
   spendFrom?: string
+  usage?: UsageView
   // One lane for each helper agent, kept apart from the main conversation's calls and health.
   lanes: Lane[]
   // What the active state asked the user and is waiting on now: its proposal (before) or its finished work (after).
@@ -2665,7 +2688,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     timeline: r.calls.map(c => ({ step: c.step, state: c.state, kind: c.kind, label: c.label, u: c.u, denied: !!c.denied, revoked: !!c.revoked, H: c.H })),
     traps: r.traps,
     trips: (r.trips ?? []).slice(-50), startedAt: phase === 'draft' ? undefined : r.startedAt, endedAt: phase === 'draft' ? undefined : r.endedAt, ...(phase === 'complete' && r.closed ? { closed: r.closed } : {}), visitCalls: phase === 'live' ? visit.length : 0,
-    spend: top.spend ?? [], spendFrom: top.spendFrom,
+    spend: top.spend ?? [], spendFrom: top.spendFrom, usage: usageView(top.usage),
     lanes: (top.lanes ?? []).map(l => ({ ...l, name: l.name || l.id })),
     deps: !!plan?.states.some(s => s.needs),
     ...(asked && !answered(r) ? { waiting: { kind: asked.kind, text: asked.text, at: asked.at } } : {}),
