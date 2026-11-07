@@ -121,6 +121,8 @@ export const SCHEMA = {
     loops: { type: 'array', items: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 2 }, description: 'define: [from, to] back edges' },
     to: { type: 'string', description: 'advance: the next state id, a loop target, or "done"; brief: the ready state; skip: the state the user skips' },
     brief: { type: 'string', description: "brief: the member agent's task, what to do and what to watch for" },
+    agent: { type: 'string', description: 'brief: the agent file its member runs as, such as quick-worker. Left out, the session decides. Its effort comes from that file' },
+    model: { type: 'string', description: 'brief: the model its member runs on, such as sonnet. Left out, the agent file or the session decides' },
     intent: { type: 'string', description: 'propose: what you will do in the state, in plain words for the user' },
     evidence: { type: 'string', description: 'advance: what you found (needed for states without a check and for loops)' },
     outcome: { type: 'string', description: 'advance forward: what was done in the state you leave, in one or two plain sentences, shown on its task page' },
@@ -1625,7 +1627,12 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
   const st = stateOf(r, i.to!.trim())!
   const wt = await worktree($, st.id)
   if ('deny' in wt) return record($, { deny: `Sentinel couldn't make a worktree for ${st.id}: ${wt.deny}` }, { kind: 'plan', label, denied: true })
-  const spawned = await $.agent.spawn({ prompt: memberPrompt(r, st, wt.path, i.brief!.trim()), description: `member ${st.id}`, name: wt.name, cwd: wt.path })
+  const named = (v: unknown) => (typeof v === 'string' && v.trim()) || undefined
+  const type = named(i.agent), model = named(i.model), how = [type, model].filter(Boolean).join(', ') || undefined
+  const spawned = await $.agent.spawn({
+    prompt: memberPrompt(r, st, wt.path, i.brief!.trim()), description: `member ${st.id}`, name: wt.name, cwd: wt.path,
+    ...(type ? { subagentType: type } : {}), ...(model ? { model } : {}),
+  })
     .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err), agentId: undefined }))
   // Core sets agentId. A spawn a hook answered carries none, and the list still finds the agent by its name.
   const agent = spawned.agentId ?? (spawned.deny === undefined ? (await agents($)).find(a => a.name === wt.name)?.id : undefined)
@@ -1640,9 +1647,9 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
         : `Sentinel couldn't start a member agent for ${st.id}: ${why}`,
     }, { kind: 'plan', label, denied: true })
   }
-  await change($, x => startMember(x, st.id, { agent, name: wt.name }, now(), Date.now()))
+  await change($, x => startMember(x, st.id, { agent, name: wt.name, ...(how ? { how } : {}) }, now(), Date.now()))
   await markStart($)
-  return record($, { result: `Started a member agent for ${st.id} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
+  return record($, { result: `Started a member agent for ${st.id}${how ? ` (${how})` : ''} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
 }
 
 // The project as it is now, untracked files included, checked out under .claude/worktrees/.

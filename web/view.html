@@ -2865,7 +2865,8 @@ function mapSeq(W, room) {
 }
 
 // Side by side: rows go a column at a time, each state near the mean row of its needs. A need that skips columns keeps
-// a slot in every column it passes, so its line runs between the cards and never through one.
+// a lane in every column it passes, so its line runs between the cards and never through one. A lane takes only the room of a
+// line: just under the card in its way, between that card's frame and the next one down.
 // Each group, and each run of states outside a group, is laid out alone and then placed as high as it fits clear of the ones
 // before it, so its frame holds only its own cards. A line to another group keeps to its own group's rows until the last gap.
 function mapPar() {
@@ -2875,7 +2876,10 @@ function mapPar() {
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length
   const ncol = Math.max(0, ...S.map(s => col[s.id])) + 1
   const lasts = S.filter(s => !S.some(o => needs(o).includes(s.id)))
-  const kids = tree(S).children, bands = [], taken = [], boxes = []
+  const kids = tree(S).children, groups = kids.filter(c => c.kind === 'group'), bands = [], taken = [], boxes = []
+  const RH = CH + (groups.length ? 52 : 28), DOWN = (CH / 2 + (groups.length ? 15 : 7)) / RH
+  // How far apart two things in a column keep, in rows, the first above the second.
+  const apart = (a, b) => a.edge ? (b.edge ? 8 / RH : 1 - DOWN) : (b.edge ? DOWN : 1)
   kids.forEach((k, i) => {
     if (k.kind === 'group' || kids[i - 1]?.kind !== 'state') bands.push([])
     bands.at(-1).push(...leaves(k))
@@ -2891,30 +2895,31 @@ function mapPar() {
       for (const t of S) for (const n of needs(t)) if (mine.has(n) && col[n] < c && c < col[t.id]) items.push({ edge: `${n}>${t.id}`, want: rowIn(n, t.id) })
       for (const s of lasts) if (mine.has(s.id) && col[s.id] < c) items.push({ edge: `${s.id}>end`, want: rowIn(s.id, 'end') })
       items.sort((a, b) => a.want - b.want || !!a.edge - !!b.edge)
-      let prev = -1
+      let prev
       for (const it of items) {
-        const r = prev = Math.max(prev + 1, it.want)
+        const r = Math.max(it.want, prev ? prev.r + apart(prev.it, it) : 0)
         if (it.edge) ends[it.edge] = r
         else rows[it.id] = r
-        cells.push({ c, r, it })
+        cells.push(prev = { c, r, it })
       }
     }
     const cs = band.map(s => col[s.id]), rs = band.map(s => rows[s.id])
     const box = { c1: Math.min(...cs), c2: Math.max(...cs), r1: Math.min(...rs), r2: Math.max(...rs) }
-    const clear = b => !taken.some(o => cells.some(x => x.c === o.c && Math.abs(x.r + b - o.r) < 1))
+    const meet = (x, y) => x.r <= y.r ? y.r - x.r < apart(x.it, y.it) - 1e-6 : meet(y, x)
+    const clear = b => !taken.some(o => cells.some(x => x.c === o.c && meet(o, { r: x.r + b, it: x.it })))
       && !boxes.some(o => box.c1 <= o.c2 && o.c1 <= box.c2 && box.r1 + b < o.r2 + 1 && o.r1 < box.r2 + b + 1)
     let base = 0
-    while (!clear(base)) base++
+    while (!clear(base)) base += 1 / 16
     for (const { c, r, it } of cells) {
-      taken.push({ c, r: r + base })
+      taken.push({ c, r: r + base, it })
       if (it.edge) (via[it.edge] ||= []).push([c, r + base])
       else row[it.id] = r + base
     }
     boxes.push({ ...box, r1: box.r1 + base, r2: box.r2 + base })
   }
-  const groups = kids.filter(c => c.kind === 'group'), CG = 60
-  const top = 28 + (groups.length ? LH : 0) + (vm.loops.length ? 24 : 0), RH = CH + (groups.length ? 52 : 28)
-  const X = c => 20 + c * (CW + CG), Y = r => top + r * RH
+  const CG = 60
+  const top = 28 + (groups.length ? LH : 0) + (vm.loops.length ? 24 : 0)
+  const X = c => 20 + c * (CW + CG), Y = r => Math.round(top + r * RH)
   const maxR = Math.max(0, ...S.map(s => row[s.id]), ...Object.values(via).flat().map(p => p[1]))
   const W = X(ncol) + CW + 20, H = Y(maxR) + CH + (vm.loops.length ? 44 : 12)
   let svg = '', html = ''
@@ -2938,7 +2943,8 @@ function mapPar() {
   for (const t of S) for (const n of needs(t)) svg += `${wire(n, col[t.id], row[t.id], via[`${n}>${t.id}`] || [])} data-b="${at[t.id]}"/>`
   lasts.forEach(s => { svg += `${wire(s.id, ncol, 0, via[`${s.id}>end`] || [])} data-b="${S.length}"/>` })
   // Ways back leave over a card when they lead up and under it when they lead down, then run in the gaps between rows and
-  // the gap left of the column they start in, so they cross no card.
+  // the gap left of the column they start in.
+  // ponytail: in a tangled plan a way back can pass behind a card (9 of 60 random plans with two ways back). Route it around if real plans show it.
   vm.loops.forEach(l => {
     const a = S[at[l.from]], b = S[at[l.to]]
     if (!a || !b) return

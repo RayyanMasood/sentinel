@@ -262,7 +262,7 @@ export type Lane = { id: string; name: string; state: string; calls: number; edi
 
 // A member agent working on one state: its agent id, the name of its worktree under .claude/worktrees/, how
 // often its check has failed there, and its answer while helpers it started still work.
-export type Member = { agent: string; name: string; since: number; fails?: number; answer?: string }
+export type Member = { agent: string; name: string; since: number; how?: string; fails?: number; answer?: string }
 
 // A way back that was taken: when, along which edge, and the reason the model gave.
 export type Trip = { from: string; to: string; at: number; t: string; reason: string }
@@ -289,6 +289,8 @@ export type PlanInput = {
   // propose: what the model will do in a state that asks before it starts.
   intent?: string
   brief?: string
+  agent?: string
+  model?: string
   loops?: string[][]
   start?: string
   source?: string

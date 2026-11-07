@@ -85,7 +85,7 @@ export function besideNote(r: Run): string | undefined {
   const ready = readyOf(r)
   const running = Object.keys(r.running ?? {})
   const lines = [
-    ready.length ? `Ready to run beside you: ${ready.join(', ')}. Give each one a brief with action "brief" (to, brief): what to do and what to watch for. Sentinel then starts a member agent for it in a worktree of its own.` : '',
+    ready.length ? `Ready to run beside you: ${ready.join(', ')}. Give each one a brief with action "brief" (to, brief): what to do and what to watch for. Add "agent" and "model" to choose what it runs on. Sentinel then starts a member agent for it in a worktree of its own.` : '',
     running.length ? `Running in member agents: ${running.join(', ')}.` : '',
   ].filter(Boolean)
   return lines.length ? lines.join('\n') : undefined
@@ -209,7 +209,7 @@ export function startMember(r: Run, id: string, m: Omit<Member, 'since'>, t: str
     ...r,
     running: { ...r.running, [id]: { ...m, since: now } },
     tasks: { ...r.tasks, [id]: { visits: [...(taskIn(r.tasks, id)?.visits ?? []), { from: now, by: 'member' }] } },
-    log: [...r.log, { t, icon: '⇉', tone: 'acc', text: `${id} · member started` }],
+    log: [...r.log, { t, icon: '⇉', tone: 'acc', text: `${id} · member started${m.how ? ` · ${m.how}` : ''}` }],
   }
 }
 

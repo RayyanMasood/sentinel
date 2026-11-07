@@ -101,6 +101,9 @@ const groupedGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define',
 ] }, '', {}, now).run
 // Groups one after another have no reason to leave the first row.
 const lineGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Line', states: [inGroup('one', 'a'), inGroup('one', 'b', 'a'), inGroup('two', 'c', 'b'), inGroup('three', 'd', 'c')] }, '', {}, now).run
+// Two lines have to pass under the same card, on their way to the group below.
+const twoLinesGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Two lines', states: [inGroup('one', 'a'), inGroup('one', 'b', 'a'), inGroup('two', 'c', ...[]), inGroup('two', 'd', 'c'), inGroup('two', 'e', 'd', 'a'), inGroup('two', 'f', 'd', 'a')] }, '', {}, now).run
+
 // Group one's box has an empty corner, where group two's step would fit if only cards were kept apart. Its line leaves by the next
 // gap, so nothing else stops it landing there.
 const cornerGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Corner', states: [inGroup('one', 'a'), inGroup('one', 'a2', 'a'), inGroup('one', 'a3', 'a'), inGroup('two', 'b', ...[]), inGroup('three', 'c', 'b')] }, '', {}, now).run
@@ -156,6 +159,7 @@ const VARIANTS = {
   groupedGraph: page(groupedGraph, { parallel: true }),
   lineGraph: page(lineGraph, { parallel: true }),
   cornerGraph: page(cornerGraph, { parallel: true }),
+  twoLinesGraph: page(twoLinesGraph, { parallel: true }),
   library: page(emptyRun()),
   settings: page(withSettings, { draftKey: 's1', draftLibrary: withSettings.draft.library, parallel: true }),
   settingsRun: page(lockedSettings, { parallel: true }),
@@ -1108,6 +1112,17 @@ async function groupedMap() {
       waits: cards.map(c => c.querySelector('.t3')?.textContent ?? '').find(t => t.includes(' and ')),
       tips: cards.map(c => c.title).filter(t => t.includes('Waits for')),
       tops: new Set(cards.map(c => Math.round(rect(c).top))).size,
+      between: frames.length > 1 ? frames[1].top - frames[0].bottom : null,
+      overlapped: cards.flatMap((a, i) => cards.slice(i + 1).filter(b => crossing(rect(a), rect(b)))).length,
+      blurred: cards.filter(c => parseFloat(getComputedStyle(c).top) % 1).length,
+      // How high each line runs as it passes under the middle of the second card.
+      passing: (() => {
+        const c = rect(cards[1]), mid = (c.left + c.right) / 2
+        return lines.map(l => {
+          const m = l.getScreenCTM()
+          for (let i = 0; i < l.getTotalLength(); i += 2) { const q = l.getPointAtLength(i); if (Math.abs(q.x * m.a + m.e - mid) < 2) return q.y * m.d + m.f }
+        }).filter(y => y !== undefined && y > c.bottom)
+      })(),
       under,
     }
   })
@@ -1125,6 +1140,7 @@ async function groupedMap() {
     check(!m.cutIds.length, `${at}: no step's name is cut short (${m.cutIds.join()})`)
     check(m.tips.some(t => t.includes('Waits for tabs-open and usage-display')), `${at}: the hover has what the card shortens (${m.waits})`)
     check(!m.under.length, `${at}: no line runs under a card (${m.under.join()})`)
+    check(m.between >= 10 && m.between <= 30, `${at}: a passing line leaves no empty row (${m.between}px between the boxes)`)
     if (shots) await p.screenshot({ path: join(shots, `grouped${dark ? '-dark' : ''}.png`), fullPage: true })
     await p.context().close()
   }
@@ -1140,6 +1156,40 @@ async function groupedMap() {
   check(n.frames === 3 && n.crossed === 0 && n.homes.every(x => x === 1), `a step stays out of another group's empty corner (${n.homes.join()})`)
   check(n.gap >= 10, `group boxes one above the other keep apart (${n.gap}px)`)
   await q.context().close()
+  const t = await open('twoLinesGraph', '')
+  await t.locator('#viewSeg [data-v=map]').click()
+  const two = await measure(t)
+  check(!two.under.length && two.crossed === 0, `two lines pass under one card (${two.under.join()}, ${two.crossed} crossed)`)
+  check(two.between >= 10 && two.between <= 40, `the boxes make room for both, and no more (${two.between}px)`)
+  check(two.passing.length === 2 && Math.abs(two.passing[0] - two.passing[1]) >= 6, `the two lines run apart (${two.passing.join()})`)
+  check(!two.blurred, `cards land on whole pixels (${two.blurred} do not)`)
+  await t.context().close()
+
+  // Many shapes of plan, from a fixed seed: boxes never cross, cards never meet, and no line runs under a card.
+  const rng = (seed => () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296)(7)
+  const pick = n => Math.floor(rng() * n)
+  const f = await open('graph', '')
+  await f.locator('#viewSeg [data-v=map]').click()
+  const wrong = []
+  for (let k = 0; k < 60; k++) {
+    const n = 5 + pick(10), parts = pick(5), states = []
+    let g = 0
+    for (let i = 0; i < n; i++) {
+      if (parts && i && rng() < parts / n) g++
+      const needs = new Set()
+      for (let tries = pick(4); i && tries > 0; tries--) needs.add(`s${pick(i)}`)
+      states.push({ ...step(`s${i}`, ...needs), ...(parts ? { group: `g${g}` } : {}) })
+    }
+    const vm = page(act({ ...emptyRun(), signedOff: true }, { action: 'define', title: `Shape ${k}`, states }, '', {}, now).run, { parallel: true })
+    write(vm)
+    await f.evaluate(v => { window.__sentinel(v); return new Promise(requestAnimationFrame) }, vm)
+    await f.waitForFunction(id => document.querySelectorAll('#v-map .mcard[data-task]').length === id, n)
+    const s = await measure(f)
+    const fault = [s.crossed && `${s.crossed} boxes crossed`, s.overlapped && `${s.overlapped} cards met`, s.under.length && `lines under cards: ${s.under.join()}`, parts && s.homes.some(x => x !== 1) && `cards in the wrong box: ${s.homes.join()}`].filter(Boolean)
+    if (fault.length) wrong.push(`shape ${k} (${n} steps, ${JSON.stringify(states.map(x => [x.id, x.needs, x.group]))}): ${fault.join('; ')}`)
+  }
+  check(!wrong.length, `every shape of plan lays out clean (${wrong.length} wrong: ${wrong.slice(0, 2).join(' | ')})`)
+  await f.context().close()
 }
 
 // ---- the project tabs ----

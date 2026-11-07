@@ -1298,6 +1298,7 @@ test('with parallel states on, a ready state waits for its brief', async ($: any
   const { eng, sentinel, moved } = await parallelAtApi($, on)
   expect(said(moved)).toMatch(/Moved to api/)
   expect(notes(moved)).toMatch(/Ready to run beside you: ui\. Give each one a brief with action "brief"/)
+  expect(notes(moved)).toMatch(/Add "agent" and "model" to choose what it runs on/)
   // Nothing starts before the brief: no worktree, no agent.
   expect(eng.runs).toHaveLength(0)
   expect(eng.spawns).toHaveLength(0)
@@ -1311,6 +1312,43 @@ test('with parallel states on, a ready state waits for its brief', async ($: any
   expect(await brief('ui', 'Add the search box.')).toMatch(/Parallel states are off/)
   expect(notes(await $.tool.call({ tool: TOOL, action: 'status' }))).toBe('')
   expect(eng.spawns).toHaveLength(0)
+})
+
+test('a brief can name the worker and model its member runs on, and says so', async ($: any, on: any) => {
+  const { eng } = await parallelAtApi($, on)
+  const started = said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.', agent: ' quick-worker ', model: ' sonnet ' }))
+  expect(started).toMatch(/Started a member agent for ui \(quick-worker, sonnet\) in \.claude\/worktrees\//)
+  expect(eng.spawns[0]).toMatchObject({ subagent_type: 'quick-worker', model: 'sonnet' })
+  // The prompt and worktree are what they always are.
+  expect(eng.spawns[0].prompt).toMatch(/Add the search box\./)
+  expect(eng.spawns[0].cwd).toMatch(/\.claude\/worktrees\/sentinel-ui-/)
+  expect(eng.snap().log.at(-1).text).toBe('ui · member started · quick-worker, sonnet')
+})
+
+test('a brief naming neither leaves the choice to the session, as before', async ($: any, on: any) => {
+  const { eng } = await parallelAtApi($, on)
+  const started = said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.', agent: '  ', model: 3 }))
+  expect(started).toMatch(/Started a member agent for ui in \.claude\/worktrees\//)
+  expect(eng.spawns[0].subagent_type).toBeUndefined()
+  expect(eng.spawns[0].model).toBeUndefined()
+  expect(eng.snap().log.at(-1).text).toBe('ui · member started')
+})
+
+test('a member can name only its model', async ($: any, on: any) => {
+  const { eng } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.', model: 'opus' })
+  expect(eng.spawns[0].subagent_type).toBeUndefined()
+  expect(eng.spawns[0].model).toBe('opus')
+  expect(eng.snap().log.at(-1).text).toBe('ui · member started · opus')
+})
+
+test('a worker the engine refuses leaves no worktree, and the reason comes back', async ($: any, on: any) => {
+  const { eng } = await parallelAtApi($, on)
+  eng.setSpawnDeny('Unknown agent type: no-such-worker')
+  const out = said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Go.', agent: 'no-such-worker' }))
+  expect(out).toMatch(/couldn't start a member agent for ui: Unknown agent type: no-such-worker/)
+  expect(eng.runs.some((c: any) => c.argv.join(' ').includes('worktree remove'))).toBe(true)
+  expect(eng.snap().members?.ui).toBeUndefined()
 })
 
 test('each ready state gets one member agent in its own worktree, made from the project after its needs', async ($: any, on: any) => {
