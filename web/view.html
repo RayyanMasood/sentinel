@@ -506,7 +506,8 @@ button.mcard:not(.now):hover { border-color: var(--ink-4); }
 .mcard .t1 .mini, .mcard .t1 .cnt { margin-left: auto; }
 .mcard .gn { font: 600 14px/20px var(--f-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcard .lb { font-size: 13px; line-height: 18px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mcard .t3 { display: flex; align-items: center; gap: var(--s2); margin-top: auto; height: 16px; font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); white-space: nowrap; }
+.mcard .t3 { display: flex; align-items: center; gap: var(--s2); margin-top: auto; height: 16px; overflow: hidden; font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); white-space: nowrap; }
+.mcard .t3 > span:not([class]) { overflow: hidden; text-overflow: ellipsis; }
 .mcard .t3 .sp { flex: 1; }
 .dbar { flex: 1; height: 4px; background: color-mix(in srgb, var(--ink) 12%, transparent); box-shadow: var(--sh-well); }
 .dbar i { display: block; height: 100%; background: var(--ink-3); }
@@ -2235,8 +2236,8 @@ function tree(states) {
     let node = root
     path.forEach((name, k) => {
       const prev = node.children.at(-1)
-      if (prev?.kind === 'group' && prev.name === name) node = prev
-      else { const g = { kind: 'group', name, path: path.slice(0, k + 1), children: [] }; node.children.push(g); node = g }
+      if (prev?.kind === 'group' && prev.name === cap(name)) node = prev
+      else { const g = { kind: 'group', name: cap(name), path: path.slice(0, k + 1), children: [] }; node.children.push(g); node = g }
     })
     node.children.push({ kind: 'state', s })
   }
@@ -2671,7 +2672,7 @@ for (const t of ['pointerup', 'pointercancel']) $('olScroll').addEventListener(t
 // Map: cards wrap into rows inside group frames. Arrows run in the gaps; ways back run in lanes under each row and up a
 // gutter on the left, so no line crosses a card. Groups furthest from the run fold first, until the plan fits the box.
 const CW = 164, CH = 80, AG = 30, MP = 10, LH = 30, LN = 10
-const cpos = (x, y) => `left: ${x}px; top: ${y}px; width: ${CW}px; height: ${CH}px`
+const cpos = (x, y, w = CW) => `left: ${x}px; top: ${y}px; width: ${w}px; height: ${CH}px`
 const checksN = () => new Set(tasks().filter(s => s.check).map(s => s.check)).size
 const backTitle = (from, to, n) => `<title>${esc(from)} can send the run back to ${esc(to)}. ${n ? `Used ${n}×.` : 'Not used yet.'}</title>`
 
@@ -2681,7 +2682,7 @@ function scard(s, u, pos, top) {
   const mini = k === 'now' ? `<span class="mini tone">${mine ?? (par() ? 'Main' : 'Now')}</span>` : k === 'run' ? '<span class="mini run">Member</span>' : s.wait && k === 'ahead' ? '<span class="mini">You</span>' : ''
   const t3 = ms != null ? `<span class="num" data-clock="${id}">${fmtDur(ms, true)}</span><span class="dbar"><i data-bar="${id}" style="width: ${barPct(ms, top)}%"></i></span>${bk(backTo([s.id]))}`
     : `<span>${s.skipped ? 'Skipped' : k === 'done' ? 'Done before the lock' : graph() && s.waits?.length ? `Waits for ${and(s.waits.map(esc))}` : s.wait === 'after' ? 'Ends on your OK' : s.wait ? 'Starts on your OK' : s.once ? 'Its check runs once' : s.check ? 'Ends on its check' : 'No check to run'}</span>`
-  return `<button type="button" class="mcard ${k}" data-task="${id}" data-u="${u}" style="${pos}" title="${esc(s.skipped ? `Skipped: ${s.skipped}` : s.label)}"><span class="t1"><span class="box ${k}"></span><span class="idt">${id}</span>${mini}</span>`
+  return `<button type="button" class="mcard ${k}" data-task="${id}" data-u="${u}" style="${pos}" title="${esc(s.skipped ? `Skipped: ${s.skipped}` : graph() && s.waits?.length && ms == null ? `${s.label}. Waits for ${and(s.waits)}` : s.label)}"><span class="t1"><span class="box ${k}"></span><span class="idt">${id}</span>${mini}</span>`
     + `<span class="lb">${esc(s.label)}</span><span class="t3">${t3}</span></button>`
 }
 function endCard(u, pos) {
@@ -2865,27 +2866,54 @@ function mapSeq(W, room) {
 
 // Side by side: rows go a column at a time, each state near the mean row of its needs. A need that skips columns keeps
 // a slot in every column it passes, so its line runs between the cards and never through one.
+// Each group, and each run of states outside a group, is laid out alone and then placed as high as it fits clear of the ones
+// before it, so its frame holds only its own cards. A line to another group keeps to its own group's rows until the last gap.
 function mapPar() {
+  const CW = 208
   const S = tasks(), at = Object.fromEntries(S.map((s, i) => [s.id, i])), col = colsOf(S), row = {}, via = {}
   const needs = s => (s.needs ?? []).filter(n => n in at)
-  const rowIn = (n, t) => via[`${n}>${t}`]?.at(-1)[1] ?? row[n]
   const mean = a => a.reduce((x, y) => x + y, 0) / a.length
   const ncol = Math.max(0, ...S.map(s => col[s.id])) + 1
   const lasts = S.filter(s => !S.some(o => needs(o).includes(s.id)))
-  for (let c = 0; c < ncol; c++) {
-    const items = S.filter(s => col[s.id] === c).map(s => ({ id: s.id, want: needs(s).length ? mean(needs(s).map(n => rowIn(n, s.id))) : 0 }))
-    for (const t of S) for (const n of needs(t)) if (col[n] < c && c < col[t.id]) items.push({ edge: `${n}>${t.id}`, want: rowIn(n, t.id) })
-    for (const s of lasts) if (col[s.id] < c) items.push({ edge: `${s.id}>end`, want: rowIn(s.id, 'end') })
-    items.sort((a, b) => a.want - b.want || !!a.edge - !!b.edge)
-    let prev = -1
-    for (const it of items) {
-      const r = prev = Math.max(prev + 1, it.want)
-      if (it.edge) (via[it.edge] ||= []).push([c, r])
-      else row[it.id] = r
+  const kids = tree(S).children, bands = [], taken = [], boxes = []
+  kids.forEach((k, i) => {
+    if (k.kind === 'group' || kids[i - 1]?.kind !== 'state') bands.push([])
+    bands.at(-1).push(...leaves(k))
+  })
+  for (const band of bands) {
+    const mine = new Set(band.map(s => s.id)), cells = [], rows = {}, ends = {}
+    const rowIn = (n, t) => ends[`${n}>${t}`] ?? rows[n]
+    for (let c = 0; c < ncol; c++) {
+      const items = band.filter(s => col[s.id] === c).map(s => {
+        const inside = needs(s).filter(n => mine.has(n))
+        return { id: s.id, want: inside.length ? mean(inside.map(n => rowIn(n, s.id))) : 0 }
+      })
+      for (const t of S) for (const n of needs(t)) if (mine.has(n) && col[n] < c && c < col[t.id]) items.push({ edge: `${n}>${t.id}`, want: rowIn(n, t.id) })
+      for (const s of lasts) if (mine.has(s.id) && col[s.id] < c) items.push({ edge: `${s.id}>end`, want: rowIn(s.id, 'end') })
+      items.sort((a, b) => a.want - b.want || !!a.edge - !!b.edge)
+      let prev = -1
+      for (const it of items) {
+        const r = prev = Math.max(prev + 1, it.want)
+        if (it.edge) ends[it.edge] = r
+        else rows[it.id] = r
+        cells.push({ c, r, it })
+      }
     }
+    const cs = band.map(s => col[s.id]), rs = band.map(s => rows[s.id])
+    const box = { c1: Math.min(...cs), c2: Math.max(...cs), r1: Math.min(...rs), r2: Math.max(...rs) }
+    const clear = b => !taken.some(o => cells.some(x => x.c === o.c && Math.abs(x.r + b - o.r) < 1))
+      && !boxes.some(o => box.c1 <= o.c2 && o.c1 <= box.c2 && box.r1 + b < o.r2 + 1 && o.r1 < box.r2 + b + 1)
+    let base = 0
+    while (!clear(base)) base++
+    for (const { c, r, it } of cells) {
+      taken.push({ c, r: r + base })
+      if (it.edge) (via[it.edge] ||= []).push([c, r + base])
+      else row[it.id] = r + base
+    }
+    boxes.push({ ...box, r1: box.r1 + base, r2: box.r2 + base })
   }
-  const groups = tree(S).children.filter(c => c.kind === 'group'), CG = 60
-  const top = 28 + (groups.length ? LH : 0) + (vm.loops.length ? 24 : 0), RH = CH + (groups.length ? 44 : 28)
+  const groups = kids.filter(c => c.kind === 'group'), CG = 60
+  const top = 28 + (groups.length ? LH : 0) + (vm.loops.length ? 24 : 0), RH = CH + (groups.length ? 52 : 28)
   const X = c => 20 + c * (CW + CG), Y = r => top + r * RH
   const maxR = Math.max(0, ...S.map(s => row[s.id]), ...Object.values(via).flat().map(p => p[1]))
   const W = X(ncol) + CW + 20, H = Y(maxR) + CH + (vm.loops.length ? 44 : 12)
@@ -2921,8 +2949,8 @@ function mapPar() {
     if (l.count) svg += `<text class="lpt" x="${bx + 5}" y="${yb - 3}">${l.count}×</text>`
   })
   const T = longest()
-  S.forEach((s, i) => { html += scard(s, i, cpos(X(col[s.id]), Y(row[s.id])), T) })
-  html += endCard(S.length, cpos(X(ncol), Y(0)))
+  S.forEach((s, i) => { html += scard(s, i, cpos(X(col[s.id]), Y(row[s.id]), CW), T) })
+  html += endCard(S.length, cpos(X(ncol), Y(0), CW))
   const lc = S.filter(s => stOf(s) === 'now' || stOf(s) === 'run').map(s => col[s.id])
   return { W, H, groups: false, note: '', scrollTo: lc.length ? X(Math.max(0, Math.min(...lc) - 1)) - 20 : null,
     html: `<svg width="${W}" height="${H}" aria-hidden="true">${svg}</svg>${html}` }

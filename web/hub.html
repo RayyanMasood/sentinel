@@ -10,18 +10,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Saira:wdth,wght@50..125,400..800&family=Saira+Semi+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
-/* The project tabs: a thin bar in the colours of the page's dark header, over one frame per session. */
+/* The project tabs: browser tabs on a thin bar. The one you are on has the colour of the page's dark header, so the two join. */
 :root {
   color-scheme: light;
   --r1: 2px; --r3: 6px;
   --f-text: "Saira", "Segoe UI", system-ui, sans-serif;
   --f-disp: "Saira Semi Condensed", "Saira", "Segoe UI", sans-serif;
-  --shell: #10161d; --shell-2: #1b232c; --shell-ink: #f2f4f6; --shell-ink-2: #a8b1bb; --shell-hair: #2a333d;
+  --shell: #10161d; --bar: #27303a; --bar-2: #333d48; --bar-hair: #434e5a; --shell-ink: #f2f4f6; --shell-ink-2: #b4bcc5;
   --amber-fill: #f4b223; --red-fill: #c42b1f; --green-fill: #0d7a4a;
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --shell: #070a0d; --shell-2: #121820; --shell-ink: #e9edf1; --shell-ink-2: #909ba7; --shell-hair: #1d252d;
+  --shell: #070a0d; --bar: #171e26; --bar-2: #222b34; --bar-hair: #323c47; --shell-ink: #e9edf1; --shell-ink-2: #a0aab5;
 }
 html, body { height: 100%; margin: 0; }
 body { display: flex; flex-direction: column; background: var(--shell); color: var(--shell-ink); font: 500 13.5px/1 var(--f-disp); }
@@ -29,14 +29,26 @@ body { display: flex; flex-direction: column; background: var(--shell); color: v
 button { font: inherit; cursor: pointer; }
 :focus-visible { outline: 2px solid var(--shell-ink); outline-offset: -2px; }
 
-.bar { flex: none; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--shell-hair); }
-.tabs { flex: 1; min-width: 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.bar { flex: none; display: flex; align-items: flex-end; gap: 8px; height: 40px; padding-right: 8px; background: var(--bar); }
+.tabs { flex: 1; min-width: 0; display: flex; align-items: flex-end; height: 40px; padding: 0 10px; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
-.tab { flex: none; display: inline-flex; align-items: center; gap: 8px; max-width: 280px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--r3); background: none; color: var(--shell-ink-2); white-space: nowrap; transition: background-color .12s, color .12s; }
-.tab:hover { color: var(--shell-ink); background: var(--shell-2); }
-.tab[aria-selected="true"] { color: #10161d; background: linear-gradient(180deg, #ffffff, #d3d9e0); box-shadow: inset 0 1px 0 #fff, 0 1px 2px rgb(0 0 0 / .4); }
-.tab[aria-selected="true"]:focus-visible { outline-color: #10161d; }
-.name { overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+.tab { position: relative; flex: 0 1 232px; min-width: 148px; display: flex; align-items: center; height: 34px; border-radius: 8px 8px 0 0; color: var(--shell-ink-2); white-space: nowrap; transition: background-color .12s, color .12s; }
+.tab:not(.on):hover { background: var(--bar-2); color: var(--shell-ink); }
+.tab.on { z-index: 1; background: var(--shell); color: var(--shell-ink); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
+/* Its foot curves out to the bar. */
+.tab.on::before, .tab.on::after { content: ""; position: absolute; bottom: 0; width: 8px; height: 8px; pointer-events: none; }
+.tab.on::before { right: 100%; background: radial-gradient(circle at 0 0, transparent 7.5px, var(--shell) 8px); }
+.tab.on::after { left: 100%; background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--shell) 8px); }
+/* A thin line between two tabs that aren't lit. */
+.tab:not(.on):not(:hover):not(:last-child):not(:has(+ .on)):not(:has(+ .tab:hover))::after { content: ""; position: absolute; top: 10px; right: 0; bottom: 10px; width: 1px; background: var(--bar-hair); }
+.pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 100%; padding: 0 4px 0 12px; border: 0; border-radius: inherit; background: none; color: inherit; text-align: left; }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+.on .name { font-weight: 600; }
+.x { flex: none; display: grid; place-items: center; width: 24px; height: 24px; margin-right: 5px; padding: 0; border: 0; border-radius: var(--r3); background: none; color: inherit; opacity: 0; transition: background-color .12s; }
+.x svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
+.on .x, .tab:hover .x, .x:focus-visible { opacity: 1; }
+.x:hover { background: rgb(255 255 255 / .14); color: var(--shell-ink); }
+@media (hover: none) { .x { opacity: 1; } }
 
 /* A colour here always has its word: what a project needs from you, or that it has finished. */
 .st { flex: none; padding: 4px 6px; border-radius: var(--r1); font-weight: 700; font-size: 12.5px; }
@@ -45,8 +57,8 @@ button { font: inherit; cursor: pointer; }
 .st.fin { background: var(--green-fill); color: #fff; }
 .st.calm { padding: 3px 5px; border: 1px solid currentColor; }
 
-.ibtn { flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--shell-hair); border-radius: var(--r1); background: none; color: var(--shell-ink); }
-.ibtn:hover, .ibtn[aria-pressed="true"] { background: var(--shell-2); }
+.ibtn { flex: none; align-self: center; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--r3); background: none; color: var(--shell-ink); }
+.ibtn:hover, .ibtn[aria-pressed="true"] { background: var(--bar-2); }
 .ibtn[aria-pressed="true"] { color: var(--amber-fill); }
 .ibtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
 
@@ -58,7 +70,7 @@ iframe.on { visibility: visible; }
 .say strong { display: block; margin-bottom: 4px; color: var(--shell-ink); font-weight: 600; }
 code { font: inherit; color: var(--shell-ink); }
 
-@media (prefers-reduced-motion: reduce) { .tab { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .tab, .x { transition: none; } }
 </style>
 </head>
 <body>
@@ -67,7 +79,7 @@ code { font: inherit; color: var(--shell-ink); }
   <button type="button" class="ibtn" id="bell" hidden><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></button>
 </header>
 <main class="frames" id="frames">
-  <p class="say" id="none" hidden><strong>No sessions here yet</strong>Type <code>/sentinel browser</code> in a session to add it.</p>
+  <p class="say" id="none" hidden><strong>No sessions here</strong>Type <code>/sentinel browser</code> in a session to add it.</p>
   <p class="say" id="ended" hidden><strong>These sessions have ended</strong>You can close this page. The next <code>/sentinel browser</code> opens a new one.</p>
 </main>
 <script>
@@ -77,6 +89,8 @@ const store = {
   get: k => { try { return localStorage.getItem('sentinel.' + k) } catch { return null } },
   set: (k, v) => { try { localStorage.setItem('sentinel.' + k, v) } catch {} },
 }
+// A folder's name as words with capitals: docs-site reads Docs Site. The hover keeps it as the folder has it.
+const words = s => s.replace(/[-_]+/g, ' ').trim().replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase()) || s
 const NEED = ['Needs you', 'need']
 const STATUS = { ask: NEED, wait: NEED, draft: NEED, blocked: NEED, flow: NEED, stuck: ['Stuck', 'bad'], done: ['Done', 'fin'], paused: ['Paused', 'calm'] }
 // Each tab, by its session's port: its button and frame, and what its page last said.
@@ -93,16 +107,24 @@ function paintTheme() {
 sysDark.onchange = paintTheme
 paintTheme()
 
+// The session carries on, and its next /sentinel browser brings the tab back. A hub that has gone says so by itself.
+const close = id => fetch(`/close${location.search}&id=${id}`, { method: 'POST' }).catch(() => {})
+
 function add(x) {
-  const btn = document.createElement('button')
-  btn.type = 'button'
-  btn.className = 'tab'
-  btn.setAttribute('role', 'tab')
-  btn.innerHTML = '<span class="name"></span><span class="st" hidden></span>'
+  const el = document.createElement('div')
+  el.className = 'tab'
+  el.setAttribute('role', 'presentation')
+  el.innerHTML = '<button type="button" class="pick" role="tab"><span class="name"></span><span class="st" hidden></span></button>'
+    + '<button type="button" class="x" title="Close this tab. /sentinel browser brings it back."><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>'
+  const btn = el.firstChild, shut = el.lastChild
   btn.onclick = () => pick(x.id)
-  $('tabs').append(btn)
+  shut.onclick = () => close(x.id)
+  // The middle button closes it, as in a browser, and shouldn't start the browser's scrolling.
+  el.onmousedown = e => { if (e.button === 1) e.preventDefault() }
+  el.onauxclick = e => { if (e.button === 1) close(x.id) }
+  $('tabs').append(el)
   const frame = document.createElement('iframe')
-  const t = { id: x.id, url: x.url, name: x.name, btn, frame, kind: '', plan: '' }
+  const t = { id: x.id, url: x.url, name: x.name, el, btn, shut, frame, kind: '', plan: '' }
   frame.onload = () => hand(t)
   frame.src = x.url
   $('frames').append(frame)
@@ -120,10 +142,12 @@ function favicon(plate) {
 function paint() {
   for (const t of tabs.values()) {
     const on = t.id === current, [word, tone] = STATUS[t.kind] ?? []
+    t.el.classList.toggle('on', on)
     t.btn.setAttribute('aria-selected', on)
-    t.btn.tabIndex = on ? 0 : -1
+    t.btn.tabIndex = t.shut.tabIndex = on ? 0 : -1
+    t.shut.setAttribute('aria-label', `Close ${words(t.name)}`)
     t.btn.title = t.plan ? `${t.name}: ${t.plan}` : t.name
-    t.btn.querySelector('.name').textContent = t.frame.title = t.name
+    t.btn.querySelector('.name').textContent = t.frame.title = words(t.name)
     const st = t.btn.querySelector('.st')
     st.hidden = !word
     st.textContent = word ?? ''
@@ -142,10 +166,11 @@ function pick(id) {
   current = id
   if (id) history.replaceState(null, '', `#${id}`)
   paint()
-  if (moved) tabs.get(id)?.btn.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  if (moved) tabs.get(id)?.el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 
 $('tabs').onkeydown = e => {
+  if (e.key === 'Delete' && current) return void close(current)
   const ids = [...tabs.keys()], at = ids.indexOf(current)
   const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: ids.length - 1 }[e.key]
   if (to === undefined || !ids.length) return
@@ -170,7 +195,7 @@ bell()
 
 function notify(t, { title, body }) {
   if ((!document.hidden && t.id === current) || !('Notification' in window) || Notification.permission !== 'granted') return
-  const note = new Notification(`${t.name} · ${title}`, { body, tag: `sentinel-${t.id}` })
+  const note = new Notification(`${words(t.name)} · ${title}`, { body, tag: `sentinel-${t.id}` })
   note.onclick = () => { focus(); pick(t.id); note.close() }
 }
 
@@ -191,15 +216,16 @@ addEventListener('message', e => {
   if (note) notify(t, note)
 })
 
-// The hub sends the list on arrival and whenever it changes. A frame gone means its session has gone.
+// The hub sends the list on arrival and whenever it changes. A tab gone means its session has gone, or you closed it.
 const list = new EventSource(`/tabs${location.search}`)
 let lastMove, misses = 0
 list.onmessage = e => {
   misses = 0
   const now = JSON.parse(e.data)
+  const was = [...tabs.keys()].indexOf(current), keys = $('tabs').contains(document.activeElement)
   for (const [id, t] of tabs) {
     if (now.tabs.some(x => x.id === id)) continue
-    t.btn.remove()
+    t.el.remove()
     t.frame.remove()
     tabs.delete(id)
   }
@@ -211,14 +237,16 @@ list.onmessage = e => {
   // The address names the first tab. After that, the tab that last asked for the page.
   const want = lastMove === undefined ? Number(location.hash.slice(1)) : now.focus.n !== lastMove ? now.focus.id : current
   lastMove = now.focus.n
-  pick(tabs.has(want) ? want : tabs.has(current) ? current : tabs.keys().next().value ?? null)
+  // A tab that went hands on to the one now in its place, as in a browser, and the keys stay in the bar.
+  pick(tabs.has(want) ? want : tabs.has(current) ? current : [...tabs.keys()][Math.max(0, Math.min(was, tabs.size - 1))] ?? null)
+  if (keys && !$('tabs').contains(document.activeElement)) tabs.get(current)?.btn.focus()
 }
 // The browser tries again by itself, so one miss may be a blip. A second means the hub has gone, or restarted with a new token.
 list.onerror = () => {
   if (++misses < 2) return
   list.close()
   for (const t of tabs.values()) {
-    t.btn.remove()
+    t.el.remove()
     t.frame.remove()
   }
   tabs.clear()

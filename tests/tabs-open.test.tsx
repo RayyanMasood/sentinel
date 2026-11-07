@@ -6,6 +6,7 @@
 //  3. The hub can't start and nothing opens at all.
 //  4. The session's helper can't start and the hub is handed nothing.
 //  5. Two sessions on one project share what their pages read, so one tab shows the other's question.
+//  6. A tab closed on the page stays closed, because the session thinks its page is already open.
 import { expect, mock } from 'claude-code/testing'
 import { engine, openPage, test, TOKEN, until } from './kit'
 

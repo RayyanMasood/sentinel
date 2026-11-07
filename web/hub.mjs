@@ -15,9 +15,9 @@ import { fileURLToPath } from 'node:url'
 
 const { SENTINEL_HUB_OPENER: OPENER, SENTINEL_TAB_PORT, SENTINEL_TAB_TOKEN, SENTINEL_TAB_NAME, ...kept } = process.env
 const PORT = Number(kept.SENTINEL_HUB_PORT) || 40999
-// How often sessions are checked, and how long after the last session the hub stays.
+// How often sessions are checked, and how long the hub stays with no session and no page open. The wait rides out a page reloading.
 const CHECK = Number(kept.SENTINEL_HUB_CHECK_MS) || 5000
-const IDLE = Number(kept.SENTINEL_HUB_IDLE_MS) || 3_600_000
+const IDLE = Number(kept.SENTINEL_HUB_IDLE_MS) || 60_000
 const MAX = 4096
 
 const sleep = ms => new Promise(ok => setTimeout(ok, ms))
@@ -105,7 +105,14 @@ function hub() {
     if (req.headers.host !== address) return end(res, 403)
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     if (req.method === 'POST' && url.pathname === '/open') return register(req, res)
-    if (req.method !== 'GET' || !same(url.searchParams.get('k'), token)) return end(res, 403)
+    if (!same(url.searchParams.get('k'), token)) return end(res, 403)
+    if (req.method === 'POST' && url.pathname === '/close') {
+      // Only the tab goes. The session carries on, and its next open brings the tab back.
+      tabs.delete(Number(url.searchParams.get('id')))
+      tell()
+      return end(res, 204)
+    }
+    if (req.method !== 'GET') return end(res, 403)
     const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }
     if (url.pathname === '/') {
       res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': csp })
@@ -137,7 +144,7 @@ function hub() {
         tell()
       }
     }))
-    if (tabs.size) emptySince = Date.now()
+    if (tabs.size || pages.size) emptySince = Date.now()
     else if (Date.now() - emptySince >= IDLE) process.exit(0)
     setTimeout(check, CHECK)
   }

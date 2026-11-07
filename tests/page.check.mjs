@@ -1,6 +1,6 @@
 // The dashboard's Library page, instruction editor, draft card, task page, source page, System page and project tabs in a real browser, served by the real web/serve.mjs:
 //   npx -y -p playwright@1.64.1 -c 'node tests/page.check.mjs'
-// ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. ONLY=hub runs the project tabs and usage figures alone. DUMP=<variant> prints that variant's System view.
+// ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. ONLY=hub runs the project tabs, usage figures and grouped Map alone. DUMP=<variant> prints that variant's System view.
 // It fails on a console or policy error, a page wider than its window at 390, 860 or 1440 px (light and dark), a part
 // that doesn't show, or a message the page sends in the wrong shape. SHOTS=<dir> also saves a screenshot of each.
 // SERVE=<variant> (library, light, insDraft, draft or a proof variant) checks nothing: it keeps the server up on that variant for a
@@ -92,6 +92,19 @@ const lockedSettings = lockDraft(withSettings, '09:12', now)
 const step = (id, ...needs) => ({ id, label: id, needs, check: `npm test -- ${id}`, files: [`src/${id}/**`] })
 const graph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Graph', states: [{ id: 'a', label: 'a' }, step('b', 'a'), step('side', 'a'), step('c', 'b'), step('d', 'c'), step('e', 'd')], loops: [['e', 'b']] }, '', {}, now).run
 
+// The plan whose Map had group boxes crossing: groups side by side, with lines between them, and a step waiting on two others.
+const inGroup = (group, id, ...needs) => ({ ...step(id, ...needs), label: `${id} with a label that runs on for some way`, group })
+const groupedGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Groups', states: [
+  inGroup('usage', 'usage-numbers'), inGroup('usage', 'usage-display', 'usage-numbers'),
+  inGroup('tabs', 'hub-survives'), inGroup('tabs', 'hub-server', 'hub-survives'), inGroup('tabs', 'tabs-open', 'usage-numbers', 'hub-server'), inGroup('tabs', 'tabs-page', 'tabs-open', 'usage-display'),
+  inGroup('finish', 'docs', 'tabs-page'), inGroup('finish', 'verify', 'docs'), inGroup('finish', 'commit', 'verify'),
+] }, '', {}, now).run
+// Groups one after another have no reason to leave the first row.
+const lineGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Line', states: [inGroup('one', 'a'), inGroup('one', 'b', 'a'), inGroup('two', 'c', 'b'), inGroup('three', 'd', 'c')] }, '', {}, now).run
+// Group one's box has an empty corner, where group two's step would fit if only cards were kept apart. Its line leaves by the next
+// gap, so nothing else stops it landing there.
+const cornerGraph = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Corner', states: [inGroup('one', 'a'), inGroup('one', 'a2', 'a'), inGroup('one', 'a3', 'a'), inGroup('two', 'b', ...[]), inGroup('three', 'c', 'b')] }, '', {}, now).run
+
 // A plan that quotes its source. How the page can fail here: the count, note or quotes are wrong or missing, the quotes
 // aren't folded, Keep and Take it out send the wrong thing, Lock can be pressed with an addition unanswered (even after a
 // failed send), Asked for isn't first, the Plan: line stays, another state's refusal shows, an addition has no reason, marks
@@ -140,6 +153,9 @@ const VARIANTS = {
   proofNoAdds: page({ ...quotedPlan(asks).run, active: 'done' }),
   noProof: page(act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Old', loops: [], states: [{ id: 'a', label: 'a', ref: 'plan.md, step 1' }] }, '09:01').run),
   graph: page(graph, { parallel: true }),
+  groupedGraph: page(groupedGraph, { parallel: true }),
+  lineGraph: page(lineGraph, { parallel: true }),
+  cornerGraph: page(cornerGraph, { parallel: true }),
   library: page(emptyRun()),
   settings: page(withSettings, { draftKey: 's1', draftLibrary: withSettings.draft.library, parallel: true }),
   settingsRun: page(lockedSettings, { parallel: true }),
@@ -1063,6 +1079,69 @@ async function usagePage() {
   await p.context().close()
 }
 
+// ---- group boxes on the Map of a parallel plan ----
+
+async function groupedMap() {
+  const measure = pg => pg.evaluate(() => {
+    const rect = e => e.getBoundingClientRect()
+    const cards = [...document.querySelectorAll('#v-map .mcard')], frames = [...document.querySelectorAll('#v-map svg rect.fr')].map(rect)
+    const labels = [...document.querySelectorAll('#v-map .mgl')]
+    const crossing = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+    const lines = [...document.querySelectorAll('#v-map svg path.ar')], under = []
+    for (const l of lines) {
+      const m = l.getScreenCTM()
+      for (let i = 3; i < l.getTotalLength() - 3; i += 3) {
+        const q = l.getPointAtLength(i), x = q.x * m.a + m.e, y = q.y * m.d + m.f
+        if (cards.some(c => { const r = rect(c); return x > r.left + 2 && x < r.right - 2 && y > r.top + 2 && y < r.bottom - 2 })) { under.push(`${l.dataset.a}>${l.dataset.b}`); break }
+      }
+    }
+    return {
+      frames: frames.length,
+      crossed: frames.flatMap((a, i) => frames.slice(i + 1).filter(b => crossing(a, b))).length,
+      gap: Math.min(...frames.flatMap((a, i) => frames.slice(i + 1).map(b => Math.max(b.top - a.bottom, a.top - b.bottom, b.left - a.right, a.left - b.right)))),
+      // How many frames each card sits in, and each name is clear of every card.
+      homes: cards.filter(c => c.dataset.task).map(c => frames.filter(f => crossing(rect(c), f)).length),
+      hidden: labels.filter(l => cards.some(c => crossing(rect(l), rect(c)))).map(l => l.textContent),
+      names: labels.map(l => l.firstChild.textContent),
+      over: cards.flatMap(c => [...c.querySelectorAll('.t1, .t3, .t3 > *, .idt, .lb')].filter(e => rect(e).right > rect(c).right - 1).map(e => e.textContent)),
+      cutIds: cards.filter(c => { const i = c.querySelector('.idt'); return i && i.scrollWidth > i.clientWidth }).map(c => c.dataset.task),
+      waits: cards.map(c => c.querySelector('.t3')?.textContent ?? '').find(t => t.includes(' and ')),
+      tips: cards.map(c => c.title).filter(t => t.includes('Waits for')),
+      tops: new Set(cards.map(c => Math.round(rect(c).top))).size,
+      under,
+    }
+  })
+  for (const dark of [false, true]) {
+    const p = await open('groupedGraph', '', dark ? { dark } : undefined)
+    await p.locator('#viewSeg [data-v=map]').click()
+    const m = await measure(p)
+    const at = dark ? 'the grouped Map, dark,' : 'the grouped Map'
+    check(m.frames === 3, `${at} has its three group boxes (${m.frames})`)
+    check(m.crossed === 0 && m.gap >= 10, `${at}: no group box crosses another (${m.crossed} crossed, ${m.gap}px apart)`)
+    check(m.homes.every(n => n === 1), `${at}: each step sits in one box (${m.homes.join()})`)
+    check(!m.hidden.length, `${at}: a card hides no group's name (${m.hidden.join()})`)
+    check(m.names.join() === 'Usage,Tabs,Finish', `${at}: group names have capitals (${m.names.join()})`)
+    check(!m.over.length, `${at}: no text runs out of a card (${m.over.join(' | ')})`)
+    check(!m.cutIds.length, `${at}: no step's name is cut short (${m.cutIds.join()})`)
+    check(m.tips.some(t => t.includes('Waits for tabs-open and usage-display')), `${at}: the hover has what the card shortens (${m.waits})`)
+    check(!m.under.length, `${at}: no line runs under a card (${m.under.join()})`)
+    if (shots) await p.screenshot({ path: join(shots, `grouped${dark ? '-dark' : ''}.png`), fullPage: true })
+    await p.context().close()
+  }
+  const p = await open('lineGraph', '')
+  await p.locator('#viewSeg [data-v=map]').click()
+  const m = await measure(p)
+  check(m.frames === 3 && m.crossed === 0, 'groups in a line have their boxes')
+  check(m.tops === 1, `groups in a line stay on one row (${m.tops} rows)`)
+  await p.context().close()
+  const q = await open('cornerGraph', '')
+  await q.locator('#viewSeg [data-v=map]').click()
+  const n = await measure(q)
+  check(n.frames === 3 && n.crossed === 0 && n.homes.every(x => x === 1), `a step stays out of another group's empty corner (${n.homes.join()})`)
+  check(n.gap >= 10, `group boxes one above the other keep apart (${n.gap}px)`)
+  await q.context().close()
+}
+
 // ---- the project tabs ----
 
 async function hubPage() {
@@ -1124,30 +1203,30 @@ async function hubPage() {
     const frame = s => p.frames().find(f => f.url().startsWith(`http://127.0.0.1:${s.port}/`))
     const shown = () => p.locator('iframe.on').getAttribute('src')
 
-    await soon(async () => (await names()).join() === 'shop', 'the first tab showing')
+    await soon(async () => (await names()).join() === 'Shop', 'the first tab showing')
     check((await shown()) === a.url, 'the first tab shows its session')
     await soon(() => frame(a)?.locator('#themeBtn').isVisible(), "the session's page showing in its frame")
     check(await p.locator('#bell').isVisible(), 'the bar has the bell')
 
     // A second session adds a tab and the page moves to it, with no new browser tab.
     await openTab(b, 'blog')
-    await soon(async () => (await names()).join() === 'shop,blog', 'the second tab showing')
-    await soon(async () => (await chosen()) === 'blog', 'the page moving to the new tab')
+    await soon(async () => (await names()).join() === 'Shop,Blog', 'the second tab showing')
+    await soon(async () => (await chosen()) === 'Blog', 'the page moving to the new tab')
     check((await shown()) === b.url, 'the new tab shows its session')
     check(opened().length === 1, 'the second session opens no second browser tab')
 
     // Switching, by mouse and by keys, and the address keeps up.
     await tab('shop').click()
-    check((await chosen()) === 'shop' && (await shown()) === a.url, 'a click switches tab')
+    check((await chosen()) === 'Shop' && (await shown()) === a.url, 'a click switches tab')
     await tab('blog').click()
     check(new URL(p.url()).hash === `#${b.port}`, 'the address follows the tab')
     await tab('shop').click()
     check(await p.locator(`iframe[src="${b.url}"]`).evaluate(f => getComputedStyle(f).visibility === 'hidden'), 'the other frame is hidden')
     await tab('shop').focus()
     await p.keyboard.press('ArrowRight')
-    check((await chosen()) === 'blog', 'the arrow key moves on')
+    check((await chosen()) === 'Blog', 'the arrow key moves on')
     await p.keyboard.press('ArrowRight')
-    check((await chosen()) === 'shop', 'the arrow key wraps round')
+    check((await chosen()) === 'Shop', 'the arrow key wraps round')
 
     // Status: the word on the tab and the browser tab's title. No notification for the tab you are on.
     a.put(VARIANTS.blocked)
@@ -1163,7 +1242,7 @@ async function hubPage() {
     await soon(async () => (await word('blog')) === 'Needs you', "the other tab's word")
     await soon(async () => (await p.evaluate(() => window.__notes.length)) === 1, 'a notification for another tab')
     const [note] = await p.evaluate(() => window.__notes)
-    check(note?.title.startsWith('blog · Needs you') && note?.tag === `sentinel-${b.port}`, `the notification names the project (${JSON.stringify(note)})`)
+    check(note?.title.startsWith('Blog · Needs you') && note?.tag === `sentinel-${b.port}`, `the notification names the project (${JSON.stringify(note)})`)
     check((await frame(b).evaluate(() => window.__notes.length)) === 0, 'the page in a frame raises none itself')
     b.put(VARIANTS.closedDone)
     await soon(async () => (await word('blog')) === 'Done', 'the Done word')
@@ -1197,8 +1276,8 @@ async function hubPage() {
     await soon(async () => (await themeOf(b)) === 'dark', 'the other frame taking the theme')
     // shop is not the last to ask for the page, so only the address can bring it back.
     await p.reload()
-    await soon(async () => (await names()).join() === 'shop,blog', 'the tabs after a reload')
-    check((await chosen()) === 'shop', 'a reload stays on the tab')
+    await soon(async () => (await names()).join() === 'Shop,Blog', 'the tabs after a reload')
+    check((await chosen()) === 'Shop', 'a reload stays on the tab')
     await soon(async () => (await barTheme()) === 'dark' && (await frame(b)?.locator('#themeBtn').isVisible()) && (await themeOf(b)) === 'dark', 'the theme after a reload')
     await tab('blog').click()
     await frame(b).locator('#themeBtn').click()
@@ -1230,8 +1309,8 @@ async function hubPage() {
     await tab('blog').click()
     p.sendsFail = true
     b.child.kill()
-    await soon(async () => (await names()).join() === 'shop', 'the tab going with its session')
-    check((await chosen()) === 'shop' && (await shown()) === a.url, 'the page moves off a tab that went')
+    await soon(async () => (await names()).join() === 'Shop', 'the tab going with its session')
+    check((await chosen()) === 'Shop' && (await shown()) === a.url, 'the page moves off a tab that went')
     p.sendsFail = false
 
     // A new token for the same port loads the frame again.
@@ -1241,8 +1320,101 @@ async function hubPage() {
     await openTab(other, 'other')
     await soon(async () => (await names()).length === 2, 'the other tab')
     await openTab({ ...other, token: 'd'.repeat(32) }, 'renamed')
-    await soon(async () => (await names()).join() === 'shop,renamed', 'the tab taking its new name')
+    await soon(async () => (await names()).join() === 'Shop,Renamed', 'the tab taking its new name')
     check(await p.locator(`iframe[src$="${'d'.repeat(32)}"]`).count() === 1, 'the frame takes the new token')
+
+    // Closing: a tab has a close button, the next tab takes its place, and the session's next open brings it back.
+    const box = name => p.locator('.tab', { hasText: name })
+    const closer = name => box(name).locator('.x')
+    const openedBefore = opened().length
+    check((await closer('Renamed').getAttribute('aria-label')) === 'Close Renamed', 'the close button says what it closes')
+    await tab('Shop').click()
+    await p.mouse.move(700, 500)
+    const seen = l => l.evaluate(e => getComputedStyle(e).opacity)
+    check((await seen(closer('Renamed'))) === '0' && (await seen(closer('Shop'))) === '1', 'a close button shows on the tab you are on')
+    await box('Renamed').hover()
+    check((await seen(closer('Renamed'))) === '1', 'and on the tab you point at')
+    await tab('Renamed').click()
+    await closer('Renamed').click()
+    await soon(async () => (await names()).join() === 'Shop', 'the close button closing the tab')
+    check((await chosen()) === 'Shop' && (await shown()) === a.url, 'the page moves to the tab next to it')
+    check(await a.child.exitCode === null, 'the session carries on')
+    await openTab(other, 'renamed')
+    await soon(async () => (await names()).join() === 'Shop,Renamed', 'the closed tab coming back when its session opens again')
+    await soon(async () => (await chosen()) === 'Renamed', 'the page moving to the tab that came back')
+    check(opened().length === openedBefore, 'a tab coming back opens no second browser tab')
+    // By the keys, and the keys stay in the bar.
+    await tab('Renamed').focus()
+    await p.keyboard.press('Delete')
+    await soon(async () => (await names()).join() === 'Shop', 'the Delete key closing the tab')
+    await soon(() => tab('Shop').evaluate(e => e === document.activeElement), 'the keys staying on the next tab')
+    await openTab(other, 'renamed')
+    await soon(async () => (await chosen()) === 'Renamed', 'the tab back again')
+    // By the middle button, as in a browser.
+    await tab('Renamed').click({ button: 'middle' })
+    await soon(async () => (await names()).join() === 'Shop', 'the middle button closing the tab')
+    // Closing the middle one of three, the tab after it takes its place. Closing the last, the one before it does.
+    const thirdServer = createServer((_, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<!doctype html><title>x</title>') })
+    await new Promise(ok => thirdServer.listen(0, '127.0.0.1', ok))
+    const third = { port: thirdServer.address().port, token: 'f'.repeat(32) }
+    await openTab(other, 'renamed')
+    await openTab(third, 'third')
+    await soon(async () => (await names()).join() === 'Shop,Renamed,Third', 'three tabs')
+    await tab('Renamed').click()
+    await closer('Renamed').click()
+    await soon(async () => (await names()).join() === 'Shop,Third', 'the middle tab closing')
+    check((await chosen()) === 'Third', `the tab after it takes its place (${await chosen()})`)
+    await openTab(other, 'renamed')
+    await soon(async () => (await names()).join() === 'Shop,Third,Renamed', 'a tab coming back goes at the end')
+    await closer('Renamed').click()
+    await soon(async () => (await names()).join() === 'Shop,Third', 'the end tab closing')
+    check((await chosen()) === 'Third', `the tab before it takes its place (${await chosen()})`)
+    await closer('Third').click()
+    await soon(async () => (await names()).join() === 'Shop', 'back to one tab')
+    thirdServer.close()
+    // The last one leaves the note on how to add a session, and the bar's own tab list stays alive.
+    await closer('Shop').click()
+    await soon(async () => (await names()).length === 0, 'the last tab closing')
+    await p.locator('#none').waitFor()
+    await openTab(a, 'shop')
+    await soon(async () => (await names()).join() === 'Shop', 'the last tab coming back')
+    check(await p.locator('#none').isHidden(), 'the note goes when a tab comes back')
+    await soon(() => frame(a)?.locator('#themeBtn').isVisible(), 'its page showing again')
+    await openTab(other, 'renamed')
+    await soon(async () => (await chosen()) === 'Renamed', 'the second tab back')
+    await tab('Shop').click()
+
+    // Capitals: a folder's name reads as words, and the hover keeps how the folder is written.
+    const capitals = await p.evaluate(() => [['docs-site', 'Docs Site'], ['my_cool-app', 'My Cool App'], ['k2-xauto-fe', 'K2 Xauto Fe'], ['Sentinel', 'Sentinel'], ['myApp', 'MyApp'], ['---', '---']].filter(([a, b]) => words(a) !== b))
+    check(!capitals.length, `folder names read as words (${capitals.join(' | ')})`)
+    const folder = { port: other.port, token: other.token }
+    await openTab(folder, 'docs-site')
+    await soon(async () => (await names()).join() === 'Shop,Docs Site', 'the tab with two words')
+    check((await tab('Docs Site').getAttribute('title')) === 'docs-site', 'the hover keeps the folder as written')
+    await tab('Shop').click()
+
+    // The look of a browser tab: rounded on top, open at the bottom and in the colour of the page's header, the others on the bar.
+    const look = await p.evaluate(() => {
+      const css = e => getComputedStyle(e), bar = document.querySelector('.bar'), on = document.querySelector('.tab.on'), off = document.querySelector('.tab:not(.on)')
+      const frame = document.querySelector('iframe.on').getBoundingClientRect(), r = on.getBoundingClientRect()
+      return {
+        joined: Math.round(frame.top - r.bottom), corners: [css(on).borderTopLeftRadius, css(on).borderTopRightRadius, css(on).borderBottomLeftRadius], rule: css(bar).borderBottomWidth,
+        same: css(on).backgroundColor === css(document.body).backgroundColor, off: css(off).backgroundColor, bar: css(bar).backgroundColor, body: css(document.body).backgroundColor,
+        flares: ['::before', '::after'].map(at => getComputedStyle(on, at).content === 'none' ? 'none' : getComputedStyle(on, at).width),
+        width: Math.round(r.width), height: Math.round(r.height),
+      }
+    })
+    check(look.joined === 0 && look.rule === '0px', `the tab you are on joins the page under it (${look.joined}px, ${look.rule} rule)`)
+    check(look.corners[0] === '8px' && look.corners[1] === '8px' && look.corners[2] === '0px', `its top corners are round and its bottom ones square (${look.corners})`)
+    check(look.same && look.bar !== look.body && look.bar !== 'rgba(0, 0, 0, 0)', `it has the page header's colour, and the bar another (${look.body}, ${look.bar})`)
+    check(look.off === 'rgba(0, 0, 0, 0)', `the other tabs lie flat on the bar (${look.off})`)
+    check(look.flares.join() === '8px,8px', `its foot curves out to the bar (${look.flares})`)
+    check(look.width >= 148 && look.width <= 240 && look.height === 34, `tabs have a browser tab's size (${look.width} by ${look.height})`)
+    await box('Docs Site').hover()
+    const hovered = await box('Docs Site').evaluate(e => getComputedStyle(e).backgroundColor)
+    check(hovered !== 'rgba(0, 0, 0, 0)', 'a tab you point at lights up')
+    await p.mouse.move(700, 500)
+    if (shots) await p.screenshot({ path: join(shots, 'hub-tabs.png'), clip: { x: 0, y: 0, width: 900, height: 120 } })
 
     // Sizes: many long names scroll sideways in the bar, and nothing else moves.
     const extra = []
@@ -1287,6 +1459,7 @@ async function hubPage() {
 try {
   await hubPage()
   await usagePage()
+  await groupedMap()
   if (process.env.ONLY !== 'hub') {
   if (process.env.ONLY !== 'others') await systemPage()
   await historyPage()

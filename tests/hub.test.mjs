@@ -299,6 +299,71 @@ test('a second hub exits quietly and the first keeps its tabs', async t => {
   assert.equal((await h.tabs(k)).tabs.length, 1)
 })
 
+test('closing a tab takes it off the list, and only the page can do it', async t => {
+  const h = await hub(t)
+  const s = await session(t), two = await session(t)
+  const k = await h.key(s)
+  await h.open({ port: two.address().port, token: TOKEN, name: 'second' })
+  const open = await page(h.port, k)
+  t.after(() => open.close())
+  await until(() => open.latest()?.tabs.length === 2, 'both tabs')
+  const id = s.address().port
+  for (const path of [`/close?id=${id}`, `/close?k=${'b'.repeat(32)}&id=${id}`]) assert.equal((await send(h.port, path, { method: 'POST' })).status, 403)
+  assert.equal((await send(h.port, `/close?k=${k}&id=${id}`)).status, 404)
+  assert.equal((await send(h.port, `/close?k=${k}&id=${id}`, { method: 'POST', headers: { host: `evil.example:${h.port}` } })).status, 403)
+  assert.equal(open.latest().tabs.length, 2)
+  assert.equal((await send(h.port, `/close?k=${k}&id=${id}`, { method: 'POST' })).status, 204)
+  await until(() => open.latest().tabs.length === 1, 'the open page hearing of it')
+  assert.deepEqual(open.latest().tabs.map(x => x.name), ['second'])
+  assert.equal((await send(h.port, `/close?k=${k}&id=1`, { method: 'POST' })).status, 204)
+})
+
+test('a closed tab comes back when its session opens again, and the page moves to it', async t => {
+  const h = await hub(t)
+  const s = await session(t)
+  const k = await h.key(s)
+  const open = await page(h.port, k)
+  t.after(() => open.close())
+  await until(() => open.latest()?.tabs.length === 1, 'the tab')
+  const id = s.address().port
+  await send(h.port, `/close?k=${k}&id=${id}`, { method: 'POST' })
+  await until(() => open.latest().tabs.length === 0, 'the tab closing')
+  assert.equal((await h.open({ port: id, token: TOKEN, name: 'first' })).status, 204)
+  await until(() => open.latest().tabs.length === 1, 'the tab coming back')
+  assert.equal(open.latest().focus.id, id)
+  assert.equal(h.opened().length, 1)
+})
+
+test('with the page closed too, opening again opens the browser', async t => {
+  const h = await hub(t)
+  const s = await session(t)
+  const k = await h.key(s)
+  const id = s.address().port
+  await send(h.port, `/close?k=${k}&id=${id}`, { method: 'POST' })
+  assert.equal((await h.tabs(k)).tabs.length, 0)
+  await h.open({ port: id, token: TOKEN, name: 'first' })
+  await until(() => h.opened().length === 2, 'the browser opening again')
+  assert.equal((await h.tabs(k)).tabs.length, 1)
+})
+
+test('with the last session gone the hub stays while the page is open, and exits soon after it closes', async t => {
+  const h = await hub(t, { SENTINEL_HUB_IDLE_MS: '300' })
+  const s = await session(t)
+  const k = await h.key(s)
+  const open = await page(h.port, k)
+  t.after(() => open.close())
+  await new Promise(ok => s.close(ok))
+  await until(() => open.latest()?.tabs.length === 0, 'the tab going')
+  await sleep(700)
+  assert.equal(h.child.exitCode, null)
+  open.close()
+  assert.equal(await Promise.race([h.gone, sleep(4000).then(() => 'still up')]), 0)
+})
+
+test('the hub stays a minute with nothing open, so it is gone long before an hour', () => {
+  assert.match(readFileSync(HUB, 'utf8'), /SENTINEL_HUB_IDLE_MS\) \|\| 60_000/)
+})
+
 test('with no sessions the hub exits once idle, and not while a session is open', async t => {
   const h = await hub(t, { SENTINEL_HUB_IDLE_MS: '500' })
   const s = await session(t)
@@ -356,9 +421,10 @@ test('the open command starts a hub when there is none, reuses it after, and pri
   await until(() => open.latest().tabs.length === 2, 'the second tab')
   assert.deepEqual(open.latest().tabs.map(x => x.name), ['first', 'second'])
   assert.equal(readFileSync(log, 'utf8').split('\n').filter(Boolean).length, 1)
-  // With both sessions gone it exits by itself, so nothing is left running.
+  // With both sessions gone and the page closed it exits by itself, so nothing is left running.
   await new Promise(ok => s.close(ok))
   await new Promise(ok => two.close(ok))
+  open.close()
   await until(async () => !(await listening(port)), 'the hub exiting', 8000)
 })
 
