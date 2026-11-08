@@ -31,15 +31,16 @@ export function renderBand(el: Els, vm: VM, on: BandActions) {
   const added = vm.phase === 'draft' ? vm.states.find(s => s.added && !s.okAt) : undefined
   // So does a setting looser than the plan. A lock with it unanswered keeps the plan's weight.
   const loose = vm.phase === 'draft' ? vm.settingRows?.find(x => x.owed) : undefined
+  const omitted = vm.points?.filter(p => 'left' in p).length ?? 0
   type Band = [string, Tone, [string, string, () => void][]]
   // A flow or an instruction Claude drafted waits behind what needs you in the plan, and ahead of where it stands.
   const flow: Band | undefined = f && [`Sentinel: Claude drafted ${'states' in f ? `the flow "${f.name}" (${count(f.states.length, 'state')})` : `the instruction "${f.name}"`}. Save it?`, 'ask',
-    [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save personal', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
+    [['fproj', 'Save to project', () => on.saveFlow('project')], ['fpers', 'Save for every project', () => on.saveFlow('personal')], ['fdrop', 'Discard', on.discardFlow]]]
   const drift: Band | undefined = drifted && !live && !f ? [`Sentinel: ${count(drifted, 'part')} changed since the map was drawn.`, 'warn', [['system', 'System', on.system ?? (() => on.open(false))]]] : undefined
   const [text, tone, buttons]: Band = closed && (!a || !live) ? closed : drift ? drift : !a || !live ? flow!
     : added ? [`Sentinel: Claude added ${added.id}, and nothing asks for it. "${added.added}"`, 'warn', [['keep', 'Keep it', () => on.keep(added.id)], ['takeout', 'Take it out', () => on.takeOut(added.id)]]]
     : loose ? [`Sentinel: Claude asks for ${loose.kind === 'plan' ? (loose.weight ? `this plan on ${loose.weight}` : `${loose.name} off for this plan`) : `${loose.states.join(', ')} on ${loose.weight}`}, looser than the plan. "${loose.why ?? ''}"`, 'warn', [['keep', 'Keep it', () => on.setRow(loose.id, true)], ['takeout', loose.weight ? `Use ${vm.planWeight}` : 'Leave it on', () => on.setRow(loose.id, false)]]]
-    : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
+    : vm.phase === 'draft' ? [`Sentinel draft "${vm.title}": ${vm.states.length - 1} states, starts at ${a.id}${omitted ? ` · ${count(omitted, 'point')} left out` : ''}. Check it, then lock it.`, 'warn', [['review', 'Review', () => on.open(true)], ['lock', 'Lock', on.lock]]]
     : vm.paused ? [`Sentinel is paused at ${a.id}.`, 'warn', [['resume', 'Resume', on.resume], ['open', 'Open', () => on.open(false)]]]
     : vm.blocked ? [`Sentinel: needs you on ${a.id}. ${vm.blocked.what}`, 'warn', [['open', 'Open', () => on.open(true)]]]
     : vm.trap ? [`Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`, 'err', [['open', 'Open', () => on.open(true)]]]
@@ -145,7 +146,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
   const models = [...new Set(vm.spend.map(s => s.model))].join(', ')
   // A row of its own under the tokens, as they already fill their line.
   const usageRows = (label: string) => vm.usage
-    ? [line([label, 'dim'], [...vm.usage.windows.map(w => `${w.name === 'Week' ? 'week' : w.name} ${w.percent}%`), ...(vm.usage.plan ? [`this plan ${vm.usage.plan}`] : [])].join(' · '))]
+    ? [line([label, 'dim'], [...vm.usage.windows.map(w => `${w.name === 'Week' ? 'week' : w.name} ${w.percent}%`), `this plan ${vm.usage.plan.cost}${vm.usage.plan.share ? `, ${vm.usage.plan.share}` : ''}`].join(' · '))]
     : []
 
   const auditRows = (all: boolean) => {
@@ -483,7 +484,7 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
   const flowRows = () => {
     const f = vm.flowDraft
     if (!f) return []
-    const save = para('Save it with the buttons above the prompt, or /sentinel flow save project, /sentinel flow save personal or /sentinel flow discard.', 'dim')
+    const save = para('Save it with the buttons above the prompt, or /sentinel flow save project, preset or everywhere, or /sentinel flow discard.', 'dim')
     if (!('states' in f)) {
       return [
         line(['INSTRUCTION DRAFT', 'ask', true], [`  ${f.name}`, undefined, true], ['  not saved yet', 'dim']),

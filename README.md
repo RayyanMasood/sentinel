@@ -25,6 +25,7 @@ A plan can drift from what you asked for, or pick up work nobody requested. So e
 - **A state with nothing to quote shows as Claude's addition, with its reason.** On a draft it waits for you: Keep it or Take it out in the terminal or on the dashboard, and Lock opens once all are answered. `/sentinel lock` keeps any you haven't answered, and a plan-mode sign-off with an addition in it waits as a draft.
 - **A state added during the run goes in and finishes.** It stays marked as Claude's addition, and it stops for your OK only if it could involve a dependency change, CI or deploy config, a migration, or auth code.
 - **A section nothing quotes gets a note.** A section can be background, so this doesn't stop the plan. Sections named as context, overview, risks and similar get no note.
+- **Each point you asked for is listed.** On a draft, Claude lists the points you made as `points`: your words, with the states that deliver each one, or its reason for leaving one out. Sentinel compares each quote as it does a state's, and refuses a state name the plan doesn't have. The draft card shows them under What you asked for, with a point left out in amber, and the band above the prompt counts the ones left out. A draft that lists none says so. A state taken out of the draft takes its points with it, and a point left with no states shows as left out. The list can't change once the plan runs.
 
 Sentinel keeps its own copy of each source, so later edits to a file change nothing. Only the messages a quote uses are written to disk or shown on the page. `/sentinel source` prints the saved copy with each quote marked. This is the `quote-the-source` built-in, on at every weight.
 
@@ -109,22 +110,22 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 
 ### Settings per state
 
-Experimental, and off until you turn it on. The switch is the row marked Experimental under the weights on the Library page, for this project or your default. It is there for testing. No weight turns it on, Claude can't, and a plan reads it when it is drafted, so flipping it mid-run changes nothing in a running plan. With it off, Sentinel drops these fields from what Claude sends, says so once, and the plan runs as it did before.
+Experimental, and off until you turn it on. The switch is the row marked Experimental under the weights on the Library page, for this project, the preset in use or every project. It is there for testing. No weight turns it on, Claude can't, and a plan reads it when it is drafted, so flipping it mid-run changes nothing in a running plan. With it off, Sentinel drops these fields from what Claude sends, says so once, and the plan runs as it did before.
 
 With it on, a plan can differ from its one weight where a state calls for it:
 
 - **A per-state weight:** a state names `weight`, with a reason or your own words. It moves `fast-checks`, `failure-list`, `fails-first`, `break-it-once` and `fails-without-change`, plus your own start and close instructions that list weights. Everything else stays plan-wide, and a switch you flipped by hand beats any weight.
 - **An addition:** a state names `adds`, Library instructions that fire per state, each with a reason. Sentinel refuses an unknown name, a plan-wide instruction and one you switched off by hand. One that is off only because of the weight can be added.
-- **A skip:** Claude can skip a told instruction that makes no sense for a state, with `decide` and a reason, and it shows under Decided without asking you. The ones Sentinel checks still run.
+- **A skip:** Claude can skip a told instruction that makes no sense for a state with `decide`, naming it in `skip` with a reason (`to` names a member's state). Sentinel refuses a name that isn't told at that state, and lists what can be skipped there. The ones Sentinel checks still run. A skip shows under Decided without asking you, and as −1 on the state's Map card.
 - **The plan's own settings:** `settings` sets the plan's weight or turns an instruction on or off, each with a reason or your own words.
 
 A stricter setting applies with its reason shown. A looser one waits for you: the draft card lists what differs, one row for each reason, with Keep and Use Standard, or Remove on an addition, and the band above the prompt asks the same. Hands-free, nobody is there to answer, so a state's lighter weight goes through and shows under Decided without asking you. Lock and go hands-free does the same for the plan's own settings, which don't change once a plan runs. Words you typed count as your answer, once Sentinel has found them in your messages. For anything looser that takes at least 5 words that name it, and a state's row keeps a button to take it back, since Sentinel compares words and not what they mean. If you lock with one unanswered, the plan runs without it. A state added mid-run takes the plan's weight unless it names a stricter one.
 
-Each state's task page shows its weight and additions. A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
+Each state's Map card and task page show its weight, its additions and its skips (see [The dashboard](#the-dashboard)). A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
 
 ### Your own instructions
 
-An instruction is a JSON file named after it, in `.sentinel/instructions/` (project, committed) or `~/.sentinel/instructions/` (personal):
+An instruction is a JSON file named after it, in `.sentinel/instructions/` (this project, committed), `~/.sentinel/presets/<name>/instructions/` (a preset) or `~/.sentinel/instructions/` (every project):
 
 ```json
 {
@@ -139,9 +140,17 @@ An instruction is a JSON file named after it, in `.sentinel/instructions/` (proj
 
 ### Switches
 
-Edit and Write can't touch `.sentinel/library.json` or `~/.sentinel/library.json`, so the switches stay yours. A shell redirect isn't caught, as with `.sentinel/parallel`.
+Edit and Write can't touch `.sentinel/library.json`, `~/.sentinel/library.json` or a preset's `library.json`, so the switches stay yours. A shell redirect isn't caught, as with `.sentinel/parallel`.
 
-`.sentinel/library.json` holds the project's weight and switches and is committed, so a team shares them. `~/.sentinel/library.json` holds your default for every project. For each item the project's switch counts first, then yours, then the weight. Picking a weight clears that file's switches for the built-ins; your own items keep theirs, and they are on unless you switch them off. A flow that is off doesn't add itself by its rule, but you can still add it by hand.
+A weight and switches can sit in three places, and the closest one wins:
+
+1. **This project:** `.sentinel/library.json`, committed, so a team shares it.
+2. **The preset in use,** if the project names one (see [Presets](#presets)).
+3. **Every project:** `~/.sentinel/library.json`.
+
+For each item the project's switch counts first, then the preset's, then every project's, then the weight. The weight is the closest place's that picks one, and it puts aside the built-in switches farther out. Picking a weight clears that place's own switches for the built-ins; your own items keep theirs, and they are on unless you switch them off. A flow that is off doesn't add itself by its rule, but you can still add it by hand.
+
+On the Library page, Change for picks the place a switch or weight goes to, and says what it reaches, such as "Reaches every project that uses game-dev". Each row says what decided it when that is a place farther out, such as "Off here, from game-dev". The commands take `preset` or `everywhere` at the end for the same.
 
 A plan keeps the set it was locked with. While you check a draft, the dashboard's "Instructions for this plan" changes that plan's copy, and "Also make it this project's default" writes it to the project's switches when you lock.
 
@@ -151,7 +160,7 @@ A file Sentinel didn't save on this computer, such as one from a clone, stays of
 
 ![Claude drafts a flow, the user saves it, then adds it to a draft plan from the list view](docs/media/flows.webp)
 
-A flow is a set of states you define once and add to plans: a review before a publish, a database snapshot before a migration, lint and type checks at the end. Each flow is a JSON file named after it. Project flows live in `.sentinel/flows/` and are committed with the code. Personal flows live in `~/.sentinel/flows/` and work in every project. When both have one of the same name, the project's wins.
+A flow is a set of states you define once and add to plans: a review before a publish, a database snapshot before a migration, lint and type checks at the end. Each flow is a JSON file named after it. Project flows live in `.sentinel/flows/` and are committed with the code. A preset's live in `~/.sentinel/presets/<name>/flows/` and show only in projects that use it. Flows in `~/.sentinel/flows/` work in every project. When two places have one of the same name, the closest wins.
 
 ```json
 {
@@ -166,7 +175,7 @@ A flow is a set of states you define once and add to plans: a review before a pu
 
 States take the same fields as a plan's. Tags fill in from the state the flow goes beside: `{{state.id}}`, `{{state.label}}`, `{{state.files}}` (as quoted globs in a check) and `{{plan.title}}`.
 
-**Getting one.** Ask Claude for a flow in the chat, or press Ask Claude for a flow on the Flows tab of the dashboard's Library page. Sentinel checks it the way it checks a plan and holds it until you choose: Save to project, Save personal or Discard, from the band above the prompt, the Library page or `/sentinel flow save project|personal` and `/sentinel flow discard`. Instructions Claude drafts are kept the same way. You can also write the file by hand, use the dashboard's editor (New flow), or tick tasks of any plan in the List view and press Make a flow of them.
+**Getting one.** Ask Claude for a flow in the chat, or press Ask Claude for a flow on the Flows tab of the dashboard's Library page. Sentinel checks it the way it checks a plan and holds it until you choose where it goes, or Discard: from the band above the prompt, the Library page's Save to, or `/sentinel flow save project|preset|everywhere` and `/sentinel flow discard`. Instructions Claude drafts are kept the same way. You can also write the file by hand, use the dashboard's editor (New flow), or tick tasks of any plan in the List view and press Make a flow of them.
 
 **Adding one.** While you check a draft, `/sentinel add review after api` puts the flow in after the state `api` (`start`, `end` and `before <state>` work too). In the dashboard's List view, press the dashed square where it should go, pick a flow and press Add here. Its states go in as a group named after the flow, with ids of their own (`review-tests`). `/sentinel drop review`, or Remove on the group, takes it out. Only you add and remove flows, and they stay put when Claude revises the draft.
 
@@ -174,23 +183,29 @@ States take the same fields as a plan's. Tags fill in from the state the flow go
 
 ## Presets
 
-A preset is one file, `~/.sentinel/presets/<name>.json`, holding a project's Library setup: its weight, its switches, its own instructions and flows, and the MCP servers it needs. The same file is what you export and import. Sentinel ships none; you save your own. The commands are in the [Commands](#commands) table.
+A preset is settings that several projects share: a weight, switches, needed MCPs, and instructions and flows of its own. It is a folder, `~/.sentinel/presets/<name>/`, laid out like `.sentinel/`: `library.json`, `instructions/` and `flows/`. A project uses one by naming it as `preset` in its `.sentinel/library.json`. Nothing is copied, so the preset sits between This project and Every project (see [Switches](#switches)), and the project's own settings still win. Sentinel ships none. The commands are in the [Commands](#commands) table.
 
-**Save.** Press "Save this setup as a preset" on the Library page, or type `/sentinel preset save <name>`. It keeps this project's weight, switches, needed MCPs, and its own trusted instructions and flows. Items you haven't trusted here are left out, and the reply names them. The project then counts as using that preset.
+**Choose.** Press Change (or Choose a preset) on the Library page's Preset line. Each preset shows its weight, switches, what only it has, its MCPs and what using it would turn on or off here. Use it or pick No preset, or type `/sentinel preset <name>` or `preset none`. Either one changes only the one line in `.sentinel/library.json` and leaves nothing behind; choosing the old one again is the undo. A preset's own instructions and flows show only in projects that use it.
 
-**Use.** Pick a preset on the Library page. Its details show what it would turn on and off, what it adds, and the state of each MCP here, before you use it. `/sentinel preset <name>` does the same. A preset sets only what it names, and everything else stays. An instruction or flow whose name the project already has keeps the project's. A different weight resets the built-ins you switched by hand, as picking a weight does, and the preview says so. `/sentinel preset undo` (or Undo on the page) takes the last use back in the same session. Any other Library change ends that chance.
+**Make one.** New preset (`/sentinel preset new <name>`) starts empty and is used here at once, and Change for moves to it, so what you switch or save next goes into it. Make one from this project (`/sentinel preset move <name>`) moves this project's own weight, switches, needed MCPs, instructions and flows into a preset, new or existing, and then uses it. Where the preset sets the same thing, this project's choice replaces it, so nothing changes here. Sentinel writes the preset first and clears the project after, so a failure leaves a copy behind and never loses anything. While a preset is in use, the button reads "Move this project's settings into game-dev". The moved settings leave `.sentinel/` in the repo, so teammates get them by using the preset.
 
-**Import and export.** Export on the page downloads the file, and Import picks one. A preset Sentinel didn't save on this computer (imported, copied into the folder by hand, or edited since) is untrusted. Its instructions and flows are added switched off until you run `/sentinel trust <name>` for each one. Read a flow's check commands on the page first, since checks are shell commands. A preset carries MCP server names only. It never holds how a server starts, its address or its keys, and nothing in it runs on import.
+**Change one.** With game-dev in use, pick game-dev in Change for, or press Change game-dev in its details. A change there reaches every project that uses it.
+
+**Delete.** Delete removes the folder with its own instructions and flows. This project stops naming it; another project that named it finds it missing.
+
+**Not on this computer.** A project can name a preset this computer lacks, such as a teammate's or one you deleted. The Library page and the draft card say "game-dev isn't on this computer, so this project runs on its own settings and Every project's", with Import beside it. The plan still locks.
+
+**Export and import.** Export on the page downloads the preset as one JSON file, and Import on the page reads one back as a folder under the file's name, never over a preset you already have. It asks once about any MCP name this computer lacks: keep it, use one of your servers in its place, or leave it out, and your choice goes into your copy. Sentinel didn't make an imported preset on this computer, so its instructions and flows stay off until you run `/sentinel trust <name>` for each one. Read a flow's check commands on the page first, since checks are shell commands. A preset carries MCP server names only. It never holds how a server starts, its address or its keys, and nothing in it runs on import.
 
 ### Needed MCPs
 
-A project lists the MCP servers it relies on as `mcps` in `.sentinel/library.json`, committed with the code. `/sentinel mcp` lists them with their state in this session. `/sentinel mcp add <server>` and `/sentinel mcp drop <server>` change the list, and the Library page has chips for the same.
+A project lists the MCP servers it relies on as `mcps` in `.sentinel/library.json`, committed with the code. A preset and Every project can list some too, and the three lists add up, since a server needed anywhere is needed. `/sentinel mcp` lists them with their state in this session and where each comes from. `/sentinel mcp add <server>` and `/sentinel mcp drop <server>` change this project's list, and `preset` or `everywhere` at the end changes another's. The Library page has chips for the same: Add and × follow Change for. A plan records the list when it locks, so changing it mid-run doesn't change a running plan.
 
 - A plan doesn't lock while a needed MCP is missing or only offers sign-in. The lock says which one, and to connect it with `/mcp`.
 - In a session under 45 seconds old, Sentinel waits up to 15 seconds for a server that is still connecting.
 - Each step's start checks again. If a server went missing (say a new session picked the plan up), the run stops on you as Needs you until you reply.
 - Names match loosely. Case and the claude.ai or plugin prefix don't matter, so `Notion` matches `claude.ai Notion`.
-- Another computer can name a server differently. When you use a preset, the page lets you pick one of your servers in its place or leave it out.
+- Another computer can name a server differently. When you import a preset, the page lets you pick one of your servers in its place or leave it out.
 
 Sentinel can't connect a server for you, because the plugin API has no way to.
 
@@ -232,18 +247,19 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel reset` | drop the current plan |
 | `/sentinel parallel`, `parallel on`, `off` | say whether parallel states are on, or turn them on or off |
 | `/sentinel library` (or `flows`) | list the instructions and flows with their switches, and the weight |
-| `/sentinel on <name>`, `off <name>` | switch an item on or off for this project; add `personal` for your default |
-| `/sentinel weight light`, `standard`, `thorough` | pick the weight for this project; add `personal` for your default |
+| `/sentinel on <name>`, `off <name>` | switch an item on or off for this project; add `preset` or `everywhere` for the preset in use or every project |
+| `/sentinel weight light`, `standard`, `thorough` | pick the weight for this project; add `preset` or `everywhere` for the preset in use or every project |
 | `/sentinel trust <name>` | turn on an instruction or flow file Sentinel didn't save (`flow trust` works too) |
 | `/sentinel add <flow> start`, `end`, `before <state>`, `after <state>` | add a flow to the draft |
 | `/sentinel drop <flow>` | take a flow out of the draft |
-| `/sentinel flow save project`, `save personal`, `discard` | keep or drop the flow or instruction Claude drafted |
-| `/sentinel preset` | list your presets: saved setups to use in other projects |
-| `/sentinel preset save <name>` | save this project's weight, switches, own items and needed MCPs as a preset |
-| `/sentinel preset <name>`, `preset undo` | use a preset here (it sets only what it names), or take the last use back |
+| `/sentinel flow save project`, `save preset`, `save everywhere`, `discard` | keep or drop the flow or instruction Claude drafted |
+| `/sentinel preset` | list your presets: settings shared by the projects that use one |
+| `/sentinel preset <name>`, `preset none` | use a preset here, under this project's own settings, or stop using it |
+| `/sentinel preset new <name>` | make an empty preset and use it here |
+| `/sentinel preset move <name>` | move this project's own settings into a preset and use it here |
 | `/sentinel preset delete <name>` | delete a preset |
-| `/sentinel mcp` | list the MCP servers this project needs, and whether this session has them |
-| `/sentinel mcp add <server>`, `mcp drop <server>` | put a server on this project's list or take it off; plans here won't lock while one is missing |
+| `/sentinel mcp` | list the MCP servers needed here, and whether this session has them |
+| `/sentinel mcp add <server>`, `mcp drop <server>` | put a server on this project's list or take it off; add `preset` or `everywhere` for the preset in use or every project. Plans here won't lock while one is missing |
 
 Commands that change the plan or your Library run only when you type them, send them through Remote Control, or run them headless with `claude -p`. Run by Claude or another plugin, they are refused.
 
@@ -263,16 +279,16 @@ That page comes from a small background process, `web/hub.mjs`, on port 40999. I
 
 - **The header** says what the run is doing and how many states are done, in a colour you can read from across the room, such as red while stuck and green when done.
 - **What needs you** sits under it whenever something waits on you, and answers it from the page: a question's options as cards, Approve and Ask for changes for a state, a hint and Pause for a stuck run, Resume, or Lock for a draft. The first answer counts, from the page or the chat. The tab's title and icon change while something waits, and notifications can tell you when the tab is in the background.
-- **Usage** sits beside Tokens: `Week 52%` and `This plan about 1.4%`, with `5 hours` too when Claude Code reports it. Hover for when each resets, what it was when you signed off, and the plan's cost in dollars. Each state's page says `About 0.6% of your week`. The Map view in the terminal and the finished plan's summary show the same, under the tokens. Off a subscription, as with an API key, none of this shows.
-- **Plan** draws the machine three ways: a Map that wraps and folds groups to fit, One line, and a List you can copy from, where flows are added.
+- **Usage** sits beside Tokens: `Week 52%`, with `5 hours` too when Claude Code reports it, and `This plan $4.20 · about 1.4% of your week`. The cost is at API prices, which a subscription doesn't charge, and it always shows. The share shows once your week has moved by 1% while Sentinel watched, in this session or an earlier one. Hover for when each figure resets and what it was when you signed off. Each state's page says `Used: $0.85 · about 0.6% of your week`. The Map view in the terminal and the finished plan's summary show the same, under the tokens. With an API key there is no weekly figure, so only the cost shows.
+- **Plan** draws the machine three ways: a Map that wraps and folds groups to fit, One line, and a List you can copy from, where flows are added. With a Library, each Map card has three small bars for its state's weight (one for Light, three for Thorough), grey at the plan's weight and amber where the state differs, with +1 or −1 in amber when Claude added an instruction there or skipped one. Hover says it in words. The plan bar shows the plan's weight and its own changes, such as `Standard · 1 turned off`, and each task page has the same under Settings for this state.
 - **Task pages** open from any state. Asked for comes first: the state's quotes in full and where they came from, or Claude's reason if it added the state. Then why it is needed, the approach, what was done, where it stands and what happened along the way, including any quote Sentinel refused. Claude writes that text in plain words with each state (`title`, `problem`, `approach`, and an `outcome` when it moves on); it is never sent back to Claude.
 - **The source page** shows Sentinel's saved copy with each quote marked and the state that quotes it beside it, a note on each section nothing quotes, the messages a quote uses, and what Claude added. Task pages and the draft card link to it.
 - **Where the time went** draws every tool call as a bar on its state's row, with health below and stuck stretches shaded.
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
-- **Library** has two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
+- **Library** has the Preset line on top, with the preset in use, the needed MCPs and the chooser, then Change for and two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
 - **System** shows once the project has a map, with or without a plan running. See [The System map](#the-system-map). A banner names the parts that changed since the map was drawn, with Redraw this area and It's fine on each.
-- **The draft card** also says how many states quote their source, notes the sections nothing quotes, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
+- **The draft card** also says how many states quote their source, notes the sections nothing quotes, lists What you asked for, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
 
 The pane in the terminal has four views, switched with `f`, `m`, `l` and `s`: Focus (the active state and its check runs), Map (the whole machine, health and log), Ledger (every call with the arithmetic) and System (the project's map, once it has one). `b` opens the dashboard.
 
@@ -296,7 +312,7 @@ States that run side by side each pass their own check, but nothing tests them t
 
 ## Limits
 
-- The weekly figure is Claude Code's own and counts every session on your account. A plan's share of it is an estimate: Sentinel notes what each 3 points of your week cost this session, keeps the highest of the last 20, and divides the plan's cost by that. Other sessions running at once only pull that price down, which is why it keeps the highest. Until it has one, the plan says `estimating`.
+- The weekly figure is Claude Code's own and counts every session on your account. A plan's share of it is an estimate: Sentinel notes what each point of your week cost while it watched, keeps the highest of the last 20, and divides the plan's cost by that. Other sessions running at once only pull that price down, which is why it keeps the highest. Each session keeps its own watch, and a reload doesn't start it over. Until it has a price, the plan shows its cost alone.
 - A member agent's cost counts for the state active in the main conversation, so with parallel states on, the shares per state are rough.
 - Two `/sentinel browser` commands in the seconds before the page connects open two pages. Both work.
 - A page can't reliably bring itself to the front, so with the page open Sentinel moves it to the right tab, and you may have to click over to the browser.

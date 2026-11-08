@@ -41,10 +41,11 @@ const flows = [
   { name: 'review', description: 'Lint, then a review you sign off', scope: 'project', file: '.sentinel/flows/review.json', when: { at: 'after', files: ['src/**'] }, states: [{ id: 'lint', label: 'Lint the change', check: 'npm run lint' }, { id: 'read', label: 'Review the diff', wait: 'after' }] },
 ]
 // The snapshot fields the plugin adds for the Library: the instructions with their switches worked out, and the flows.
-function library(project = {}, personal = {}) {
-  const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in' })), ...own.map(i => ({ kind: 'told', own: true, ...i }))]
+// preset: the switches of the preset in use, and mine: its own instructions.
+function library(project = {}, personal = {}, preset = {}, mine = []) {
+  const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in' })), ...[...own, ...mine].map(i => ({ kind: 'told', own: true, ...i }))]
   const fl = [...BUILTIN_FLOWS.map(f => ({ ...f, scope: 'built-in' })), ...flows]
-  const { weight, on } = libraryOn([...items, ...fl], project, personal)
+  const { weight, on } = libraryOn([...items, ...fl], project, personal, preset)
   return {
     library: { weight, project, personal, instructions: items.map(i => ({ ...i, on: on.includes(i.name), trusted: i.trusted ?? true })), flowsOn: Object.fromEntries(fl.map(f => [f.name, on.includes(f.name)])) },
     flows: fl.map(f => ({ trusted: true, ...f })),
@@ -124,7 +125,7 @@ const CARDS = 'Cards only for now, and'
 const DOC = `# Studio\r\n## Payments\r\n${PAY}\r\n${REFUND}\r\n${CARDS} the receipt goes out by email.\r\n## Exports\r\nStaff can export a class roster to a sheet.\r\n## Reports\r\n${NASTY}\r\n\`\`\`\r\n# not a heading\r\n\`\`\`\r\n`
 const LIB = { weight: 'standard', on: ['quote-the-source'], told: [] }
 const SAVED = { kind: 'approved', text: DOC, at: '09:00', name: 'C:\\plans\\studio.md' }
-const quotedPlan = (states, more = {}, t = '09:10') => act({ ...emptyRun(), signedOff: true, sources: [SAVED], ...more }, { action: 'define', title: 'Studio', library: LIB, loops: [], states, messages: [{ kind: 'message', text: TYPED, at: '09:05' }] }, t)
+const quotedPlan = (states, more = {}, t = '09:10', points) => act({ ...emptyRun(), signedOff: true, sources: [SAVED], ...more }, { action: 'define', title: 'Studio', library: LIB, loops: [], states, ...(points && { points }), messages: [{ kind: 'message', text: TYPED, at: '09:05' }] }, t)
 const asks = [
   { id: 'pay', label: 'Take payment', title: 'Take payment', asked: [PAY], problem: 'Claude describes this one itself.', ref: 'Payments, step 1', files: ['src/pay/**'] },
   { id: 'refund', label: 'Refunds', asked: [REFUND, SOME], check: 'npm test -- refund', files: ['src/refund/**'] },
@@ -133,6 +134,9 @@ const asks = [
 const drafting = (states = [...asks, { id: 'r1', label: 'Receipts', added: WHY, files: ['src/r/**'] }, { id: 'r2', label: 'Reminders', added: `Classes <i>fill</i> up.`, files: ['src/m/**'] }]) => quotedPlan(states).run
 const answered = (r, id) => ({ ...r, draft: { ...r.draft, plan: { ...r.draft.plan, states: r.draft.plan.states.map(s => s.id === id ? { ...s, okAt: '09:12' } : s) } } })
 const proofDraft = drafting()
+// The points Claude lists on a draft: two the plan delivers, and two it leaves out with a reason.
+const EXPORT = 'Staff can export a class roster to a sheet.', LATER = 'Reports <i>wait</i> for the next plan.'
+const POINTS = [{ said: PAY, states: ['pay', 'refund'] }, { said: TYPED, states: ['wait'] }, { said: EXPORT, left: 'Exports come after payments.' }, { said: NASTY, left: LATER }]
 // A first try with a made-up quote for each of two states leaves refusals on the record of the plan that follows.
 const tried = quotedPlan([{ id: 'pay', label: 'p', asked: ['Members pay by card at the counter'] }, { id: 'refund', label: 'r', asked: ['Staff pay by card at the counter'] }]).run
 const midRun = (() => {
@@ -147,9 +151,11 @@ const VARIANTS = {
   proofAnswered: page(answered(answered(proofDraft, 'r1'), 'r2'), { draftKey: 'p3' }),
   proofRun: page(midRun),
   proofNone: page(drafting([{ id: 'x', label: 'x', added: WHY }]), { draftKey: 'p4' }),
+  proofPoints: page(quotedPlan(asks, { review: true }, '09:10', POINTS).run, { draftKey: 'p5' }),
   proofDone: page({ ...midRun, active: 'done' }),
-  usageRun: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52, resetsAt: new Date(now + 3_600_000).toISOString(), was: 50 }, { name: '5 hours', percent: 23 }], usd: 4.2, plan: 'about 1.4%', steps: { pay: 'about 0.6%', refund: 'estimating' } } }),
-  usageNoShare: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52 }], usd: 0.01, plan: 'estimating', steps: {} } }),
+  usageRun: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52, resetsAt: new Date(now + 3_600_000).toISOString(), was: 50 }, { name: '5 hours', percent: 23 }], plan: { cost: '$4.20', share: 'about 1.4%' }, steps: { pay: { cost: '$1.75', share: 'about 0.6%' }, refund: { cost: '$0.40' } } } }),
+  usageNoShare: page(midRun, { usage: { windows: [{ name: 'Week', percent: 52 }], plan: { cost: '$0.01' }, steps: {} } }),
+  usageNoLimits: page(midRun, { usage: { windows: [], plan: { cost: '$3.10' }, steps: { pay: { cost: '$3.10' } } } }),
   onceDraft: page(act({ ...emptyRun(), signedOff: true, review: true }, { ...plan, states: plan.states.map(s => (s.id === 'perf' ? { ...s, once: true } : s)) }, '', {}, now).run),
   blocked: page(act(act({ ...emptyRun(), signedOff: true }, plan, '', {}, now).run, { action: 'escalate', kind: 'blocked', reason: 'The Mac build machine is locked. Someone needs to unlock it.' }, '09:30', {}, now).run),
   closedDone: page(act(midRun, { action: 'finish', reason: 'Enough for now' }, '09:40', {}, Date.now(), true).run),
@@ -162,7 +168,11 @@ const VARIANTS = {
   twoLinesGraph: page(twoLinesGraph, { parallel: true }),
   library: page(emptyRun()),
   settings: page(withSettings, { draftKey: 's1', draftLibrary: withSettings.draft.library, parallel: true }),
-  settingsRun: page(lockedSettings, { parallel: true }),
+  settingsRun: page({
+    ...lockedSettings,
+    library: { ...lockedSettings.library, settings: [...lockedSettings.library.settings, { name: 'fails-without-change', on: true, why: 'it rewrites saved data' }] },
+    audit: [...lockedSettings.audit, { step: 1, t: '09:13', kind: 'decided', state: 'form', by: 'claude', text: 'Skipped failure-list for form: the form is copied from the design file', skip: { name: 'failure-list', why: 'the form is copied from the design file' } }],
+  }, { parallel: true }),
   settingsOff: page(settingsOff, { draftKey: 'o1', parallel: true }),
   light: page(emptyRun(), library({ weight: 'light', on: { 'failure-list': true } })),
   insDraft: page({ ...emptyRun(), flowDraft: { name: 'quick-checks', description: 'Checks under a minute', at: 'start', text: 'Keep each check under a minute: one test file, a type check or a build.', asked: 'keep checks quick' } }),
@@ -175,25 +185,33 @@ const VARIANTS = {
     ],
   }),
 }
-// Presets and the MCPs a project needs, as the plugin adds them to the Library's snapshot: one preset Sentinel saved
-// here, and one it didn't, whose flow's check is a shell command to read before using it.
+// Presets and the MCPs needed here, as the plugin adds them to the Library's snapshot. This project uses game-dev, which
+// switches fast-checks off and has an instruction of its own; shared came from a teammate, so its items are untrusted
+// and its flow's check is a shell command to read before using it.
 const UNITY = { name: 'Unity', state: 'missing' }, NOTION = { name: 'Notion', state: 'connected', server: 'claude_ai_Notion' }
 const PLAYTEST = { name: 'playtest', at: 'close', text: 'Play the change before calling it done.' }
+const GAME_DEV = { on: { 'fast-checks': false }, mcps: ['Unity'] }
 const PRESETS = [
-  { name: 'backend', trusted: true, file: '~/.sentinel/presets/backend.json', raw: { weight: 'standard' }, weight: 'standard', on: {}, instructions: [], flows: [], mcps: [],
-    preview: { turnsOn: [], turnsOff: [], adds: [], kept: [], weightReset: false } },
-  { name: 'game-dev', trusted: true, file: '~/.sentinel/presets/game-dev.json', raw: { weight: 'thorough', instructions: [PLAYTEST], mcps: ['Unity'] },
-    weight: 'thorough', on: {}, instructions: [PLAYTEST], flows: [], mcps: [UNITY],
-    preview: { turnsOn: ['fails-without-change'], turnsOff: [], adds: ['playtest'], kept: [], weightReset: true } },
-  { name: 'shared', trusted: false, file: '~/.sentinel/presets/shared.json', raw: { on: { 'fast-checks': false }, mcps: ['Notion'] },
-    on: { 'fast-checks': false }, instructions: [{ name: 'dashboard-widths', at: 'start', text: 'Theirs.' }], flows: [{ name: 'release', description: 'Build before a release', checks: ['npm run build && rm -rf dist'] }], mcps: [NOTION],
-    preview: { turnsOn: [], turnsOff: ['fast-checks'], adds: ['release'], kept: ['dashboard-widths'], weightReset: false } },
+  { name: 'backend', trusted: true, file: '~/.sentinel/presets/backend/', raw: { weight: 'standard' }, weight: 'standard', on: {}, instructions: [], flows: [], mcps: [], preview: { turnsOn: ['fast-checks'], turnsOff: [] } },
+  { name: 'game-dev', trusted: true, file: '~/.sentinel/presets/game-dev/', raw: { ...GAME_DEV, instructions: [PLAYTEST] },
+    on: GAME_DEV.on, instructions: [{ ...PLAYTEST, trusted: true }], flows: [], mcps: [UNITY], preview: { turnsOn: [], turnsOff: [] } },
+  { name: 'shared', trusted: false, file: '~/.sentinel/presets/shared/', raw: { on: { 'failure-list': false }, mcps: ['Notion'] },
+    on: { 'failure-list': false }, instructions: [{ name: 'house-style', at: 'close', text: 'Follow STYLE.md.', trusted: false }],
+    flows: [{ name: 'release', description: 'Build before a release', checks: ['npm run build && rm -rf dist'], trusted: false }], mcps: [NOTION],
+    preview: { turnsOn: ['fast-checks'], turnsOff: ['failure-list'] } },
 ]
 const SERVERS = [{ server: 'claude_ai_Notion', name: 'Notion', signIn: false }, { server: 'plugin_playwright_playwright', name: 'playwright', signIn: false }]
-const withPresets = more => { const v = page(emptyRun()); return { ...v, library: { ...v.library, presets: PRESETS, mcps: [UNITY, NOTION], servers: SERVERS, ...more } } }
-VARIANTS.presets = withPresets({ preset: 'game-dev', undo: 'game-dev' })
-VARIANTS.noPresets = withPresets({ presets: [], mcps: [] })
+const usingGameDev = () => {
+  const project = { preset: 'game-dev', mcps: ['Notion'] }
+  const v = { ...page(emptyRun()), ...library(project, {}, GAME_DEV, [{ ...PLAYTEST, scope: 'preset', file: '~/.sentinel/presets/game-dev/instructions/playtest.json' }]) }
+  return { ...v, library: { ...v.library, using: { name: 'game-dev', ...GAME_DEV }, presets: PRESETS, servers: SERVERS, mcps: [{ ...NOTION, scope: 'project' }, { ...UNITY, scope: 'preset' }] } }
+}
+VARIANTS.presets = usingGameDev()
+VARIANTS.noPresets = (() => { const v = page(emptyRun()); return { ...v, library: { ...v.library, presets: [], mcps: [], servers: SERVERS } } })()
+// A teammate's project names game-dev, which this computer lacks.
+VARIANTS.presetMissing = (() => { const v = page(emptyRun(), library({ preset: 'game-dev' })); return { ...v, library: { ...v.library, using: { name: 'game-dev', missing: true }, presets: PRESETS.filter(p => p.name !== 'game-dev'), mcps: [], servers: SERVERS } } })()
 VARIANTS.mcpDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, mcps: [UNITY, { name: 'amp', state: 'sign-in', server: 'amp' }] } }
+VARIANTS.missingDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, using: { name: 'game-dev', missing: true } } }
 
 // ---- a system map ----
 // How the System page can fail: the tab shows with no map, or not with one, or stays marked when another page is open; a
@@ -1032,6 +1050,15 @@ async function historyPage() {
   check(!(await dim(p, 'refunds')), 'leaving it lights everything again')
   await p.context().close()
 
+  // A short window: the side column scrolls, and no card in it is cut short.
+  p = await sopen('sysDrift', '#system', { height: 600 })
+  await p.locator('#sysLevel [data-lv=parts]').click()
+  await p.locator('.pt[data-id=refunds]').click()
+  const cut = await p.$$eval('#sysAside > :not([hidden]):not(:empty)', els => els.filter(e => e.scrollHeight > e.clientHeight + 1).map(e => e.id))
+  const scrolls = await p.locator('#sysAside').evaluate(a => a.scrollHeight > a.clientHeight)
+  check(scrolls && !cut.length, `a short window scrolls the side column and cuts no card (cut: ${cut.join(', ') || 'none'}${scrolls ? '' : ', and nothing to scroll'})`)
+  await p.context().close()
+
   // Words from git and from plans.json are text, never markup.
   p = await sopen('sysDriftNasty', '#system')
   check(!(await p.evaluate(() => window.__pwn)) && (await p.locator('#sysp img').count()) === 0, 'update-check and plan words do not run as markup')
@@ -1079,23 +1106,32 @@ async function tasksPage() {
 
 async function usagePage() {
   let p = await open('usageRun', '')
-  const fd = name => p.locator('#fields .fd', { hasText: name })
+  // By its label, as a share's words name the week too.
+  const fd = name => p.locator('#fields .fd', { has: p.locator('.label', { hasText: name }) })
   check((await fd('Week').innerText()).includes('52%'), 'the Run page shows the week')
   check((await fd('5 hours').innerText()).includes('23%'), 'the Run page shows the 5 hours when reported')
-  check((await fd('This plan').innerText()).includes('about 1.4%'), 'the Run page shows the plan')
+  // The cost for the plan and each step always shows; the share of the week joins it once known.
+  const plan = await fd('This plan').innerText()
+  check(plan.includes('$4.20') && plan.includes('about 1.4% of your week'), `the Run page shows the plan's cost and share (${plan})`)
   for (const word of ['Resets', 'Was 50% when you signed off', 'every session']) check((await fd('Week').getAttribute('title')).includes(word), `the week's hover says ${word}`)
-  check((await fd('This plan').getAttribute('title')).includes('$4.20'), "the plan's hover gives its cost")
+  check((await fd('This plan').getAttribute('title')).includes('API prices'), "the plan's hover says what the cost is")
   await p.context().close()
   p = await open('usageRun', '#task-pay')
-  check((await p.locator('.fd', { hasText: 'Used' }).innerText()).includes('About 0.6% of your week'), 'a step page shows its share')
+  const pay = await p.locator('.fd', { hasText: 'Used' }).innerText()
+  check(pay.includes('$1.75') && pay.includes('about 0.6% of your week'), `a step page shows its cost and share (${pay})`)
   await p.context().close()
   p = await open('usageRun', '#task-refund')
   const est = await p.locator('.fd', { hasText: 'Used' }).innerText()
-  check(est.includes('Estimating') && !est.includes('of your week'), `a step with no share yet says so (${est})`)
+  check(est.includes('$0.40') && !est.includes('of your week') && !/estimating/i.test(est), `a step with no share yet shows its cost alone (${est})`)
   await p.context().close()
   p = await open('usageNoShare', '')
   check((await p.locator('#fields .fd', { hasText: '5 hours' }).count()) === 0, 'no 5 hours when it is not reported')
-  check((await p.locator('#fields .fd', { hasText: 'This plan' }).innerText()).includes('estimating'), 'the plan says estimating at first')
+  const first = p.locator('#fields .fd', { hasText: 'This plan' })
+  check((await first.innerText()).includes('$0.01') && !/estimating/i.test(await first.innerText()), 'the plan shows its cost before the share is known')
+  check((await first.getAttribute('title')).includes('moved by 1%'), 'the hover says when the share will show')
+  await p.context().close()
+  p = await open('usageNoLimits', '')
+  check((await p.locator('#fields .fd .label', { hasText: 'Week' }).count()) === 0 && (await p.locator('#fields .fd', { hasText: 'This plan' }).innerText()).includes('$3.10'), 'with no limits reported the cost for the plan and each step still shows')
   await p.context().close()
   p = await open('proofRun', '')
   check((await p.locator('#fields .fd', { hasText: 'Week' }).count()) === 0, 'no figures, nothing shows')
@@ -1525,11 +1561,16 @@ async function hubPage() {
   }
 }
 
+// ONLY=presets or ONLY=points runs that block alone, for trying a break on it in seconds.
+const only = process.env.ONLY, quick = only === 'presets' || only === 'points'
 try {
+  if (!quick) {
   await hubPage()
   await usagePage()
   await groupedMap()
+  }
   if (process.env.ONLY !== 'hub') {
+  if (!quick) {
   if (process.env.ONLY !== 'others') await systemPage()
   await historyPage()
   await tasksPage()
@@ -1549,12 +1590,17 @@ try {
   await layout('sysNoGit', '#system', 'system-no-git')
   await layout('sysTasks', '#system', 'system-tasks', async p => { await p.locator('#sysLevel [data-lv=tasks]').click() })
   }
+  }
   // ONLY=system stops here, to try the System page without the 90 seconds of everything else.
   others: {
   if (process.env.ONLY === 'system') break others
+  let p
+  lib: {
+  if (quick) break lib
   // The Library at Standard: the weights, the instruction list grouped by moment, the totals and the panel.
-  let p = await open('library', '#library')
-  check(await p.locator('#wLabel').textContent() === 'This project: Standard, from your default', 'weight label')
+  p = await open('library', '#library')
+  check(await p.locator('#wLabel').textContent() === 'This project: Standard, the usual', 'weight label')
+  check(same(await p.locator('#swScope button').allTextContents(), ['This project', 'Every project']), 'Change for has two places while no preset is in use')
   check(await p.locator('.wcard[aria-pressed=true] .wn').textContent() === 'Standard', 'Standard picked')
   check(await p.locator('.irow').count() === BUILTINS.length - 1 + own.length, 'a row for each instruction, and the experimental switch apart')
   check(await p.locator('.mg-h').count() === 5, 'a group for each moment')
@@ -1961,13 +2007,37 @@ try {
   check(await p.locator('.tp-main i').count() === 0, 'task: a reason runs no markup')
   await p.context().close()
   p = await open('settings', '#task-form')
-  check(!(await say()).includes('Settings for this state'), 'task: a plain state has no section')
+  check((await say()).includes("Runs at Standard, the plan's weight.") && !(await say()).includes("Claude's reason"), 'task: a plain state says only what it runs at')
+  await p.context().close()
+
+  // The weight bars on the Map: each state's weight, amber where it isn't the plan's, and +1 or −1 for what Claude added
+  // to or skipped for that state alone.
+  p = await open('settingsRun', '')
+  const card = id => p.locator(`.mcard[data-task="${id}"]`)
+  // Later states sit in a folded group; open it, as a click on its stacked card does.
+  for (let i = 0; i < 3 && await p.locator('.mcard', { hasText: 'Later' }).count(); i++) { await p.locator('.mcard', { hasText: 'Later' }).first().click(); await p.waitForTimeout(300) }
+  check(await p.locator('.mcard[data-task] .wm').count() === 8, 'map: a weight meter on each state card')
+  check(await p.locator('.mcard:not([data-task]) .wm').count() === 0, 'map: none on the closing card')
+  check(await p.locator('.mcard .wm.own').count() === 2 && await card('export').locator('.wm.own').count() === 1 && await card('asked').locator('.wm.own').count() === 1, 'map: amber only where a state runs at another weight')
+  check(await card('export').locator('.wm b.on').count() === 3 && await card('form').locator('.wm b.on').count() === 2 && await card('asked').locator('.wm b.on').count() === 1, 'map: three bars for Thorough, two for Standard, one for Light')
+  check((await card('export').getAttribute('title')).includes("Runs at Thorough. The plan's weight is Standard."), 'map: the hover says the weight in words')
+  check((await card('charge').locator('.wx').innerText()) === '+1' && /Adds .+: it shows the card form./.test(await card('charge').getAttribute('title')), 'map: +1 and its words for an addition')
+  check((await card('form').locator('.wx').innerText()) === '−1' && /Skips .+: the form is copied from the design file./.test(await card('form').getAttribute('title')), 'map: −1 and its words for a skip')
+  check(await card('docs').locator('.wx').count() === 0, 'map: nothing more on a state with the plan\'s instructions')
+  check(await p.locator('.planset').isVisible() && (await p.locator('.planset').innerText()) === 'Standard · 1 turned on' && (await p.locator('.planset').getAttribute('title')).includes('for the whole plan: it rewrites saved data'), 'plan bar: the weight and what the plan turned on')
+  check((await p.locator('.mnote').innerText()).includes('one bar for Light') && (await p.locator('.mnote').innerText()).includes('skipped for'), 'map key: the bars and the marks')
+  await p.context().close()
+  p = await open('settingsRun', '#task-form')
+  check((await say()).includes("Runs at Standard, the plan's weight.") && (await say()).includes('− failure-list') && (await say()).includes('the form is copied from the design file'), 'task: a skip and its reason')
+  await p.context().close()
+  p = await open('settingsRun', '#task-export')
+  check((await say()).includes("Runs at Thorough. The plan's weight is Standard."), 'task: a weight that differs')
   await p.context().close()
   p = await open('settingsRun', '#task-copy')
   check((await say()).includes('because nobody kept this on the draft'), 'task: a lock left it at the plan weight')
   await p.context().close()
   p = await open('settingsOff', '#task-copy')
-  check(!(await say()).includes('Settings for this state'), 'task: nothing with the switch off')
+  check((await say()).includes("Runs at Standard, the plan's weight.") && !(await say()).includes("Claude's reason"), 'task: with the switch off only what it runs at')
   check(await p.locator('.setl').count() === 0, 'draft: no settings rows with the switch off')
   check(await p.locator('#stub h2').count() === 0 || (await p.locator('#stub h2').innerText()) !== 'A looser setting needs your answer', 'draft: nothing owed with the switch off')
   await p.context().close()
@@ -2023,49 +2093,91 @@ try {
   await p.locator('[data-act=iesave]').click()
   await sent('saveflow without weights', b => b.kind === 'saveflow' && b.flow.name === 'quick-weights' && !('weights' in b.flow))
   await p.context().close()
+  }
 
-  // Presets and needed MCPs. How it can fail: the line misses the preset, a chip's state or the /mcp hint; × or Add send
-  // the wrong name, or Add offers a server already needed; Check again or Undo send nothing; the chooser opens on the
-  // wrong preset, or its details miss the weight change, what turns on or off, what it adds, a flow's checks, what the
-  // project keeps or the untrusted warning; a swap isn't sent, or outlives a change of preset; Export downloads the wrong
-  // file; Delete goes without asking; Save sends a name Sentinel refuses; Import sends the wrong fields, or a file the
-  // page server would refuse; the reply to Use never shows; a draft hides a missing MCP above Lock.
+  // What you asked for, on a draft. How it can fail:
+  //  1. A draft with points shows no block, or a row misses the user's words or the steps that deliver them.
+  //  2. A point left out isn't amber or misses Claude's reason, or one the plan delivers shows amber.
+  //  3. The user's words or Claude's reason run as markup.
+  //  4. A draft that compares quotes and lists no points says nothing about it.
+  //  5. A plan that doesn't compare quotes and lists no points shows the block.
+  points: {
+  if (only === 'presets') break points
+  p = await open('proofPoints', '')
+  const rows = p.locator('#points li'), row = async n => rows.nth(n).innerText()
+  check((await p.locator('#points h3').textContent()) === 'What you asked for' && await rows.count() === 4, 'points: a row for each point')
+  const [r0, r1, r2, r3] = [await row(0), await row(1), await row(2), await row(3)]
+  check(r0.includes(PAY) && r0.includes('pay') && r0.includes('refund') && r1.includes(TYPED) && r1.includes('wait'), 'points: each quote with the steps that deliver it')
+  check(same(await rows.evaluateAll(ls => ls.map(l => l.className)), ['m-ok', 'm-ok', 'm-warn', 'm-warn']), 'points: a tick for each delivered, amber for each left out')
+  check(r2.includes(EXPORT) && r2.includes('Exports come after payments.') && r3.includes(LATER), "points: a left-out point gives Claude's reason")
+  check(r3.includes(NASTY) && await p.locator('#points img, #points i').count() === 0, "points: the user's words and Claude's reason run no markup")
+  await p.context().close()
+  p = await open('proofDraft', '')
+  check((await p.locator('#points .m-warn').innerText()).includes('Claude listed none of the points you asked for.'), 'points: none listed is said in amber')
+  await p.context().close()
+  p = await open('draft', '')
+  check(await p.locator('#slip').isVisible() && await p.locator('#points').count() === 0, "points: no block on a draft that doesn't compare quotes")
+  await p.context().close()
+  if (only === 'points') break others
+  }
+
+  // Presets and needed MCPs. How it can fail:
+  //  1. The line misses the preset in use, a needed MCP, where one comes from, its state, or the /mcp hint.
+  //  2. Change for misses the preset in use, or offers it with none in use or one this computer lacks.
+  //  3. Add and × send the wrong place: they follow Change for, and × shows only on that place's own MCPs.
+  //  4. A row hides what decided it ("Off here, from game-dev"), or says so for a switch of the place on screen.
+  //  5. A place shows another's items: the preset's own outside it, the project's outside This project.
+  //  6. The chooser opens on the wrong preset, or its details miss the switches, what is only in it, the MCPs, what
+  //     using it would turn on or off, a flow's checks or the untrusted warning.
+  //  7. Use, No preset, Change, New, Move, Make, Delete or Import send nothing or the wrong fields; Delete goes without
+  //     asking; New takes a name Sentinel refuses or one taken; a snapshot loses what you typed.
+  //  8. Import skips the swap for an MCP this computer lacks, or sends a file the page server would refuse.
+  //  9. A preset this computer lacks goes unsaid on the Library or the draft card.
+  // 10. Saved in misses the preset in use, or names the wrong folder.
   const title = n => BUILTINS.find(b => b.name === n).title
   p = await open('presets', '#library')
   const line = await p.locator('.pline').textContent()
-  check(line.includes('game-dev') && /Unity\s*Not connected/.test(line) && /Notion\s*Connected/.test(line) && line.includes('Connect with /mcp to lock plans here.'), 'preset line: the name, each MCP and the hint')
+  check(line.includes('game-dev') && /Notion\s*Connected/.test(line) && /Unity\s*Not connected\s*game-dev/.test(line) && line.includes('Connect with /mcp to lock plans here.'), 'preset line: the name, each MCP with its place, and the hint')
+  check(same(await p.locator('#swScope button').allTextContents(), ['This project', 'game-dev', 'Every project']), 'Change for offers the preset in use')
   check(same(await p.locator('#mcpAdd option').allTextContents(), ['Add an MCP', 'playwright']), 'Add offers only servers not needed yet')
+  check(await p.locator('[data-p=drop][data-mcp=Notion]').count() === 1 && await p.locator('[data-p=drop][data-mcp=Unity]').count() === 0, "× only on this project's own MCPs")
   await p.locator('#mcpAdd').selectOption('playwright')
-  await sent('mcpAdd', b => b.kind === 'mcpAdd' && b.name === 'playwright')
-  await p.locator('[data-p=drop][data-mcp=Unity]').click()
-  await sent('mcpDrop', b => b.kind === 'mcpDrop' && b.name === 'Unity')
+  await sent('mcpAdd', b => b.kind === 'mcpAdd' && b.name === 'playwright' && b.scope === 'project')
+  await p.locator('[data-p=drop][data-mcp=Notion]').click()
+  await sent('mcpDrop', b => b.kind === 'mcpDrop' && b.name === 'Notion' && b.scope === 'project')
   await p.locator('[data-p=check]').click()
   await sent('mcpCheck', b => b.kind === 'mcpCheck')
-  await p.locator('[data-p=undo]').click()
-  await sent('presetUndo', b => b.kind === 'presetUndo')
+  // The rows say what decided them.
+  const fast = p.locator('.irow[data-ins="built-in/fast-checks"]')
+  check(await fast.locator('.diff').textContent() === 'Off here, from game-dev' && !(await fast.locator('input').isChecked()), "rows say what decided them: game-dev's switch")
+  check(await p.locator('.irow .diff').count() === 1, 'no row says a place decided it when its own weight did')
+  check(await p.locator('.irow[data-ins="preset/playtest"] .tag.sm').textContent() === 'game-dev', "the preset's own instruction shows here, under its name")
+  await p.locator('#swScope [data-sws=preset]').click()
+  check((await p.locator('.swhint').textContent()) === 'Reaches every project that uses game-dev.', 'the hint says what a change for game-dev reaches')
+  check(await fast.locator('.diff').count() === 0, "no 'from' on game-dev's own switch")
+  check(await p.locator('.irow[data-ins^="project/"]').count() === 0 && await p.locator('.irow[data-ins="preset/playtest"]').count() === 1, "game-dev shows its own items and not the project's")
+  check(await p.locator('[data-p=drop][data-mcp=Unity]').count() === 1 && await p.locator('[data-p=drop][data-mcp=Notion]').count() === 0, "× follows Change for to game-dev's MCPs")
+  await p.locator('[data-p=drop][data-mcp=Unity]').click()
+  await sent('mcpDrop from the preset', b => b.kind === 'mcpDrop' && b.name === 'Unity' && b.scope === 'preset')
+  await fast.locator('.ck.sw').click()
+  await sent('libon for the preset', b => b.kind === 'libon' && b.name === 'fast-checks' && b.scope === 'preset' && b.on === true)
+  await p.locator('#swScope [data-sws=personal]').click()
+  check((await p.locator('.swhint').textContent()) === 'Reaches every project.' && await p.locator('.irow[data-ins^="preset/"]').count() === 0, "every project's switches hide the preset's items")
+  await p.locator('#swScope [data-sws=project]').click()
+  // The chooser.
   await p.locator('[data-p=open]').click()
   check(await p.locator('.pick[aria-pressed=true]').getAttribute('data-preset') === 'game-dev', 'the chooser opens on the preset in use')
   const det = () => p.locator('.pset').textContent()
   let d = await det()
-  check(d.includes('Thorough (now Standard)') && d.includes('resets the built-ins') && d.includes(title('fails-without-change')) && d.includes(PLAYTEST.text), 'details: the weight, what turns on, what it adds')
-  check(!d.includes("didn't save this preset"), 'no warning for a preset Sentinel saved')
-  await p.locator('[data-swap=Unity]').selectOption({ label: 'Use Notion instead' })
-  await p.locator('[data-preset=shared]').click()
-  await p.locator('[data-preset=game-dev]').click()
-  await p.locator('[data-p=use]').click()
-  await sent('presetUse after a change of preset', b => b.kind === 'presetUse' && b.name === 'game-dev' && !('swap' in b))
-  await p.locator('[data-p=open]').click()
-  await p.locator('[data-swap=Unity]').selectOption({ label: 'Leave it out' })
-  await p.locator('[data-p=use]').click()
-  await sent('presetUse with a swap', b => b.kind === 'presetUse' && b.name === 'game-dev' && same(b.swap, { Unity: null }))
-  check(await p.locator('.pline').isVisible(), 'Use closes the chooser')
-  write({ ...VARIANTS.presets, flowSaid: { ok: true, text: 'Using game-dev. Added: playtest.', at: Date.now() + 60_000 } })
-  await p.waitForFunction(() => document.getElementById('notice').textContent.includes('Added: playtest')).catch(() => fails.push('the reply to Use shows'))
-  write(VARIANTS.presets)
+  check(d.includes('In use') && d.includes(`Off: ${title('fast-checks')}`) && d.includes(PLAYTEST.text) && /Unity\s*Not connected/.test(d) && !d.includes('Turns on'), "game-dev's details: its switches, what is only in it, its MCPs")
+  check(await p.locator('[data-p=make]').textContent() === "Move this project's settings into game-dev", 'Make reads as Move while a preset is in use')
+  await p.locator('[data-p=edit]').click()
+  check(await p.locator('.pline').isVisible() && await p.locator('#swScope [aria-pressed=true]').textContent() === 'game-dev', 'Change game-dev closes the chooser and puts Change for on it')
+  await p.locator('#swScope [data-sws=project]').click()
   await p.locator('[data-p=open]').click()
   await p.locator('[data-preset=shared]').click()
   d = await det()
-  check(d.includes("didn't save this preset") && d.includes('npm run build && rm -rf dist') && d.includes('has its own of that name') && d.includes(title('fast-checks')), 'untrusted details: the warning, the checks, what the project keeps, what turns off')
+  check(d.includes("didn't make this preset") && d.includes('npm run build && rm -rf dist') && d.includes(`Turns on ${title('fast-checks')}`) && d.includes(`Turns off ${title('failure-list')}`), 'untrusted details: the warning, the checks, what would turn on and off')
   check(await p.locator('[data-preset=shared] .tag.off').textContent() === 'Not trusted', 'an untrusted preset is marked in the list')
   const [dl] = await Promise.all([p.waitForEvent('download'), p.locator('[data-p=export]').click()])
   check(dl.suggestedFilename() === 'shared.json' && same(JSON.parse(readFileSync(await dl.path(), 'utf8')), PRESETS[2].raw), 'Export downloads the preset file')
@@ -2073,28 +2185,76 @@ try {
   check(await p.locator('[data-p=delyes]').isVisible(), 'Delete asks first')
   await p.locator('[data-p=delyes]').click()
   await sent('presetDelete', b => b.kind === 'presetDelete' && b.name === 'shared')
-  await p.locator('[data-p=saving]').click()
-  await p.locator('#pname').fill('undo')
+  await p.locator('[data-preset=shared]').click()
+  await p.locator('[data-p=use]').click()
+  await sent('presetUse', b => b.kind === 'presetUse' && b.name === 'shared' && Object.keys(b).length === 2)
+  check(await p.locator('.pline').isVisible(), 'Use closes the chooser')
+  write({ ...VARIANTS.presets, flowSaid: { ok: true, text: 'Using shared here.', at: Date.now() + 60_000 } })
+  await p.waitForFunction(() => document.getElementById('notice').textContent.includes('Using shared here.')).catch(() => fails.push('the reply to Use shows'))
+  write(VARIANTS.presets)
+  await p.locator('[data-p=open]').click()
+  await p.locator('[data-preset=""]').click()
+  await p.locator('[data-p=none]').click()
+  await sent('presetNone', b => b.kind === 'presetNone')
+  // Move, New and Import.
+  await p.locator('[data-p=open]').click()
+  await p.locator('[data-p=make]').click()
+  d = await det()
+  check(d.includes('dashboard-widths') && d.includes('review') && d.includes('Notion'), 'Move lists what moves')
+  await p.locator('[data-p=domove]').click()
+  await sent('presetMove into the preset in use', b => b.kind === 'presetMove' && b.name === 'game-dev')
+  await p.locator('[data-p=open]').click()
+  await p.locator('[data-p=new]').click()
+  await p.locator('#pname').fill('none')
   check((await p.locator('#pslug').textContent()).includes("can't be names"), 'a reserved name is refused')
-  await p.locator('[data-p=save]').click()
-  await p.locator('#pname').fill('Game Dev 2')
-  check((await p.locator('#pslug').textContent()).includes('~/.sentinel/presets/game-dev-2.json'), 'the name as it saves')
+  await p.locator('#pname').fill('game-dev')
+  check((await p.locator('#pslug').textContent()).includes('There is a preset called game-dev already'), 'a taken name is refused')
+  await p.locator('[data-p=create]').click()
+  await p.locator('#pname').fill('Mobile App')
+  check((await p.locator('#pslug').textContent()).includes('~/.sentinel/presets/mobile-app/'), 'the folder it makes')
   write({ ...VARIANTS.presets, library: { ...VARIANTS.presets.library, presets: PRESETS.slice(1) } })
   await p.locator('[data-preset=backend]').waitFor({ state: 'detached' })
-  check(await p.locator('#pname').evaluate(i => i.value === 'Game Dev 2' && document.activeElement === i && document.getElementById('pslug').textContent.includes('game-dev-2.json')), 'a snapshot that redraws the box keeps what you typed')
+  check(await p.locator('#pname').evaluate(i => i.value === 'Mobile App' && document.activeElement === i && document.getElementById('pslug').textContent.includes('mobile-app')), 'a snapshot that redraws the box keeps what you typed')
   write(VARIANTS.presets)
   await p.locator('#pname').press('Enter')
-  await sent('presetSave', b => b.kind === 'presetSave' && b.name === 'game-dev-2')
-  const team = JSON.stringify({ weight: 'light' })
+  await sent('presetNew', b => b.kind === 'presetNew' && b.name === 'mobile-app')
+  const made = { ...VARIANTS.presets, library: { ...VARIANTS.presets.library, using: { name: 'mobile-app' }, presets: [...PRESETS, { ...PRESETS[0], name: 'mobile-app', weight: undefined, raw: {} }] }, flowSaid: { ok: true, text: 'Made the preset mobile-app.', at: Date.now() + 60_000 } }
+  write(made)
+  await p.waitForFunction(() => document.querySelector('#swScope [aria-pressed=true]')?.textContent === 'mobile-app').catch(() => fails.push('New puts Change for on the new preset'))
+  write(VARIANTS.presets)
+  await p.locator('#swScope [data-sws=project]').click()
+  const team = JSON.stringify({ weight: 'light', mcps: ['Unity', 'Notion'] })
   await p.locator('#pfile').setInputFiles({ name: 'team.json', mimeType: 'application/json', buffer: Buffer.from(team) })
-  await sent('presetImport', b => b.kind === 'presetImport' && b.name === 'team.json' && b.content === team)
+  d = await det()
+  check(d.includes('Import team') && d.includes("didn't make this preset") && await p.locator('[data-swap=Unity]').count() === 1 && await p.locator('[data-swap=Notion]').count() === 0, 'Import shows the file and asks about the MCP this computer lacks')
+  await p.locator('[data-swap=Unity]').selectOption({ label: 'Leave it out' })
+  await p.locator('[data-p=doimport]').click()
+  await sent('presetImport with a swap', b => b.kind === 'presetImport' && b.name === 'team.json' && b.content === team && same(b.swap, { Unity: null }))
+  await p.locator('#pfile').setInputFiles({ name: 'odd.json', mimeType: 'application/json', buffer: Buffer.from('{ nope') })
+  await sent('presetImport of a file that does not read', b => b.kind === 'presetImport' && b.name === 'odd.json' && b.content === '{ nope' && !('swap' in b))
   await p.locator('#pfile').setInputFiles({ name: 'big.json', mimeType: 'application/json', buffer: Buffer.from(`{"x":"${'a'.repeat(70_000)}"}`) })
   await p.waitForFunction(() => document.getElementById('fsaid').textContent.includes('too big')).catch(() => fails.push('a file too big for the page server is refused'))
   await p.context().close()
+  // Saved in offers the preset in use, with its folder.
+  p = await open('presets', '#ins-new')
+  const savedIn = await p.locator('[name=iescope]').evaluateAll(xs => xs.map(x => x.closest('.opt').textContent))
+  check(savedIn.length === 3 && savedIn[1].includes('~/.sentinel/presets/game-dev/instructions/') && savedIn[1].includes('only in projects that use game-dev'), 'Saved in offers the preset in use, with its folder')
+  await p.context().close()
   p = await open('noPresets', '#library')
-  check((await p.locator('.pline').textContent()).includes('No MCPs'), 'no needed MCPs')
+  check((await p.locator('.pline').textContent()).includes('No MCPs') && same(await p.locator('#swScope button').allTextContents(), ['This project', 'Every project']), 'no needed MCPs, and two places with no preset')
   await p.locator('[data-p=open]').click()
-  check((await p.locator('.plist').textContent()).includes('No presets yet') && await p.locator('#pname').isVisible(), 'no presets: the list says so and offers Save')
+  check((await p.locator('.plist').textContent()).includes('No preset') && (await det()).includes('This project runs on its own settings'), 'no presets: No preset is the one in use')
+  await p.locator('[data-p=make]').click()
+  await p.locator('#pname').fill('web')
+  await p.locator('[data-p=domake]').click()
+  await sent('presetMove into a new preset', b => b.kind === 'presetMove' && b.name === 'web')
+  await p.context().close()
+  p = await open('presetMissing', '#library')
+  check((await p.locator('.pline').textContent()).includes("game-dev isn't on this computer") && same(await p.locator('#swScope button').allTextContents(), ['This project', 'Every project']), 'a preset this computer lacks is said on the line, and Change for leaves it out')
+  check(await p.locator('.pline [data-p=import]').isVisible(), 'Import sits beside it')
+  await p.context().close()
+  p = await open('missingDraft', '')
+  check((await p.locator('#stub').textContent()).includes("game-dev isn't on this computer"), 'the draft card says a preset this computer lacks')
   await p.context().close()
   p = await open('mcpDraft', '')
   check((await p.locator('#stub .mcpw').textContent()) === "Unity isn't connected, and amp needs you to sign in. Connect them with /mcp, then lock.", 'a draft names a needed MCP that is not ready above Lock')
@@ -2102,10 +2262,14 @@ try {
   p = await open('draft', '')
   check(await p.locator('#stub .mcpw').count() === 0, 'no warning on a draft when every needed MCP is ready')
   await p.context().close()
+  if (only === 'presets' && process.env.NOLAYOUT) break others
 
   await layout('presets', '#library', 'presets-line')
   await layout('presets', '#library', 'presets-open', async p => { await p.locator('[data-p=open]').click() })
   await layout('presets', '#library', 'presets-untrusted', async p => { await p.locator('[data-p=open]').click(); await p.locator('[data-preset=shared]').click() })
+  await layout('presets', '#library', 'presets-move', async p => { await p.locator('[data-p=open]').click(); await p.locator('[data-p=make]').click() })
+  await layout('presets', '#library', 'presets-new', async p => { await p.locator('[data-p=open]').click(); await p.locator('[data-p=new]').click() })
+  await layout('presetMissing', '#library', 'presets-missing')
   await layout('noPresets', '#library', 'presets-empty', async p => { await p.locator('[data-p=open]').click() })
   await layout('mcpDraft', '', 'mcp-draft')
   await layout('settings', '', 'settings-draft')
@@ -2116,6 +2280,7 @@ try {
   await layout('insDraft', '#library', 'ins-draft')
   await layout('draft', '', 'draft')
   await layout('proofDraft', '', 'proof-draft')
+  await layout('proofPoints', '', 'proof-points')
   await layout('proofRun', '#task-pay', 'proof-task')
   await layout('proofRun', '#task-pkg', 'proof-added')
   await layout('proofRun', '#source-refund', 'proof-source')

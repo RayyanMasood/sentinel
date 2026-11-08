@@ -81,7 +81,7 @@ test('the rows: words the user typed don\'t read as a Keep', () => {
   expect(rows.find(r => r.states.includes('asked'))!.kept).toBeUndefined()
 })
 
-test('the view model carries it with the switch on, and none of it with the switch off', () => {
+test('the view model carries the weights always, and the settings only with the switch on', () => {
   const vm = summarize(draftOf({ ...MIXED, library: lib() }))
   expect(vm.planWeight).toBe('standard')
   expect(vm.settingRows).toHaveLength(5)
@@ -93,9 +93,10 @@ test('the view model carries it with the switch on, and none of it with the swit
   expect('weightNow' in s('done')).toBe(false)
   const { states: _states, ...off } = lib()
   const plain = summarize(draftOf({ action: 'define', title: 'P', states: [st('a')], library: off }))
-  expect('planWeight' in plain).toBe(false)
+  expect(plain.planWeight).toBe('standard')
   expect('settingRows' in plain).toBe(false)
-  expect('weightNow' in plain.states[0]!).toBe(false)
+  expect(plain.states[0]!.weightNow).toBe('standard')
+  expect('planWeight' in summarize(draftOf({ action: 'define', title: 'P', states: [st('a')] }))).toBe(false)
   // The note on a member's rerun doesn't depend on the switch.
   const thorough = summarize(draftOf({ action: 'define', title: 'P', states: [st('a')], library: { ...off, on: [...off.on, 'fails-without-change'] } }))
   expect(thorough.states[0]!.noRerun).toBe(true)

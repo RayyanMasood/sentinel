@@ -1497,6 +1497,34 @@ test('a passing member hands back a staged diff that is applied to the project',
   expect(eng.runs).toHaveLength(before + 7)
 })
 
+// A prompt sent while the main conversation works waits until its turn ends, which can be an hour.
+test('a member that comes back mid-turn is told on the next tool result, and only once', async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  eng.setPatch('diff --git a/ui/box.tsx b/ui/box.tsx\nnew file mode 100644\n--- /dev/null\n+++ b/ui/box.tsx\n@@ -0,0 +1 @@\n+box\n')
+  await $.turn.start({ text: '', turnId: 't' })
+  const before = eng.submitted.length
+  await stopMember($, clock, 'm-1')
+  expect(eng.submitted).toHaveLength(before)
+  expect(notes(await $.tool.call({ tool: 'Read', file_path: REFUND }))).toMatch(/ui is in: its member passed `npm test -- ui` in its worktree\. Sentinel applied its changes to the project: ui\/box\.tsx\./)
+  expect(notes(await $.tool.call({ tool: 'Read', file_path: REFUND }))).not.toMatch(/is in: its member/)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await clock.settle()
+  expect(eng.submitted.slice(before).join('\n')).not.toMatch(/is in: its member/)
+})
+
+test('a member that comes back mid-turn with no tool call after it is told when the turn ends', async ($: any, on: any) => {
+  const { eng, clock } = await parallelAtApi($, on)
+  await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
+  await $.turn.start({ text: '', turnId: 't' })
+  const before = eng.submitted.length
+  await stopMember($, clock, 'm-1')
+  expect(eng.submitted).toHaveLength(before)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await clock.settle()
+  expect(eng.submitted.at(-1)).toMatch(/ui is in: its member passed `npm test -- ui` in its worktree\./)
+})
+
 test('a member\'s changes outside its state stay in its worktree, which is kept and named', async ($: any, on: any) => {
   const { eng, clock } = await parallelAtApi($, on)
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
@@ -2736,7 +2764,7 @@ test('a failed check reports its last lines', async ($: any, on: any) => {
   expect(out).not.toContain('[sentinel] exit')
   expect(out).not.toContain('\x1b[')
   // Where the run's story is kept, the reason stays one line.
-  const trip = eng.snap().trips?.at(-1) ?? savedRun(eng).trips?.at(-1)
+  const trip = eng.snap().trips!.at(-1)!
   expect(trip.reason).not.toContain('line 30')
 })
 
@@ -3289,7 +3317,7 @@ test("the draft takes the user's flows, and a revise keeps them", async ($: any,
   eng.files[`${HOME}/.sentinel/flows/broken.json`] = '{'
   const listed = await sentinel('flows')
   expect(listed).toMatch(/review \(project\): Test the state, then wait for my review\. States: tests, look\. Adds itself after states that edit src\/\*\*\./)
-  expect(listed).toMatch(/setup \(personal\): States: branch\. Adds itself when you add it\./)
+  expect(listed).toMatch(/setup \(every project\): States: branch\. Adds itself when you add it\./)
   expect(listed).toMatch(/Not read: ~\/\.sentinel\/flows\/broken\.json/)
   expect(await sentinel('flow trust review')).toMatch(/^Trusted/)
   await sentinel('lock')
@@ -3317,7 +3345,7 @@ test("the draft takes the user's flows, and a revise keeps them", async ($: any,
   expect(run.plan!.states.find(x => x.id === 'review-look')).toMatchObject({ wait: 'after', label: 'You review Full suite', group: 'review' })
 })
 
-test('Claude drafts a flow; the user saves it to the project or keeps it personal', async ($: any, on: any) => {
+test('Claude drafts a flow; the user saves it to the project or for every project', async ($: any, on: any) => {
   const clock = mock.clock(on)
   const eng = engine(on)
   const sentinel = command(clock, $)
@@ -3333,7 +3361,7 @@ test('Claude drafts a flow; the user saves it to the project or keeps it persona
   expect(await sentinel('flow save project')).toBe('Saved the flow "ui-check" to .sentinel/flows/ui-check.json.')
   expect(JSON.parse(eng.files[`${ROOT}/.sentinel/flows/ui-check.json`]!)).toMatchObject({ name: 'ui-check', states: [{ id: 'shots' }, { id: 'look', wait: 'after' }] })
   expect(eng.files[`${ROOT}/.sentinel/.gitignore`]).toBe(IGNORED)
-  expect(await sentinel('flow save personal')).toMatch(/No flow draft to save/)
+  expect(await sentinel('flow save everywhere')).toMatch(/No flow draft to save/)
   await $.tool.call({ tool: TOOL, ...flow, name: 'mine' })
   expect(await sentinel('flow discard')).toBe('Discarded the flow draft "mine".')
   expect(eng.files[`${HOME}/.sentinel/flows/mine.json`]).toBeUndefined()
@@ -3517,7 +3545,7 @@ test('library: fails-first runs only while it is on', () => {
 // - a flow and an instruction share a name, so one switch moves both;
 // - a file with a built-in's name lists twice, or loses the built-in's weights;
 // - /sentinel weight leaves that file's built-in switches behind, or clears the user's own items' switches;
-// - personal writes the project file, or the personal switch beats the project's;
+// - everywhere writes the project file, or every project's switch beats the project's;
 // - an unknown name or weight writes a file;
 // - a missing or bad switches file breaks a define;
 // - the model's `library` in define is kept, or a revise of a draft takes the switches as they are by then;
@@ -3543,15 +3571,15 @@ test('library: on, off and weight commands write the switches files', async ($: 
   expect(saved(LIB_PROJECT)).toEqual({ on: { 'failure-list': false, mine: false, 'close-phase': true } })
   expect(eng.files[`${ROOT}/.sentinel/.gitignore`]).toBe(IGNORED)
   // The user's default goes in their home folder, and the project's switch wins over it.
-  expect(await sentinel('on failure-list personal')).toBe("failure-list is on in your default. This project's switches decide it, so it stays off.")
-  expect(await sentinel('on sources-first personal')).toBe('sources-first is on in your default.')
+  expect(await sentinel('on failure-list everywhere')).toBe("failure-list is on for every project. This project's switches decide it, so it stays off.")
+  expect(await sentinel('on sources-first everywhere')).toBe('sources-first is on for every project.')
   expect(saved(LIB_PERSONAL)).toEqual({ on: { 'failure-list': true, 'sources-first': true } })
   expect(saved(LIB_PROJECT)).toEqual({ on: { 'failure-list': false, mine: false, 'close-phase': true } })
   // A project weight clears that file's built-in switches. The user's items keep theirs, and the other file stays.
   expect(await sentinel('weight thorough')).toBe('The weight is thorough for this project. The built-ins follow it; your own items keep their switches.')
   expect(saved(LIB_PROJECT)).toEqual({ weight: 'thorough', on: { mine: false } })
   expect(saved(LIB_PERSONAL)).toEqual({ on: { 'failure-list': true, 'sources-first': true } })
-  expect(await sentinel('weight light personal')).toBe('The weight is light in your default. This project picked thorough, which wins here.')
+  expect(await sentinel('weight light everywhere')).toBe('The weight is light for every project. This project picked thorough, which wins here.')
   expect(saved(LIB_PERSONAL)).toEqual({ weight: 'light' })
   const listed = await sentinel('library')
   expect(listed).toMatch(/^Weight: thorough \(set for this project\)\./)
@@ -3563,12 +3591,12 @@ test('library: on, off and weight commands write the switches files', async ($: 
   // Unknown names and weights are refused and write nothing.
   const files = JSON.stringify(eng.files)
   expect(await sentinel('on nope')).toBe('There is no instruction or flow "nope". /sentinel library lists them.')
-  expect(await sentinel('off nope personal')).toBe('There is no instruction or flow "nope". /sentinel library lists them.')
-  expect(await sentinel('weight heavy')).toBe('Use /sentinel weight light, standard or thorough, and personal after it for your default.')
+  expect(await sentinel('off nope everywhere')).toBe('There is no instruction or flow "nope". /sentinel library lists them.')
+  expect(await sentinel('weight heavy')).toBe('Use /sentinel weight light, standard or thorough. Add preset or everywhere after it for the preset in use or every project.')
   expect(await sentinel('trust nope')).toBe('There is no instruction or flow "nope". /sentinel library lists them.')
   expect(JSON.stringify(eng.files)).toBe(files)
   // Only the user switches the Library.
-  for (const args of ['on mine', 'off mine personal', 'weight light', 'trust mine']) {
+  for (const args of ['on mine', 'off mine everywhere', 'weight light', 'trust mine']) {
     expect(said(await $.command.run({ command: 'sentinel', args, origin: { kind: 'plugin' } }))).toMatch(/^Only the user runs \/sentinel/)
   }
   expect(JSON.stringify(eng.files)).toBe(files)
@@ -3594,14 +3622,14 @@ test('library: instruction files load like flows, refused when bad, off until tr
   expect(listed).toMatch(/Not read: .*\.sentinel\/instructions\/review\.json: "review" is already the name of a flow\./)
   expect(listed).toMatch(/^off widths \(project, start\): Check three widths\. Off until you trust it: Sentinel didn't save this file on this computer, or it changed since\. Check it, then \/sentinel trust widths\.$/m)
   expect(listed.match(/failure-list \(/g)).toHaveLength(1)
-  expect(listed).toMatch(/^off failure-list \(personal, start\): My failure list\./m)
+  expect(listed).toMatch(/^off failure-list \(every project, start\): My failure list\./m)
   expect(listed.match(/close-phase \(/g)).toHaveLength(1)
-  expect(listed).toMatch(/^off close-phase \(personal\): States: branch\./m)
+  expect(listed).toMatch(/^off close-phase \(every project\): States: branch\./m)
   expect(await sentinel('trust widths')).toBe('Trusted .sentinel/instructions/widths.json as it is now. It is on.')
   expect(await sentinel('trust fails-first')).toBe('fails-first is built in, so there is nothing to trust.')
   // The copy keeps the built-in's weights: on at Standard, off at Light. The user's own item stays on.
   await sentinel('trust failure-list')
-  expect(await sentinel('library')).toMatch(/^on +failure-list \(personal, start\): My failure list\.$/m)
+  expect(await sentinel('library')).toMatch(/^on +failure-list \(every project, start\): My failure list\.$/m)
   await sentinel('weight light')
   listed = await sentinel('library')
   expect(listed).toMatch(/^off failure-list/m)
@@ -3655,6 +3683,7 @@ test("library: define stores the library the switches give, never the model's", 
       { name: 'sources-first', at: 'draft', text: textOf('sources-first') },
       { name: 'widths', description: 'Widths', at: 'start', files: ['web/**'], text: 'Check three widths.' },
     ],
+    mcps: [],
   }
   await $.tool.call({ tool: 'ExitPlanMode' })
   await $.tool.call({ tool: TOOL, ...PLAN, library: model })
@@ -3775,7 +3804,7 @@ test('library: Claude drafts an instruction with the flow action, and the user s
   expect(said(await draft({ text: ' ' }))).toBe('widths needs text: what Sentinel tells Claude.')
   expect(await sentinel('flow discard')).toBe('No flow draft to discard.')
   const out = said(await draft({ description: 'Widths', files: [`${ROOT}/web/**`] }))
-  expect(out).toBe('Sentinel holds the instruction "widths" for the user. They save it from the band above the prompt or the dashboard, to the project (.sentinel/instructions) or their personal instructions (~/.sentinel/instructions). Show it to them in your reply, then stop and wait.')
+  expect(out).toBe('Sentinel holds the instruction "widths" for the user. They save it from the band above the prompt or the dashboard, to this project (.sentinel/instructions) or every project (~/.sentinel/instructions). Show it to them in your reply, then stop and wait.')
   const band = await $.ui.mount({ plugin: 'sentinel', component: 'AbovePrompt', props: { hasSurvey: false }, surface: 'terminal' })
   expect(await band.find({ type: 'Text', text: 'Sentinel: Claude drafted the instruction "widths". Save it?' })).toBeDefined()
   await band.unmount()
@@ -5813,7 +5842,7 @@ test('terminal proof: a draft with nothing to count says nothing about quotes', 
 
 test('terminal proof: a state added during the run gets no question in the band', () => {
   const vm = summarize(addOne({ added: WHY }).run)
-  const band = JSON.stringify(renderBand({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, answer: () => {}, asking: false, saveFlow: () => {}, discardFlow: () => {} }))
+  const band = JSON.stringify(renderBand({ Box: 'Box', Text: 'Text', Button: 'Button' }, vm, { open: () => {}, lock: () => {}, keep: () => {}, takeOut: () => {}, resume: () => {}, answer: () => {}, asking: false, saveFlow: () => {}, discardFlow: () => {}, setRow: () => {} }))
   expect(band).not.toContain('nothing asks for it')
   expect(band).toContain('Sentinel: a 1/4')
 })

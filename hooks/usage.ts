@@ -5,8 +5,9 @@ import type { Price, Usage, UsageView, Watch } from '../types'
 
 export const WEEKLY = 'seven_day'
 const NAMES: [string, string][] = [[WEEKLY, 'Week'], ['five_hour', '5 hours']]
-// How far the figure moves in one measurement, and how many measurements are kept.
-const POINTS = 3
+// How far the figure moves in one measurement, and how many measurements are kept. One point is exact, as a measurement
+// runs from one tick of the figure to the next.
+const POINTS = 1
 const KEPT = 20
 const HOUR = 3_600_000
 
@@ -36,13 +37,16 @@ export const perPoint = (list: Price[]) => (list.length ? Math.max(...list.map(p
 const isPrice = (p: any): p is Price => !!p && typeof p === 'object' && Number.isFinite(p.usd) && p.usd > 0 && Number.isFinite(p.points) && p.points > 0
 export const parsePrices = (x: unknown): Price[] => (Array.isArray(x) ? x.filter(isPrice) : [])
 
-export function shareWord(usd: number, price: number | undefined): string {
-  if (!price) return 'estimating'
+// The share of the week, once the price of 1% is known.
+export function shareOf(usd: number, price: number | undefined): string | undefined {
+  if (!price) return undefined
   const share = usd / price
   return share < 0.1 ? 'under 0.1%' : `about ${Number(share.toFixed(1))}%`
 }
 
-// What the page and the terminal show. Undefined when Claude Code reports no limit Sentinel can name.
+const money = (usd: number) => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
+
+// What the page and the terminal show: the cost always, and the share of the week with a weekly figure and a price.
 export function usageView(u: Usage | undefined): UsageView | undefined {
   if (!u) return undefined
   const windows = NAMES.flatMap(([kind, name]) => {
@@ -52,11 +56,7 @@ export function usageView(u: Usage | undefined): UsageView | undefined {
     const was = began && sameWindow(began.resetsAt, w.resetsAt) ? began.percentUsed : undefined
     return [{ name, percent: w.percentUsed, ...(w.resetsAt ? { resetsAt: w.resetsAt } : {}), ...(was === undefined ? {} : { was }) }]
   })
-  if (!windows.length) return undefined
-  const weekly = u.windows.some(w => w.kind === WEEKLY)
-  return {
-    windows, usd: u.usd,
-    ...(weekly ? { plan: shareWord(u.usd, u.perPoint) } : {}),
-    steps: weekly ? Object.fromEntries(Object.entries(u.byState).map(([id, usd]) => [id, shareWord(usd, u.perPoint)])) : {},
-  }
+  const price = u.windows.some(w => w.kind === WEEKLY) ? u.perPoint : undefined
+  const cost = (usd: number) => { const share = shareOf(usd, price); return { cost: money(usd), ...(share ? { share } : {}) } }
+  return { windows, plan: cost(u.usd), steps: Object.fromEntries(Object.entries(u.byState).map(([id, usd]) => [id, cost(usd)])) }
 }

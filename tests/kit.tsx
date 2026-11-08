@@ -1,6 +1,6 @@
 // The engine's test double and the helpers every test file shares. sentinel.test.tsx and the map's test files import it.
 import { expect, mock, test as kitTest } from 'claude-code/testing'
-import type { Run } from '../types'
+import type { Run, Watch } from '../types'
 
 export const ROOT = 'D:/proj'
 export const TOOL = 'mcp__sentinel__plan'
@@ -93,7 +93,7 @@ export function engine(on: any) {
   on('store.get', (_: unknown, e: any) => ({ value: store[e.key] }))
   on('store.set', (_: unknown, e: any) => ((store[e.key] = e.value), { value: undefined }))
   // What the plugin holds in memory, as it last wrote it. A test reads it here, since $.state is the plugin's own.
-  const memory: { run?: Run; said?: { messages: { text: string; at: string }[]; wrote: string[] } } = {}
+  const memory: { run?: Run; said?: { messages: { text: string; at: string }[]; wrote: string[] }; watch?: Watch | null } = {}
   on('state.set', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => {
     memory[e.key as 'run' | 'said'] = e.value.value
     return next(e)
@@ -223,8 +223,10 @@ export function engine(on: any) {
     // Sentinel waits on a check by running sleep. It answers at once here, so Sentinel waits on its clock instead.
     if (e.argv[0] === 'sleep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
     await fire(e.argv[1])
-    // Node deleting a flow file.
-    if (e.argv[0] === 'node' && /rmSync/.test(e.argv[2])) delete files[key(e.argv[3])]
+    // Node deleting a flow file, or a preset's folder with all in it.
+    if (e.argv[0] === 'node' && /rmSync/.test(e.argv[2])) {
+      for (const f of Object.keys(files)) if (f === key(e.argv[3]) || (/recursive/.test(e.argv[2]) && f.startsWith(`${key(e.argv[3])}/`))) delete files[f]
+    }
     runs.push({ argv: [...e.argv], cwd: e.init?.cwd, env: e.init?.env, stdin: e.init?.stdin })
     if (/\/hub\.mjs$/.test(e.argv[1] ?? '')) {
       if (hubExit === undefined) throw new Error('node not found')

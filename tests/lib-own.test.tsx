@@ -153,15 +153,16 @@ test('a list follows the state\'s weight when the switch is on', () => {
 
 const GUARDED = /The Library's switches are the user's/
 
-test('Claude can\'t edit the switches file, at either path', async ($: any, on: any) => {
+test('Claude can\'t edit the switches file, at any of its paths', async ($: any, on: any) => {
   await session($, on)
   const edit = (tool: string, file_path: string) => $.tool.call({ tool, file_path, content: '{}', old_string: 'a', new_string: 'b' })
   for (const tool of ['Edit', 'Write']) {
-    for (const path of [`${ROOT}/.sentinel/library.json`, '.sentinel/library.json', `${HOME}/.sentinel/library.json`, `${ROOT}/.sentinel/LIBRARY.JSON`]) {
+    for (const path of [`${ROOT}/.sentinel/library.json`, '.sentinel/library.json', `${HOME}/.sentinel/library.json`, `${ROOT}/.sentinel/LIBRARY.JSON`, `${HOME}/.sentinel/presets/game-dev/library.json`]) {
       expect(said(await edit(tool, path))).toMatch(GUARDED)
     }
-    expect(said(await edit(tool, `${ROOT}/.sentinel/other.json`))).not.toMatch(GUARDED)
-    expect(said(await edit(tool, `${ROOT}/src/library.json`))).not.toMatch(GUARDED)
+    for (const path of [`${ROOT}/.sentinel/other.json`, `${ROOT}/src/library.json`, `${HOME}/.sentinel/presets/game-dev/flows/library.json`]) {
+      expect(said(await edit(tool, path))).not.toMatch(GUARDED)
+    }
   }
 })
 

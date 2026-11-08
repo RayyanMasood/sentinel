@@ -13,9 +13,11 @@
 //  9. A bad value in the store breaks the reading.
 // 10. "What it was when you signed off" is compared across a new week.
 // 11. A failed usage read stops the token count.
+// 12. A reload of the plugin starts the watch over, so the share of the week is never learned.
+// 13. The cost stays hidden until the share is known, or with no weekly figure.
 import { expect, mock } from 'claude-code/testing'
 import { addUsage, emptyRun, summarize } from '../hooks/core'
-import { keptPrices, parsePrices, perPoint, shareWord, usageView, watch } from '../hooks/usage'
+import { keptPrices, parsePrices, perPoint, shareOf, usageView, watch } from '../hooks/usage'
 import type { Run, Usage } from '../types'
 import { ROOT, TOOL, engine, said, test, until } from './kit'
 
@@ -70,22 +72,27 @@ test('a reading with no figures keeps the last ones, and a window that appears l
 
 const USAGE = (o: Partial<Usage> = {}): Usage => ({ usd: 0, last: 0, byState: {}, windows: [WEEK(52)], began: [WEEK(48)], ...o })
 
-test('a saved run with no usage, and an account with no figures, show nothing', () => {
+test('a saved run with no usage shows nothing, and an account with no limits still shows the cost', () => {
   expect(usageView(undefined)).toBeUndefined()
-  expect(usageView(USAGE({ windows: [], began: [] }))).toBeUndefined()
-  expect(usageView(USAGE({ windows: [{ kind: 'spend_limit', percentUsed: 3 }] }))).toBeUndefined()
   expect(summarize(running()).usage).toBeUndefined()
+  for (const windows of [[], [{ kind: 'spend_limit', percentUsed: 3 }]]) {
+    const v = usageView(USAGE({ windows, began: [], usd: 4.2, byState: { a: 4.2 } }))!
+    expect(v.windows).toEqual([])
+    expect(v.plan).toEqual({ cost: '$4.20' })
+    expect(v.steps).toEqual({ a: { cost: '$4.20' } })
+  }
 })
 
-test('shares say estimating until there is a price, then about so much, then under 0.1%', () => {
-  expect(shareWord(1, undefined)).toBe('estimating')
-  expect(shareWord(7, 5)).toBe('about 1.4%')
-  expect(shareWord(0.4, 5)).toBe('under 0.1%')
-  expect(shareWord(0, 5)).toBe('under 0.1%')
+test('the cost always shows, and the share joins it once there is a price', () => {
+  expect(shareOf(1, undefined)).toBeUndefined()
+  expect(shareOf(7, 5)).toBe('about 1.4%')
+  expect(shareOf(0.4, 5)).toBe('under 0.1%')
+  expect(shareOf(0, 5)).toBe('under 0.1%')
   const v = usageView(USAGE({ usd: 7, byState: { a: 3, b: 4 }, perPoint: 5 }))!
-  expect(v.plan).toBe('about 1.4%')
-  expect(v.usd).toBe(7)
-  expect(v.steps).toEqual({ a: 'about 0.6%', b: 'about 0.8%' })
+  expect(v.plan).toEqual({ cost: '$7.00', share: 'about 1.4%' })
+  expect(v.steps).toEqual({ a: { cost: '$3.00', share: 'about 0.6%' }, b: { cost: '$4.00', share: 'about 0.8%' } })
+  expect(usageView(USAGE({ usd: 7, byState: { a: 7 } }))!.plan).toEqual({ cost: '$7.00' })
+  expect(usageView(USAGE({ usd: 1234.5 }))!.plan.cost).toBe('$1235')
 })
 
 test('the week comes first, the 5-hour figure shows only when reported, and each says what it was at the start', () => {
@@ -107,8 +114,8 @@ test('with no weekly figure there is no share of it to show', () => {
   const five = { kind: 'five_hour', percentUsed: 20 }
   const v = usageView(USAGE({ windows: [five], began: [five], usd: 4, byState: { a: 4 }, perPoint: 2 }))!
   expect(v.windows.map(w => w.name)).toEqual(['5 hours'])
-  expect(v.plan).toBeUndefined()
-  expect(v.steps).toEqual({})
+  expect(v.plan).toEqual({ cost: '$4.00' })
+  expect(v.steps).toEqual({ a: { cost: '$4.00' } })
 })
 
 // ---- the price of 1% ----
@@ -124,37 +131,37 @@ const run = (steps: [number, number, string?][]) => {
   return prices
 }
 
-test('a measurement starts when the figure ticks over and ends 3 points later', () => {
+test('a measurement starts when the figure ticks over and ends 1 point later', () => {
   // The cost before the first tick is left out, as the figure may have been about to tick when reading began.
-  expect(run([[50, 100], [50, 105], [51, 110], [52, 120], [53, 125]])).toEqual([])
-  expect(run([[50, 100], [50, 105], [51, 110], [52, 120], [53, 125], [54, 135]])).toEqual([{ usd: 25, points: 3, at: AT }])
+  expect(run([[50, 100], [50, 105], [51, 110], [51, 115]])).toEqual([])
+  expect(run([[50, 100], [50, 105], [51, 110], [51, 115], [52, 125]])).toEqual([{ usd: 15, points: 1, at: AT }])
 })
 
 test('the next measurement starts where the last one ended', () => {
-  expect(run([[50, 0], [51, 10], [54, 40], [57, 100]])).toEqual([{ usd: 30, points: 3, at: AT }, { usd: 60, points: 3, at: AT }])
+  expect(run([[50, 0], [51, 10], [52, 40], [53, 100]])).toEqual([{ usd: 30, points: 1, at: AT }, { usd: 60, points: 1, at: AT }])
 })
 
-test('a figure with a decimal works the same way, and a jump past 3 points counts them all', () => {
-  expect(run([[50.2, 0], [50.5, 2], [53.5, 32]])).toEqual([{ usd: 30, points: 3, at: AT }])
+test('a figure with a decimal works the same way, and a jump past 1 point counts them all', () => {
+  expect(run([[50.2, 0], [50.5, 2], [51.5, 32]])).toEqual([{ usd: 30, points: 1, at: AT }])
   expect(run([[50, 0], [51, 10], [56, 60]])).toEqual([{ usd: 50, points: 5, at: AT }])
 })
 
 test('a new week starts the measurement over', () => {
-  expect(run([[90, 0], [91, 10], [93, 30], [1, 40], [2, 50], [4, 60]])).toEqual([])
-  expect(run([[90, 0], [91, 10], [93, 30], [1, 40], [2, 50], [5, 90]])).toEqual([{ usd: 40, points: 3, at: AT }])
-  expect(run([[1, 0], [2, 10], [3, 30, '2026-11-16T22:00:00.000Z'], [5, 40, '2026-11-16T22:00:00.000Z']])).toEqual([])
+  expect(run([[90, 0], [91, 10], [1, 40], [2, 50]])).toEqual([])
+  expect(run([[90, 0], [91, 10], [1, 40], [2, 50], [3, 90]])).toEqual([{ usd: 40, points: 1, at: AT }])
+  expect(run([[1, 0], [2, 10], [3, 30, '2026-11-16T22:00:00.000Z'], [4, 40, '2026-11-16T22:00:00.000Z']])).toEqual([])
 })
 
 test('a small wobble in the reset time does not', () => {
-  expect(run([[50, 0], [51, 10, '2026-11-09T22:00:01.000Z'], [54, 40, '2026-11-09T21:59:58.000Z']])).toEqual([{ usd: 30, points: 3, at: AT }])
+  expect(run([[50, 0], [51, 10, '2026-11-09T22:00:01.000Z'], [52, 40, '2026-11-09T21:59:58.000Z']])).toEqual([{ usd: 30, points: 1, at: AT }])
 })
 
 test('the session\'s cost dropping starts the measurement over', () => {
-  expect(run([[50, 0], [51, 10], [52, 1], [54, 20]])).toEqual([])
+  expect(run([[50, 0], [51, 10], [52, 1], [53, 20]])).toEqual([])
 })
 
 test('a session that sat idle while others moved the figure gives no price', () => {
-  expect(run([[50, 7], [51, 7], [54, 7], [55, 8]])).toEqual([])
+  expect(run([[50, 7], [51, 7], [52, 7]])).toEqual([])
 })
 
 test('the highest price of the last 20 wins, as sessions running at once only pull it down', () => {
@@ -211,9 +218,9 @@ test('a slow reading and a newer one stay in order, so the slow one is no drop i
   await fire()
   await clock.advance(1)
   settle({ rateLimits: [WEEK(50)], cost: { usd: 13 } })
-  await until(clock, () => eng.snap().usage?.usd >= 5)
+  await until(clock, () => eng.snap().usage?.plan.cost === '$5.00')
   await clock.advance(5)
-  expect(eng.snap().usage.usd).toBe(5)
+  expect(eng.snap().usage.plan.cost).toBe('$5.00')
 })
 
 test('a plan resumed in a later session does not take on what that session spent before', async ($: any, on: any) => {
@@ -222,8 +229,8 @@ test('a plan resumed in a later session does not take on what that session spent
   await respond(12, [WEEK(50)])
   expect(said(await $.command.run({ command: 'sentinel', args: 'resume' }))).toMatch(/Resumed/)
   await respond(13, [WEEK(50)])
-  await until(clock, () => eng.snap().usage?.usd >= 2)
-  expect(eng.snap().usage.usd).toBe(2)
+  await until(clock, () => eng.snap().usage?.plan.cost === '$2.00')
+  expect(eng.snap().usage.plan.cost).toBe('$2.00')
 })
 
 test('a model response reads the figures, and the page gets them with the share of the week', async ($: any, on: any) => {
@@ -231,24 +238,32 @@ test('a model response reads the figures, and the page gets them with the share 
   await lock()
   await respond(10, [WEEK(50)])
   await respond(12, [WEEK(50)])
-  await until(clock, () => eng.snap().usage?.usd === 2)
-  expect(eng.snap().usage.plan).toBe('estimating')
+  await until(clock, () => eng.snap().usage?.plan.cost === '$2.00')
+  expect(eng.snap().usage.plan).toEqual({ cost: '$2.00' })
   expect(eng.snap().usage.windows[0]).toMatchObject({ name: 'Week', percent: 50, was: 50 })
-  expect(eng.snap().usage.steps).toEqual({ a: 'estimating' })
+  expect(eng.snap().usage.steps).toEqual({ a: { cost: '$2.00' } })
 })
 
 test('a finished measurement is kept in the store, and sets the price every session then uses', async ($: any, on: any) => {
   const { eng, clock, respond, lock } = harness($, on)
   await respond(0, [WEEK(50)])
   await respond(10, [WEEK(51)])
-  await respond(40, [WEEK(54)])
+  await respond(40, [WEEK(52)])
   await until(clock, () => (eng.store['usage-prices'] as unknown[] | undefined)?.length === 1)
-  expect(eng.store['usage-prices']).toMatchObject([{ usd: 30, points: 3 }])
+  expect(eng.store['usage-prices']).toMatchObject([{ usd: 30, points: 1 }])
   // No plan was running, and the price is still learned. A plan after it uses it.
   await lock()
-  await respond(40, [WEEK(54)])
-  await respond(45, [WEEK(54)])
-  await until(clock, () => eng.snap().usage?.plan === 'about 0.5%')
+  await respond(40, [WEEK(52)])
+  await respond(46, [WEEK(52)])
+  await until(clock, () => eng.snap().usage?.plan.share === 'about 0.2%')
+})
+
+test('the watch is kept in the session\'s state, so it survives a reload of the plugin', async ($: any, on: any) => {
+  const { eng, clock, respond } = harness($, on)
+  await respond(0, [WEEK(50)])
+  await respond(10, [WEEK(51)])
+  await until(clock, () => eng.memory.watch?.from !== undefined)
+  expect(eng.memory.watch).toMatchObject({ pct: 51, usd: 10, from: { pct: 51, usd: 10 } })
 })
 
 test('a price another session stored is used here', async ($: any, on: any) => {
@@ -257,7 +272,7 @@ test('a price another session stored is used here', async ($: any, on: any) => {
   await lock()
   await respond(10, [WEEK(50)])
   await respond(20, [WEEK(50)])
-  await until(clock, () => eng.snap().usage?.plan === 'about 2%')
+  await until(clock, () => eng.snap().usage?.plan.share === 'about 2%')
 })
 
 test('with no cost reported nothing is recorded, and tokens still count', async ($: any, on: any) => {
@@ -283,15 +298,15 @@ test('the count carries across the lock of a draft, and a new plan starts over',
   await $.tool.call({ tool: TOOL, action: 'define', title: 'Take payment', states: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] })
   await respond(10, [WEEK(50)])
   await respond(13, [WEEK(50)])
-  await until(clock, () => eng.snap().usage?.usd === 3)
+  await until(clock, () => eng.snap().usage?.plan.cost === '$3.00')
   expect(said(await $.command.run({ command: 'sentinel', args: 'lock' }))).toMatch(/lock/i)
   await $.tool.call({ tool: TOOL, action: 'status' })
   await respond(14, [WEEK(50)])
-  await until(clock, () => eng.snap().usage?.usd === 4)
+  await until(clock, () => eng.snap().usage?.plan.cost === '$4.00')
   await $.command.run({ command: 'sentinel', args: 'finish done for now' })
   await $.tool.call({ tool: 'ExitPlanMode' })
   await $.tool.call({ tool: TOOL, action: 'define', title: 'Next', states: [{ id: 'c', label: 'C' }, { id: 'd', label: 'D' }] })
   await respond(20, [WEEK(50)])
-  await until(clock, () => eng.snap().title === 'Next' && eng.snap().usage?.usd === 0)
+  await until(clock, () => eng.snap().title === 'Next' && eng.snap().usage?.plan.cost === '$0.00')
   expect(eng.files[`${ROOT}/.sentinel/state.js`]).toContain('"usage"')
 })

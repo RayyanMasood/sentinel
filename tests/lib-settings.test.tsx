@@ -15,6 +15,9 @@
 // 11. A state added mid-run stops for a looser weight, or settings change a plan that already runs.
 // 12. Any five words the user typed unlock a looser setting, whatever they are about.
 // 13. A setting applied once applies again and undoes the user's pick on the draft.
+// 14. With the switch off the page gets no weight for the plan or a state, so the Map can't show one.
+// 15. A skip is free text, so the page can't say which instruction a state went without, or a skip names one the state
+//     was never told, one Sentinel runs itself, or a state that isn't there.
 import { expect, mock } from 'claude-code/testing'
 import { checkSetting } from '../hooks/quote'
 import { STATE_SETTINGS, act, emptyRun, handsFree, planSettings, settledStates, startCheck, weightFor } from '../hooks/core'
@@ -410,4 +413,37 @@ test('settings can\'t change a plan that runs', async ($: any, on: any) => {
   await $.tool.call(quoted)
   const r = await $.tool.call({ tool: TOOL, action: 'revise', order: ['copy', 'form', 'x'], states: [{ id: 'x', label: 'X', added: 'r' }], settings: [{ weight: 'thorough', why: 'x' }] })
   expect(said(r)).toMatch(/"settings" can't change/)
+})
+
+test('with the switch off the page still gets the plan\'s weight and each state\'s', async ($: any, on: any) => {
+  const { signOff, eng } = await session($, on, null)
+  await signOff()
+  await $.tool.call(plan())
+  const v = eng.snap()
+  expect(v.planWeight).toBe('standard')
+  expect(v.states.map((s: any) => s.weightNow)).toEqual(['standard', 'standard', undefined])
+  expect(v.settingRows).toBeUndefined()
+})
+
+test('a skip names the instruction, and only one told at that state can be skipped there', async ($: any, on: any) => {
+  const { signOff, running, eng } = await session($, on)
+  await signOff()
+  await $.tool.call(plan())
+  const skip = async (o: object) => said(await $.tool.call({ tool: TOOL, action: 'decide', ...o }))
+  expect(await skip({ skip: 'failure-list' })).toMatch(/one-line why/)
+  const no = await skip({ skip: 'fails-without-change', reason: 'r' })
+  expect(no).toMatch(/copy wasn't told fails-without-change/)
+  expect(no).toMatch(/These can: failure-list, break-it-once/)
+  expect(await skip({ skip: 'failure-list', to: 'nope', reason: 'r' })).toMatch(/no state "nope"/)
+  expect(await skip({ skip: 'failure-list', reason: 'the copy has no failures to list' })).toMatch(/Recorded/)
+  // A member's state, recorded by the main conversation from its report.
+  expect(await skip({ skip: 'break-it-once', to: 'form', reason: 'its member said so' })).toMatch(/Recorded/)
+  const st = (id: string) => eng.snap().states.find((s: any) => s.id === id)
+  expect(st('copy').skips).toEqual([{ name: 'failure-list', why: 'the copy has no failures to list' }])
+  expect(st('form').skips).toEqual([{ name: 'break-it-once', why: 'its member said so' }])
+  // The run as it is now: run.json is written after the snapshot.
+  expect(eng.memory.run!.audit.at(-1)).toMatchObject({ kind: 'decided', by: 'claude', state: 'form', skip: { name: 'break-it-once' } })
+  // A plain decision is no skip.
+  await skip({ topic: 'naming', choice: 'kebab' })
+  expect(st('copy').skips).toHaveLength(1)
 })

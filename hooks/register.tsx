@@ -15,7 +15,7 @@ import {
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 import { mcpProblem, mcpStates, serverList } from './mcp'
-import { applyPreset, presetFrom, presetName, presetOf, type Preset } from './preset'
+import { addMcps, moveInto, presetFrom, presetName, presetOf, withSwap } from './preset'
 
 type $ = EngineInterface
 type Result = ToolCallResult
@@ -32,6 +32,9 @@ const view = atom({ plugin: 'sentinel', key: 'view' } as const, 'focus' as View,
 const said = atom({ plugin: 'sentinel', key: 'said' } as const, { messages: [], wrote: [] }, { shape: 'said-1' })
 // The overseers started in this session. An id stays after its agent ends, as its hand-back arrives later than its answer.
 const overseers = atom({ plugin: 'sentinel', key: 'overseers' } as const, {}, { shape: 'overseers-1' })
+// The running measurement of what 1% of the week costs. In the session's state, as a reload of the plugin keeps that
+// and starts module variables over; per session, as another session's cost would skew it.
+const watching = atom({ plugin: 'sentinel', key: 'watch' } as const, null as Watch | null, { shape: 'watch-1' })
 // ponytail: the last 100 typed messages, so an older one can't be quoted. Raise it if long sessions miss quotes.
 const MAX_SAID = 100
 // ponytail: a file over 1 MB isn't copied, as run.json is written on every call and the engine refuses a write over 4 MiB.
@@ -148,6 +151,19 @@ export const SCHEMA = {
         required: ['id', 'text'],
       },
     },
+    points: {
+      type: 'array',
+      description: "define, revise (a draft only): every point the user asked for, so a dropped request shows before they lock. Each quotes their words in \"said\" (the same word-for-word check as a state's asked) and has either \"states\", the ids of the states that deliver it, or \"left\", one line on why you left it out. Revise sends the whole list again; once a plan runs it is fixed.",
+      items: {
+        type: 'object',
+        properties: {
+          said: { type: 'string', description: "the user's words, copied exactly" },
+          states: { type: 'array', items: { type: 'string' }, description: 'the ids of the states that deliver it' },
+          left: { type: 'string', description: 'why you left it out, one line' },
+        },
+        required: ['said'],
+      },
+    },
     system: {
       type: 'object',
       description: "define, revise, map: the system map's parts, lines and people that this plan builds or changes, joined to the project's map in .sentinel/system.json. A part or person with an id already on the map replaces it. Sentinel sets every part's status itself; the drawing says only what the parts are.",
@@ -182,6 +198,7 @@ export const SCHEMA = {
     reason: { type: 'string', description: 'amend, decide, escalate, skip, finish, map: why' },
     topic: { type: 'string', description: 'decide: what was decided' },
     choice: { type: 'string', description: 'decide: the choice' },
+    skip: { type: 'string', description: 'decide: the name of an instruction a state was told and you skip there, with reason; to names the state when it isn\'t the active one, as from a member\'s report. In place of topic and choice' },
     kind: { type: 'string', enum: ['breaking', 'stuck', 'blocked'], description: 'escalate. blocked: the work waits on something outside, such as a locked machine or someone\'s reply; the reason names what is needed, and then you stop.' },
   },
   required: ['action'],
@@ -278,10 +295,10 @@ export const register: Register = on => {
     if (arg === 'library' || arg === 'flows') return { text: await libraryList($) }
     if (arg === 'mcp' || arg.startsWith('mcp ')) return { text: await mcpCommand($, e.args.trim().slice(3).trim()) }
     if (arg === 'preset' || arg.startsWith('preset ')) return { text: await presetCommand($, e.args.trim().slice(6).trim()) }
-    const sw = /^(on|off)\s+(\S+)(\s+personal)?$/.exec(arg)
-    if (sw) return { text: (await switchNow($, sw[2]!, sw[1] === 'on', sw[3] ? 'personal' : 'project')).text }
-    const weight = /^weight\s+(\S+)(\s+personal)?$/.exec(arg)
-    if (weight) return { text: (await weightNow($, weight[1]!, weight[2] ? 'personal' : 'project')).text }
+    const sw = /^(on|off)\s+(\S+)(?:\s+(preset|everywhere))?$/.exec(arg)
+    if (sw) return { text: (await switchNow($, sw[2]!, sw[1] === 'on', scopeOf(sw[3]))).text }
+    const weight = /^weight\s+(\S+)(?:\s+(preset|everywhere))?$/.exec(arg)
+    if (weight) return { text: (await weightNow($, weight[1]!, scopeOf(weight[2]))).text }
     const trusting = /^trust\s+(\S+)$/.exec(arg)
     if (trusting) return { text: (await trustNow($, trusting[1]!)).text }
     if (arg.startsWith('add ')) return { text: await addNow($, e.args.trim().slice(4).trim()) }
@@ -352,7 +369,10 @@ export const register: Register = on => {
       const root = await $.session.root()
       const key = pathKey(root, String(input.file_path ?? input.notebook_path ?? ''))
       const home = await sentinelDir($, 'personal')
-      if ([`${root}/.sentinel`, ...(home ? [home] : [])].some(d => pathKey(root, `${d}/library.json`) === key)) {
+      // Any preset's, too, whether this project uses it or not.
+      const presets = home ? `${pathKey(root, `${home}/presets`)}/` : undefined
+      const inPreset = presets && key.startsWith(presets) && /^[^/]+\/library\.json$/.test(key.slice(presets.length))
+      if (inPreset || [`${root}/.sentinel`, ...(home ? [home] : [])].some(d => pathKey(root, `${d}/library.json`) === key)) {
         return { deny: "The Library's switches are the user's. They change them on the Library page, or with /sentinel on, off and weight." }
       }
     }
@@ -711,8 +731,10 @@ async function lockNow($: $, picked: string[] = [], free = false): Promise<strin
     return depth.length ? `${unknown.join(', ')} ${unknown.length > 1 ? 'are' : 'is'} not one of the draft's depth answers: ${depth.map(x => x.id).join(', ')}. Nothing was locked.`
       : 'The draft has no depth answers to tick. Lock it with /sentinel lock alone.'
   }
-  // A plan doesn't lock while an MCP server the project needs isn't ready, so the work never starts without it.
-  const mcp = r.draft ? await mcpGate($) : undefined
+  // A plan doesn't lock while an MCP server needed here isn't ready, so the work never starts without it. The plan
+  // keeps the list as it stands now.
+  const mcps = (await needed($)).map(x => x.name)
+  const mcp = r.draft ? await mcpGate($, mcps) : undefined
   if (mcp) return `${mcp.why} Connect ${mcp.it} with /mcp, then lock again. Nothing was locked.`
   const chosen = depth.filter(x => ticked(x.id))
   const unanswered = (r.draft?.plan?.states ?? []).filter(s => s.added && !s.okAt).map(s => s.id)
@@ -727,7 +749,7 @@ async function lockNow($: $, picked: string[] = [], free = false): Promise<strin
   let d: Run | undefined
   await change($, x => {
     if (!x.draft) return x
-    const locked = lockDraft(x, now())
+    const locked = lockDraft(x.draft.library ? { ...x, draft: { ...x.draft, library: { ...x.draft.library, mcps } } } : x, now())
     return (d = free ? handsFree(locked, true, now()) : locked)
   })
   if (!d) return 'No draft to lock.'
@@ -749,7 +771,7 @@ async function answerRow($: $, id: string, keep: boolean): Promise<string> {
   if (row.kind === 'weight' && keep) return void (await change($, x => keepWeights(x, row.states))), ''
   if (row.kind === 'plan') {
     const l = await libraryNow($)
-    return changeDraft($, held => (held.library ? { ...held, library: planLibrary({ ...answerSetting(held.library, row.key!, keep, l.items), items: l.items, project: l.project, personal: l.personal }) } : held), '')
+    return changeDraft($, held => (held.library ? { ...held, library: planLibrary({ ...answerSetting(held.library, row.key!, keep, l.items), items: l.items, project: l.project, preset: l.preset, personal: l.personal }) } : held), '')
   }
   return changeDraft($, held => (row.kind === 'weight' ? dropWeights(held, row.states) : dropAdd(held, row.states, row.name!)), '')
 }
@@ -951,7 +973,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
         const got = planSettings(base, input.settings, l.items, typedNow)
         if (typeof got === 'string') return record($, { deny: got }, { kind: 'plan', label, denied: true })
         const { settings: _settings, ...rest } = input
-        input = { ...rest, library: planLibrary({ ...got, items: l.items, project: l.project, personal: l.personal }) }
+        input = { ...rest, library: planLibrary({ ...got, items: l.items, project: l.project, preset: l.preset, personal: l.personal }) }
       }
     }
   }
@@ -1041,7 +1063,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   }
   // A define that would lock the plan now (the user approved it in plan mode) waits for the MCP servers it needs.
   if (input.action === 'define' && act(was, input, now(), proofs, Date.now(), typed, without).event === 'locked') {
-    const mcp = await mcpGate($)
+    const mcp = await mcpGate($, input.library?.mcps)
     if (mcp) return record($, { deny: `The plan can't lock: ${mcp.why} Ask the user to connect ${mcp.it} with /mcp, then send define again. Nothing was locked.` }, { kind: 'plan', label, denied: true })
   }
   let acted: Acted | undefined
@@ -1276,17 +1298,22 @@ async function namedFile($: $, kept: Source[] | undefined, source: string | unde
 
 // ---- the library: flows and instructions ----
 
-type Scope = 'project' | 'personal'
+// Where an item or a switch lives: this project, the preset it uses, or every project (personal). The page and the
+// commands say this project, the preset's name, and every project (the word everywhere).
+type Scope = 'project' | 'preset' | 'personal'
 type Kind = 'flow' | 'instruction'
 // A flow as the Library holds it: from a file, or built in (no file, always trusted). weights: a built-in's, which a
 // file that takes its place keeps.
 type Saved = FlowDef & { scope: LibraryScope; file: string; trusted: boolean; weights?: Weight[] }
 type SavedIns = InstructionDef & { scope: Scope; file: string; trusted: boolean }
-const isScope = (v: unknown): v is Scope => v === 'project' || v === 'personal'
+const isScope = (v: unknown): v is Scope => v === 'project' || v === 'preset' || v === 'personal'
+const scopeOf = (word?: string): Scope => (word === 'preset' ? 'preset' : word === 'everywhere' ? 'personal' : 'project')
 const DIRS = { flow: 'flows', instruction: 'instructions' } as const
-const shown = (scope: Scope, rest: string) => `${scope === 'project' ? '' : '~/'}.sentinel/${rest}`
+// The preset in use as the Library last read it, when it is on this computer: its files show under its name.
+let presetIn: string | undefined
+const shown = (scope: Scope, rest: string) => `${scope === 'project' ? '' : '~/'}.sentinel/${scope === 'preset' ? `presets/${presetIn}/` : ''}${rest}`
 const shownDir = (scope: Scope, kind: Kind = 'flow') => shown(scope, DIRS[kind])
-const NO_HOME = 'Sentinel found no home folder (HOME or USERPROFILE) for your personal Library.'
+const NO_HOME = "Sentinel found no home folder (HOME or USERPROFILE), where every project's settings and the presets live."
 // The flows and instructions on disk as last read, the files that didn't read as one, what the user asked for in the
 // dashboard's "Ask Claude for a flow", and the outcome of the dashboard's last save or delete.
 let flowsSeen: Saved[] | undefined
@@ -1294,11 +1321,25 @@ let flowBad: string[] = []
 let flowAsk: string | undefined
 let flowSaid: { at: number; ok: boolean; text: string } | undefined
 
-// The project's .sentinel folder, or the one in the user's home folder.
+// The project's .sentinel folder, the one in the user's home folder, or the preset's this project points at. A preset
+// is there when its library.json is; a pointer that isn't a plain name points nowhere, so nothing reads or writes
+// outside ~/.sentinel/presets.
 async function sentinelDir($: $, scope: Scope): Promise<string | undefined> {
   if (scope === 'project') return `${await $.session.root()}/.sentinel`
   const home = (await $.env.get('HOME').catch(() => undefined)) || (await $.env.get('USERPROFILE').catch(() => undefined))
-  return home ? `${home.replace(/\\/g, '/').replace(/\/$/, '')}/.sentinel` : undefined
+  const dir = home ? `${home.replace(/\\/g, '/').replace(/\/$/, '')}/.sentinel` : undefined
+  if (scope === 'personal' || !dir) return dir
+  const name = (await switches($, 'project')).preset
+  const at = `${dir}/presets/${name}`
+  return name && presetName(name) === name && (await $.fs.exists(`${at}/library.json`).catch(() => false)) ? at : undefined
+}
+// Why nothing can be written to a scope with no folder.
+async function noDir($: $, scope: Scope): Promise<string> {
+  if (scope !== 'preset') return NO_HOME
+  const name = (await switches($, 'project')).preset
+  return name
+    ? `The preset ${name} isn't on this computer, so Sentinel can't change it. Import it, or pick another with /sentinel preset <name>.`
+    : 'This project uses no preset, so there is none to change. /sentinel preset <name> picks one.'
 }
 const itemDir = async ($: $, kind: Kind, scope: Scope) => {
   const dir = await sentinelDir($, scope)
@@ -1320,16 +1361,17 @@ async function trust($: $, file: string, item?: object): Promise<void> {
 const defOf = <T extends { scope: unknown; file: string; trusted: boolean }>({ scope: _s, file: _f, trusted: _t, ...def }: T) => def
 const nameTaken = (name: string, by: Kind) => `"${name}" is already the name of ${by === 'flow' ? 'a flow' : 'an instruction'}.`
 
-// The flows and instructions on disk, the project's first, then the personal ones. A file's name is its item's name;
-// on a clash within a kind the project's wins. A name serves one item across both kinds: a built-in keeps it over a
-// file of the other kind, and a flow over an instruction. A file with a built-in's name of its own kind takes the
-// built-in's place and keeps its weights.
+// The flows and instructions on disk: this project's first, then the preset's it uses, then every project's. A file's
+// name is its item's name; on a clash within a kind the closest wins. A name serves one item across both kinds: a
+// built-in keeps it over a file of the other kind, and a flow over an instruction. A file with a built-in's name of
+// its own kind takes the built-in's place and keeps its weights.
 async function loadLibrary($: $): Promise<{ flows: Saved[]; instructions: SavedIns[] }> {
   const bad: string[] = []
   const t = ((await $.store.get(TRUSTED).catch(() => undefined)) ?? {}) as Record<string, string>
+  presetIn = (await sentinelDir($, 'preset')) ? (await switches($, 'project')).preset : undefined
   async function files<T extends { name: string }>(kind: Kind, of: (raw: unknown) => T | string) {
     const out: (T & { scope: Scope; file: string; trusted: boolean })[] = []
-    for (const scope of ['project', 'personal'] as const) {
+    for (const scope of ['project', 'preset', 'personal'] as const) {
       const dir = await itemDir($, kind, scope)
       for (const e of dir ? await $.fs.list(dir).catch(() => []) : []) {
         if (e.kind !== 'file' || !e.name.endsWith('.json')) continue
@@ -1378,11 +1420,13 @@ function insItems(user: SavedIns[]): Omit<LibraryItem, 'on'>[] {
 // A switches file as saved. A missing or bad one reads as {}, and what in it is neither the weight nor a switch is left out.
 async function switches($: $, scope: Scope): Promise<Switches> {
   const dir = await sentinelDir($, scope)
-  if (!dir) return {}
+  return dir ? switchesAt($, `${dir}/library.json`) : {}
+}
+async function switchesAt($: $, file: string): Promise<Switches> {
   try {
-    const s = JSON.parse(String(await $.fs.read(`${dir}/library.json`))) as Record<string, unknown>
+    const s = JSON.parse(String(await $.fs.read(file))) as Record<string, unknown>
     const on = s.on && typeof s.on === 'object' && !Array.isArray(s.on) ? Object.fromEntries(Object.entries(s.on).filter(([, v]) => typeof v === 'boolean')) as Record<string, boolean> : {}
-    // The MCP servers the project needs, and the preset it last used.
+    // The MCP servers it needs, and the preset this project uses.
     const mcps = Array.isArray(s.mcps) && s.mcps.length && s.mcps.every(m => typeof m === 'string' && m.trim()) ? (s.mcps as string[]) : undefined
     const preset = typeof s.preset === 'string' && s.preset ? s.preset : undefined
     return { ...(WEIGHTS.includes(s.weight as Weight) ? { weight: s.weight as Weight } : {}), ...(Object.keys(on).length ? { on } : {}), ...(mcps ? { mcps } : {}), ...(preset ? { preset } : {}) }
@@ -1393,10 +1437,9 @@ async function switches($: $, scope: Scope): Promise<Switches> {
 
 async function saveSwitches($: $, scope: Scope, s: Switches): Promise<string | undefined> {
   const dir = await sentinelDir($, scope)
-  if (!dir) return NO_HOME
+  if (!dir) return noDir($, scope)
   // The project's switches are committed with the code, so the folder's ignore file lets them through.
   if (scope === 'project') await $.fs.write(`${dir}/.gitignore`, IGNORE)
-  presetUndo = undefined
   // The needed MCPs and the preset in use stay, unless this change names them.
   const was = await switches($, scope)
   const keep = { ...(!('mcps' in s) && was.mcps ? { mcps: was.mcps } : {}), ...(!('preset' in s) && was.preset ? { preset: was.preset } : {}) }
@@ -1404,13 +1447,16 @@ async function saveSwitches($: $, scope: Scope, s: Switches): Promise<string | u
   void after($)
 }
 
-// The Library as it stands: its flows and instructions, both switches files, the weight in force and what is on.
+// The Library as it stands: its flows and instructions, the three switches files, the weight in force and what is on.
+// using: the preset this project uses, missing when it isn't on this computer.
 async function libraryNow($: $) {
   const { flows, instructions } = await loadLibrary($)
   const items = insItems(instructions)
   const project = await switches($, 'project')
+  const preset = await switches($, 'preset')
   const personal = await switches($, 'personal')
-  return { flows, items, project, personal, ...libraryOn([...items, ...flows], project, personal) }
+  const using = project.preset ? { name: project.preset, ...(presetIn ? preset : { missing: true as const }) } : undefined
+  return { flows, items, project, preset, personal, using, ...libraryOn([...items, ...flows], project, personal, preset) }
 }
 
 // The Library as the dashboard reads it, kept for the snapshot as last read.
@@ -1419,16 +1465,26 @@ async function libraryView($: $): Promise<LibraryView> {
   const l = await libraryNow($)
   const tools = (await $.tool.list().catch(() => [])).map(t => t.name)
   const presets = await loadPresets($)
+  const need = await needed($)
   return (librarySeen = {
     weight: l.weight, project: l.project, personal: l.personal,
     instructions: l.items.map(x => ({ ...x, on: l.on.includes(x.name) })),
     flowsOn: Object.fromEntries(l.flows.map(f => [f.name, l.on.includes(f.name)])),
     presets: presets.map(p => presetView(p, l, tools)),
-    mcps: mcpStates(l.project.mcps ?? [], tools),
+    mcps: mcpStates(need.map(x => x.name), tools).map((s, i) => ({ ...s, scope: need[i]!.scope })),
     servers: serverList(tools),
-    ...(l.project.preset ? { preset: l.project.preset } : {}),
-    ...(presetUndo ? { undo: presetUndo.name } : {}),
+    ...(l.using ? { using: l.using } : {}),
   })
+}
+
+// The MCP servers needed here: this project's, then the preset's in use, then every project's, each once (case aside)
+// under the closest place that lists it.
+async function needed($: $): Promise<{ name: string; scope: Scope }[]> {
+  const out: { name: string; scope: Scope }[] = []
+  for (const scope of ['project', 'preset', 'personal'] as const) {
+    for (const name of (await switches($, scope)).mcps ?? []) if (!out.some(x => x.name.toLowerCase() === name.toLowerCase())) out.push({ name, scope })
+  }
+  return out
 }
 
 // The system prompt's section. While a plan runs: the always instructions it was locked with. Otherwise no plan is
@@ -1443,15 +1499,15 @@ async function promptSection($: $): Promise<string> {
 }
 
 // What a new plan is locked with: the weight, every item on, and the instructions on that Claude is told.
-function planLibrary(l: { weight: Weight; on: string[]; items: Omit<LibraryItem, 'on'>[]; project?: Switches; personal?: Switches; settings?: PlanSetting[] }): PlanLibrary {
+function planLibrary(l: { weight: Weight; on: string[]; items: Omit<LibraryItem, 'on'>[]; project?: Switches; preset?: Switches; personal?: Switches; settings?: PlanSetting[] }): PlanLibrary {
   const told = l.items.filter(x => x.kind === 'told' && l.on.includes(x.name))
-  return { weight: l.weight, on: l.on, told: told.map(toldEntry), ...(l.on.includes(STATE_SETTINGS) ? { states: planStates(l.items, l.weight, l.on, handOf(l.items, l.project, l.personal)) } : {}), ...(l.settings?.length ? { settings: l.settings } : {}) }
+  const mcps = [l.project, l.preset, l.personal].reduce<string[]>((xs, s) => addMcps(xs, s?.mcps ?? []), [])
+  return { weight: l.weight, on: l.on, told: told.map(toldEntry), ...(l.on.includes(STATE_SETTINGS) ? { states: planStates(l.items, l.weight, l.on, handOf(l.items, l.project, l.personal, l.preset)) } : {}), ...(l.settings?.length ? { settings: l.settings } : {}), mcps }
 }
 
 // A flow (it has states) or an instruction, saved to the project or the user's own folder, and trusted. A name serves
 // one item across both kinds, so a name the other kind has is refused; an item of the same kind is replaced.
-async function saveItem($: $, raw: unknown, scope: Scope, trusted = true): Promise<{ ok: boolean; text: string }> {
-  presetUndo = undefined
+async function saveItem($: $, raw: unknown, scope: Scope): Promise<{ ok: boolean; text: string }> {
   const kind: Kind = raw && typeof raw === 'object' && 'text' in raw && !('states' in raw) ? 'instruction' : 'flow'
   const f = kind === 'flow' ? flowOf(raw) : instructionOf(raw)
   if (typeof f === 'string') return { ok: false, text: f }
@@ -1460,12 +1516,11 @@ async function saveItem($: $, raw: unknown, scope: Scope, trusted = true): Promi
     return { ok: false, text: `${nameTaken(f.name, kind === 'flow' ? 'instruction' : 'flow')} Flows and instructions need names of their own.` }
   }
   const dir = await itemDir($, kind, scope)
-  if (!dir) return { ok: false, text: NO_HOME }
+  if (!dir) return { ok: false, text: await noDir($, scope) }
   // Project items are committed with the code, so the folder's ignore file lets them through.
   if (scope === 'project') await $.fs.write(`${await $.session.root()}/.sentinel/.gitignore`, IGNORE)
   await $.fs.write(`${dir}/${f.name}.json`, `${JSON.stringify(f, null, 2)}\n`)
-  // A preset Sentinel didn't save here adds its items untrusted, so they stay off until the user trusts each one.
-  await trust($, `${dir}/${f.name}.json`, trusted ? f : undefined)
+  await trust($, `${dir}/${f.name}.json`, f)
   await loadLibrary($)
   void after($)
   return { ok: true, text: `Saved the ${kind} "${f.name}" to ${shownDir(scope, kind)}/${f.name}.json.` }
@@ -1475,7 +1530,6 @@ async function saveItem($: $, raw: unknown, scope: Scope, trusted = true): Promi
 // serves one item, so the flow or the instruction of that name goes.
 const rm = ($: $, file: string) => $.process.run(['node', '-e', 'require("fs").rmSync(process.argv[1])', file], { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
 async function deleteItem($: $, name: string, scope: Scope): Promise<{ ok: boolean; text: string }> {
-  presetUndo = undefined
   for (const kind of ['flow', 'instruction'] as const) {
     const dir = await itemDir($, kind, scope)
     const file = `${dir}/${name}.json`
@@ -1486,272 +1540,316 @@ async function deleteItem($: $, name: string, scope: Scope): Promise<{ ok: boole
     void after($)
     return ok ? { ok, text: `Deleted the ${kind} "${name}" from ${shownDir(scope, kind)}.` } : { ok, text: `Sentinel couldn't delete ${shownDir(scope, kind)}/${name}.json. Delete it by hand.` }
   }
-  return { ok: false, text: `There is no ${scope} flow or instruction "${name}".` }
+  return { ok: false, text: `There is no flow or instruction "${name}" ${scopeWords(scope)}.` }
 }
 
-const scopeWords = (scope: Scope) => (scope === 'project' ? 'for this project' : 'in your default')
+const scopeWords = (scope: Scope) => (scope === 'project' ? 'for this project' : scope === 'preset' ? `in the preset ${presetIn}` : 'for every project')
+// Where an item comes from, as /sentinel library and Claude hear it.
+const placeOf = (scope: LibraryScope) => (scope === 'personal' ? 'every project' : scope === 'preset' ? `preset ${presetIn}` : scope)
 type Reply = { ok: boolean; text: string }
 const no = (text: string): Reply => ({ ok: false, text })
 const noItem = (name: string) => no(`There is no instruction or flow "${name}". /sentinel library lists them.`)
 
-// /sentinel on|off <name> [personal]: one item's switch, for this project or as the user's default. null (the
-// dashboard's reset) takes the switch out, so the item follows the weight and the other file again.
+// /sentinel on|off <name> [preset|everywhere]: one item's switch, for this project, the preset in use or every project.
+// null (the dashboard's reset) takes the switch out, so the item follows the weight and the farther places again.
 async function switchNow($: $, name: string, on: boolean | null, scope: Scope): Promise<Reply> {
   const l = await libraryNow($)
-  const item = [...l.items, ...l.flows].find(x => x.name === name)
+  const all = [...l.items, ...l.flows]
+  const item = all.find(x => x.name === name)
   if (!item) return noItem(name)
-  const was = scope === 'project' ? l.project : l.personal
+  const was = l[scope]
   const { [name]: _gone, ...rest } = was.on ?? {}
   const keep = on === null ? rest : { ...rest, [name]: on }
   const next: Switches = { ...(was.weight ? { weight: was.weight } : {}), ...(Object.keys(keep).length ? { on: keep } : {}) }
   const why = await saveSwitches($, scope, next)
   if (why) return no(why)
-  const now = libraryOn([...l.items, ...l.flows], scope === 'project' ? next : l.project, scope === 'personal' ? next : l.personal).on.includes(name)
+  const s = { project: l.project, preset: l.preset, personal: l.personal, [scope]: next }
+  const now = libraryOn(all, s.project, s.personal, s.preset).on.includes(name)
   if (on === null) return { ok: true, text: `${name} has no switch ${scopeWords(scope)} now, so it is ${now ? 'on' : 'off'}.` }
-  const stays = now === on ? '' : item.trusted ? ` This project's switches decide it, so it stays ${now ? 'on' : 'off'}.` : ` It stays off until you trust it: /sentinel trust ${name}.`
+  // A closer place decides it: the preset when this project alone would let the switch stand.
+  const by = scope === 'personal' && presetIn && libraryOn(all, l.project, next).on.includes(name) === on ? `The preset ${presetIn} decides it here` : "This project's switches decide it"
+  const stays = now === on ? '' : item.trusted ? ` ${by}, so it stays ${now ? 'on' : 'off'}.` : ` It stays off until you trust it: /sentinel trust ${name}.`
   return { ok: true, text: `${name} is ${on ? 'on' : 'off'} ${scopeWords(scope)}.${stays}` }
 }
 
-// /sentinel mcp: the MCP servers this project needs, with their state here, and mcp add|drop <server>. A name keeps the
-// user's spelling, and two that differ only in case are one.
+// /sentinel mcp: the MCP servers needed here, with their state and the place that lists each, and mcp add|drop <server>
+// [preset|everywhere] for this project's list, the preset's in use or every project's. A name keeps the user's
+// spelling, and two that differ only in case are one.
 async function mcpCommand($: $, rest: string): Promise<string> {
-  const [verb = '', ...words] = rest.split(/\s+/)
-  const name = words.join(' ').trim()
+  const [verb = '', ...words] = rest.split(/\s+/).filter(Boolean)
+  const scope = words.length > 1 && /^(preset|everywhere)$/.test(words.at(-1)!) ? scopeOf(words.pop()) : 'project'
+  const name = words.join(' ')
   const tools = (await $.tool.list().catch(() => [])).map(t => t.name)
-  const sw = await switches($, 'project')
-  const list = sw.mcps ?? []
   const has = `This session has: ${serverList(tools).map(s => s.name).join(', ') || 'no MCP servers'}.`
   if (!verb) {
-    if (!list.length) return `This project needs no MCP servers. /sentinel mcp add <server> adds one. ${has}`
+    const need = await needed($)
+    if (!need.length) return `This project needs no MCP servers. /sentinel mcp add <server> adds one. ${has}`
     const word = { connected: 'connected', 'sign-in': 'needs sign-in', missing: 'not connected in this session' }
-    return `This project needs: ${mcpStates(list, tools).map(s => `${s.name} (${word[s.state]})`).join(', ')}. ${has}`
+    const using = (await switches($, 'project')).preset
+    const from = (s: Scope) => (s === 'project' ? '' : `from ${s === 'preset' ? using : 'every project'}, `)
+    return `This project needs: ${mcpStates(need.map(x => x.name), tools).map((s, i) => `${s.name} (${from(need[i]!.scope)}${word[s.state]})`).join(', ')}. ${has}`
   }
-  if (verb !== 'add' && verb !== 'drop') return 'Use /sentinel mcp, /sentinel mcp add <server> or /sentinel mcp drop <server>.'
+  if (verb !== 'add' && verb !== 'drop') return 'Use /sentinel mcp, /sentinel mcp add <server> or /sentinel mcp drop <server>. Add preset or everywhere after it for the preset in use or every project.'
   if (!name) return `Name the server: /sentinel mcp ${verb} <server>, as /mcp lists it.`
+  if (!(await sentinelDir($, scope))) return noDir($, scope)
+  const whose = scope === 'project' ? "this project's list" : scope === 'preset' ? `the preset ${(await switches($, 'project')).preset}'s list` : "every project's list"
+  const sw = await switches($, scope)
+  const list = sw.mcps ?? []
   const same = list.find(m => m.toLowerCase() === name.toLowerCase())
   if (verb === 'add') {
-    if (same) return `${same} is already on this project's list.`
+    if (same) return `${same} is already on ${whose}.`
     if (name.length > 100) return 'That name is over 100 characters.'
-    const why = await saveSwitches($, 'project', { ...sw, mcps: [...list, name] })
+    const why = await saveSwitches($, scope, { ...sw, mcps: [...list, name] })
     if (why) return why
     const st = mcpStates([name], tools)[0]!.state
-    return `${name} is on this project's list. ${st === 'connected' ? 'It is connected.' : st === 'sign-in' ? "It needs you to sign in, so plans here won't lock until you do." : "It isn't connected in this session, so plans here won't lock until it is."}`
+    return `${name} is on ${whose}. ${st === 'connected' ? 'It is connected.' : st === 'sign-in' ? "It needs you to sign in, so plans here won't lock until you do." : "It isn't connected in this session, so plans here won't lock until it is."}`
   }
-  if (!same) return `${name} isn't on this project's list.`
+  if (!same) return `${name} isn't on ${whose}.`
   const left = list.filter(m => m !== same)
-  return (await saveSwitches($, 'project', { ...sw, mcps: left.length ? left : undefined })) ?? `${same} is off this project's list.`
+  return (await saveSwitches($, scope, { ...sw, mcps: left.length ? left : undefined })) ?? `${same} is off ${whose}.`
 }
 
-// ---- presets: a project's Library setup in one file, ~/.sentinel/presets/<name>.json, which is also the file to export ----
+// ---- presets: folders in ~/.sentinel/presets/<name>/ that a project points at, between it and every project ----
 
-type SavedPreset = Preset & { file: string; trusted: boolean; raw: object }
 const BUILTIN_NAMES = [...BUILTINS, ...BUILTIN_FLOWS].map(x => x.name)
-const PRESET_HOW = "Name it: /sentinel preset save <name>, in letters, digits and -. save, undo and delete can't be names."
-const noPreset = (name: string) => no(`There is no preset "${name}". /sentinel preset lists them.`)
+const PRESET_HOW = (verb: string) => `Name it: /sentinel preset ${verb} <name>, in letters, digits and -. new, move, delete and none can't be names.`
+const noPreset = (name: string) => no(`There is no preset "${name}" on this computer. /sentinel preset lists them.`)
 const and = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0] ?? '')
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many)
-// The last preset used, for undo: the switches file as it was (none: there was no file) and the files the use added.
-// Any other change to the Library ends it, so undo never takes back what came after.
-let presetUndo: { name: string; before?: string; files: string[] } | undefined
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 const presetDir = async ($: $) => {
   const dir = await sentinelDir($, 'personal')
   return dir ? `${dir}/presets` : undefined
 }
-// The presets on disk. One Sentinel saved here, unchanged since, is trusted, by the same store as flows.
-// ponytail: a file that doesn't read as a preset is left out of the list without a word; list them if people trip on it.
+// A preset's folder, when it is on this computer: its library.json makes it one.
+async function presetAt($: $, name: string | undefined): Promise<string | undefined> {
+  const dir = await presetDir($)
+  return dir && name && presetName(name) === name && (await $.fs.exists(`${dir}/${name}/library.json`).catch(() => false)) ? `${dir}/${name}` : undefined
+}
+// This project's pointer: a name sets it, undefined takes it out. Nothing else in the file changes.
+const point = async ($: $, name?: string) => saveSwitches($, 'project', { ...(await switches($, 'project')), preset: name })
+const trustMap = async ($: $) => ((await $.store.get(TRUSTED).catch(() => undefined)) ?? {}) as Record<string, string>
+
+// The presets on this computer, each with its switches and its items as their files hold them. An item is trusted as
+// the Library's are: a file Sentinel saved here, unchanged since.
+// ponytail: a file that doesn't read as an item is left out without a word; list them if people trip on it.
+type Held<T> = T & { trusted: boolean }
+type SavedPreset = { name: string; sw: Switches; instructions: Held<InstructionDef>[]; flows: Held<FlowDef>[] }
 async function loadPresets($: $): Promise<SavedPreset[]> {
   const dir = await presetDir($)
-  const t = ((await $.store.get(TRUSTED).catch(() => undefined)) ?? {}) as Record<string, string>
+  const t = await trustMap($)
   const out: SavedPreset[] = []
   for (const e of dir ? await $.fs.list(dir).catch(() => []) : []) {
-    const name = e.name.slice(0, -5)
-    if (e.kind !== 'file' || !e.name.endsWith('.json') || presetName(name) !== name) continue
-    try {
-      const raw = JSON.parse(String(await $.fs.read(`${dir}/${e.name}`))) as object
-      const p = presetOf(raw, name)
-      if (typeof p !== 'string') out.push({ ...p, file: `${dir}/${e.name}`, trusted: t[`${dir}/${e.name}`] === JSON.stringify(p), raw })
-    } catch {
-      continue
+    const at = await presetAt($, e.kind === 'dir' ? e.name : undefined)
+    if (!at) continue
+    async function items<T extends { name: string }>(kind: Kind, of: (raw: unknown) => T | string): Promise<Held<T>[]> {
+      const got: Held<T>[] = []
+      for (const f of await $.fs.list(`${at}/${DIRS[kind]}`).catch(() => [])) {
+        const file = `${at}/${DIRS[kind]}/${f.name}`
+        if (f.kind !== 'file' || !f.name.endsWith('.json')) continue
+        let x: T | string
+        try {
+          x = of({ ...JSON.parse(String(await $.fs.read(file))), name: f.name.slice(0, -5) })
+        } catch {
+          continue
+        }
+        if (typeof x !== 'string') got.push({ ...x, trusted: t[file] === JSON.stringify(x) })
+      }
+      return got
     }
+    out.push({ name: e.name, sw: await switchesAt($, `${at}/library.json`), instructions: await items('instruction', instructionOf), flows: await items('flow', flowOf) })
   }
   return out
 }
 
-// What a preset keeps, in words.
-function keeps(p: Preset): string {
-  const named = (what: string, xs: { name: string }[] | undefined) => (xs?.length ? `the ${plural(xs.length, what)} ${and(xs.map(x => x.name))}` : '')
-  const parts = [
-    p.weight ? `the weight ${p.weight}` : '',
-    p.on ? `${Object.keys(p.on).length} ${plural(Object.keys(p.on).length, 'switch', 'switches')}` : '',
-    named('instruction', p.instructions),
-    named('flow', p.flows),
-    p.mcps?.length ? `the ${plural(p.mcps.length, 'MCP')} ${and(p.mcps)}` : '',
-  ].filter(Boolean)
-  return parts.length ? `It keeps ${and(parts)}.` : 'It keeps nothing: this project has no weight, switches, items or needed MCPs of its own.'
+// What the user's change did to the Library: the snapshot again, and the page and the band redrawn.
+const changed = async ($: $) => {
+  await loadLibrary($)
+  void after($)
 }
 
-// /sentinel preset save <name>: this project's weight, switches, needed MCPs and its own trusted items, as a preset
-// Sentinel trusts. The project then counts as using it.
-async function savePreset($: $, typed: string): Promise<Reply> {
+// /sentinel preset new <name>: an empty preset, which this project then uses.
+async function newPreset($: $, typed: string): Promise<Reply> {
   const name = presetName(typed)
-  if (!name) return no(PRESET_HOW)
+  if (!name) return no(PRESET_HOW('new'))
+  const dir = await presetDir($)
+  if (!dir) return no(NO_HOME)
+  if (await presetAt($, name)) return no(`There is already a preset ${name}. /sentinel preset ${name} uses it.`)
+  await $.fs.write(`${dir}/${name}/library.json`, '{}\n')
+  const why = await point($, name)
+  if (why) return no(why)
+  await changed($)
+  return { ok: true, text: `Made the preset ${name} in ~/.sentinel/presets/${name}/, empty. This project uses it now: add preset after /sentinel on, off or weight to change it.` }
+}
+
+// /sentinel preset <name>: this project points at it. Nothing is copied.
+async function usePreset($: $, name: string): Promise<Reply> {
+  if (!(await presetAt($, name))) return noPreset(name)
+  const why = await point($, name)
+  if (why) return no(why)
+  await changed($)
+  const states = mcpStates((await needed($)).map(x => x.name), (await $.tool.list().catch(() => [])).map(t => t.name))
+  const problem = mcpProblem(states)
+  const waiting = states.filter(s => s.state !== 'connected').length
+  return {
+    ok: true,
+    text: `Using ${name} here. Its settings sit under this project's own, which still win.${problem ? ` ${problem.slice(0, -1)}, so plans here won't lock until ${waiting > 1 ? 'they are' : 'it is'}.` : ''} /sentinel preset none stops using it.`,
+  }
+}
+
+// /sentinel preset none: the pointer goes, and with it the preset's settings here. Nothing is deleted.
+async function noneNow($: $): Promise<Reply> {
+  const name = (await switches($, 'project')).preset
+  if (!name) return no('This project uses no preset.')
+  const why = await point($, undefined)
+  if (why) return no(why)
+  await changed($)
+  return { ok: true, text: `${name} no longer applies here. Nothing was deleted.` }
+}
+
+// /sentinel preset move <name>: this project's own weight, switches, needed MCPs and items go into the preset (made if
+// new), and the project then uses it. The project sat above the preset, so its choices win there (moveInto says how),
+// and each item keeps its trust. The preset is written first and the project's copies go after, so a failure leaves
+// two copies, never none.
+async function movePreset($: $, typed: string): Promise<Reply> {
+  const name = presetName(typed)
+  if (!name) return no(PRESET_HOW('move'))
   const dir = await presetDir($)
   if (!dir) return no(NO_HOME)
   const { flows, instructions } = await loadLibrary($)
-  const ins = instructions.filter(x => x.scope === 'project'), fl = flows.filter(x => x.scope === 'project')
+  const ins = instructions.filter(x => x.scope === 'project').sort((a, b) => a.name.localeCompare(b.name))
+  const fl = flows.filter(x => x.scope === 'project').sort((a, b) => a.name.localeCompare(b.name))
   const project = await switches($, 'project')
-  // A flow's weights are the Library's, never the file's.
-  const p = presetFrom(project, { instructions: ins.filter(x => x.trusted).map(defOf), flows: fl.filter(x => x.trusted).map(f => ({ ...defOf(f), weights: undefined })) }, name)
-  const left = [...ins, ...fl].filter(x => !x.trusted).map(x => x.name)
-  const file = `${dir}/${name}.json`
-  const was = await $.fs.exists(file).catch(() => false)
-  const { name: _name, ...body } = p
-  const text = JSON.stringify(body, null, 2)
-  await $.fs.write(file, `${text}\n`)
-  await trust($, file, presetOf(JSON.parse(text), name) as Preset)
-  const why = await saveSwitches($, 'project', { ...project, preset: name })
-  await libraryView($)
-  return { ok: true, text: `${was ? 'Replaced' : 'Saved'} the preset "${name}" ${was ? 'in' : 'to'} ~/.sentinel/presets/${name}.json. ${keeps(p)}${left.length ? ` Left out ${and(left)}, which you haven't trusted here.` : ''}${why ? ` ${why}` : ''}` }
-}
-
-// The built-ins this project switched by hand, which a new weight resets.
-const handFlipped = (s: Switches) => Object.keys(s.on ?? {}).some(n => BUILTIN_NAMES.includes(n) && n !== STATE_SETTINGS)
-
-// /sentinel preset <name>: the preset's merge into this project (hooks/preset.ts says how), its items saved trusted only
-// if Sentinel saved the preset here. swap: the page's choice of another server for one of its MCPs.
-async function usePreset($: $, name: string, swap?: Record<string, string | null>): Promise<Reply> {
-  const p = (await loadPresets($)).find(x => x.name === name)
-  if (!p) return noPreset(name)
-  const l = await libraryNow($)
-  const lib = `${await sentinelDir($, 'project')}/library.json`
-  const before = (await $.fs.exists(lib).catch(() => false)) ? await $.fs.read(lib).then(String, () => undefined) : undefined
-  const a = applyPreset(l.project, p, { builtins: BUILTIN_NAMES, taken: [...l.items, ...l.flows].map(x => x.name), swap })
-  const why = await saveSwitches($, 'project', a.switches)
-  if (why) return no(why)
-  const files: string[] = []
-  for (const [kind, xs] of [['instruction', a.add.instructions], ['flow', a.add.flows]] as const) {
-    for (const x of xs) {
-      const out = await saveItem($, x, 'project', p.trusted)
-      if (!out.ok) return no(`Sentinel set the switches but couldn't add ${x.name}: ${out.text}`)
-      files.push(`${await itemDir($, kind, 'project')}/${x.name}.json`)
+  const switched = Object.keys(project.on ?? {}).length
+  if (!project.weight && !switched && !project.mcps?.length && !ins.length && !fl.length) return no('This project has no settings of its own to move.')
+  const at = `${dir}/${name}`
+  const fresh = !(await presetAt($, name))
+  const t = await trustMap($)
+  try {
+    for (const [kind, xs] of [['instruction', ins], ['flow', fl]] as const) {
+      for (const x of xs) {
+        // A flow's weights are the Library's, never the file's.
+        const def = kind === 'flow' ? { ...defOf(x), weights: undefined } : defOf(x)
+        const file = `${at}/${DIRS[kind]}/${x.name}.json`
+        await $.fs.write(file, `${JSON.stringify(def, null, 2)}\n`)
+        await trust($, file, t[x.file] === JSON.stringify(def) ? def : undefined)
+      }
     }
+    const was = fresh ? {} : await switchesAt($, `${at}/library.json`)
+    await $.fs.write(`${at}/library.json`, `${JSON.stringify(moveInto(was, project, BUILTIN_NAMES), null, 2)}\n`)
+  } catch (e) {
+    return no(`Sentinel couldn't write the preset ${name}, so this project keeps its settings: ${errText(e)}`)
   }
-  presetUndo = { name, before, files }
-  const now = await libraryNow($)
-  const added = [...a.add.instructions, ...a.add.flows].map(x => x.name)
-  const states = mcpStates(now.project.mcps ?? [], (await $.tool.list().catch(() => [])).map(t => t.name))
-  const problem = mcpProblem(states)
-  const waiting = states.filter(s => s.state !== 'connected').length
-  await libraryView($)
-  void after($)
-  const on = now.on.filter(n => !l.on.includes(n)), off = l.on.filter(n => !now.on.includes(n))
-  return {
-    ok: true,
-    text: [
-      `Using ${name}.`,
-      on.length ? `Turned on: ${on.join(', ')}.` : '',
-      off.length ? `Turned off: ${off.join(', ')}.` : '',
-      added.length ? `Added: ${added.join(', ')}.` : '',
-      a.kept.length ? `Kept yours: ${a.kept.join(', ')}.` : '',
-      a.weightReset && handFlipped(l.project) ? `The new weight, ${p.weight}, reset the built-ins you had switched by hand.` : '',
-      added.length && !p.trusted ? "Sentinel didn't save this preset on this computer, so what it added stays off until you trust each one: /sentinel trust <name>." : '',
-      problem ? `${problem.slice(0, -1)}, so plans here won't lock until ${waiting > 1 ? 'they are' : 'it is'}.` : '',
-      '/sentinel preset undo takes it back.',
-    ].filter(Boolean).join(' '),
+  for (const x of [...ins, ...fl]) {
+    if (await rm($, x.file)) await trust($, x.file)
   }
+  const used = project.preset === name
+  const why = await saveSwitches($, 'project', { preset: name, mcps: undefined })
+  await changed($)
+  const what = and([
+    project.weight ? 'the weight' : '',
+    switched ? `${switched} ${plural(switched, 'switch', 'switches')}` : '',
+    ins.length ? `the ${plural(ins.length, 'instruction')} ${and(ins.map(x => x.name))}` : '',
+    fl.length ? `the ${plural(fl.length, 'flow')} ${and(fl.map(x => x.name))}` : '',
+    project.mcps?.length ? `the ${plural(project.mcps.length, 'MCP')} ${and(project.mcps)}` : '',
+  ].filter(Boolean))
+  const then = fresh ? ' This project uses it now, and works as it did.' : `${used ? '' : ' This project uses it now.'} Where ${name} set the same thing, this project's choice replaced it.`
+  return { ok: true, text: `Moved this project's settings into ${fresh ? 'the new preset ' : ''}${name}: ${what}.${then}${why ? ` ${why}` : ''}` }
 }
 
-// /sentinel preset undo: the switches file as it was, and what the use added gone, right after a use.
-async function undoPreset($: $): Promise<Reply> {
-  const u = presetUndo
-  if (!u) return no('There is nothing to undo. Undo works right after a preset is used, in the same session.')
-  const lib = `${await sentinelDir($, 'project')}/library.json`
-  if (u.before === undefined) await rm($, lib)
-  else await $.fs.write(lib, u.before)
-  for (const f of u.files) {
-    await rm($, f)
-    await trust($, f)
-  }
-  presetUndo = undefined
-  await loadLibrary($)
-  await libraryView($)
-  void after($)
-  const n = u.files.length
-  return { ok: true, text: `Took back ${u.name}: the switches are as they were${n ? `, and the ${n} ${plural(n, 'item')} it added ${n > 1 ? 'are' : 'is'} gone` : ''}.` }
+// /sentinel preset delete <name>: the folder, and its items' trust so a later file at the same path starts untrusted.
+// A project that used it runs on its own settings and every project's; this one stops pointing at it.
+const rmDir = ($: $, dir: string) => $.process.run(['node', '-e', 'require("fs").rmSync(process.argv[1], { recursive: true, force: true })', dir], { timeoutMs: 10_000 }).then(x => x.exitCode === 0, () => false)
+async function forgetUnder($: $, dir: string): Promise<void> {
+  const t = await trustMap($)
+  await $.store.set(TRUSTED, Object.fromEntries(Object.entries(t).filter(([k]) => !k.startsWith(`${dir}/`))))
+}
+async function deletePreset($: $, typed: string): Promise<Reply> {
+  const name = presetName(typed)
+  const at = await presetAt($, name)
+  if (!name || !at) return noPreset(typed)
+  if (!(await rmDir($, at))) return no(`Sentinel couldn't delete ~/.sentinel/presets/${name}/. Delete it by hand.`)
+  await forgetUnder($, at)
+  const used = (await switches($, 'project')).preset === name
+  if (used) await point($, undefined)
+  await changed($)
+  return { ok: true, text: `Deleted the preset ${name}, with its own instructions and flows.${used ? " This project used it, so it runs on its own settings and every project's now." : ''}` }
 }
 
-// /sentinel preset delete <name>. Its trust goes with it, so a later file of that name starts untrusted.
-async function deletePreset($: $, name: string): Promise<Reply> {
-  const file = `${await presetDir($)}/${name}.json`
-  if (presetName(name) !== name || !(await $.fs.exists(file).catch(() => false))) return noPreset(name)
-  if (!(await rm($, file))) return no(`Sentinel couldn't delete ~/.sentinel/presets/${name}.json. Delete it by hand.`)
-  await trust($, file)
-  await libraryView($)
-  return { ok: true, text: `Deleted the preset "${name}".` }
-}
-
-// The page's Import: a file the user picked, saved as it is if it reads as a preset. Sentinel didn't save it here, so
-// it stays untrusted, and nothing in it runs. It never replaces a preset.
-async function importPreset($: $, fileName: string, content: string): Promise<Reply> {
+// The page's Import: a file the user picked, written out as a preset folder if it reads as one. Sentinel didn't make
+// it here, so its items stay untrusted and nothing in it runs. It never replaces a preset. swap: the user's choice of
+// another server in place of one of its MCPs, or null to leave one out, written into this copy.
+async function importPreset($: $, fileName: string, content: string, swap?: Record<string, string | null>): Promise<Reply> {
   const name = presetName(fileName.replace(/\.json$/i, ''))
   const dir = await presetDir($)
-  if (!name) return no(`Sentinel couldn't import ${fileName}: its name needs letters or digits, and can't be save, undo or delete.`)
+  if (!name) return no(`Sentinel couldn't import ${fileName}: its name needs letters or digits, and can't be new, move, delete or none.`)
   if (!dir) return no(NO_HOME)
   let raw: unknown
   try {
     raw = JSON.parse(content)
   } catch (e) {
-    return no(`Sentinel couldn't import ${fileName}: it isn't JSON (${e instanceof Error ? e.message : String(e)}).`)
+    return no(`Sentinel couldn't import ${fileName}: it isn't JSON (${errText(e)}).`)
   }
   const p = presetOf(raw, name)
   if (typeof p === 'string') return no(`Sentinel couldn't import ${fileName}: ${p}`)
-  const file = `${dir}/${name}.json`
-  if (await $.fs.exists(file).catch(() => false)) return no(`There is already a preset "${name}". Delete it first, or rename the file.`)
-  await $.fs.write(file, content.endsWith('\n') ? content : `${content}\n`)
-  await trust($, file)
-  await libraryView($)
-  return { ok: true, text: `Imported the preset "${name}". Sentinel didn't save it on this computer, so what it adds stays off until you trust each one. Read its flows' checks on the Library page before you use it.` }
+  if (await presetAt($, name)) return no(`There is already a preset ${name}. Delete it first, or rename the file.`)
+  const at = `${dir}/${name}`
+  await forgetUnder($, at)
+  for (const x of p.instructions ?? []) await $.fs.write(`${at}/instructions/${x.name}.json`, `${JSON.stringify(x, null, 2)}\n`)
+  for (const f of p.flows ?? []) await $.fs.write(`${at}/flows/${f.name}.json`, `${JSON.stringify(f, null, 2)}\n`)
+  // library.json last: it makes the folder a preset.
+  const mcps = withSwap(p.mcps ?? [], swap)
+  await $.fs.write(`${at}/library.json`, `${JSON.stringify({ ...(p.weight ? { weight: p.weight } : {}), ...(p.on ? { on: p.on } : {}), ...(mcps.length ? { mcps } : {}) }, null, 2)}\n`)
+  await changed($)
+  return { ok: true, text: `Imported the preset ${name}. Sentinel didn't make it on this computer, so its instructions and flows stay off until you trust each one. Read its flows' checks first: they are shell commands.` }
 }
 
-// /sentinel preset, with save <name>, undo, delete <name> or a preset's name.
+// /sentinel preset, with new <name>, move <name>, delete <name>, none or a preset's name.
 async function presetCommand($: $, rest: string): Promise<string> {
   const [verb = '', ...words] = rest.split(/\s+/)
   const name = words.join(' ')
-  if (verb.toLowerCase() === 'save') return (await savePreset($, name)).text
-  if (verb.toLowerCase() === 'undo' && !name) return (await undoPreset($)).text
-  if (verb.toLowerCase() === 'delete') return (await deletePreset($, presetName(name) ?? name)).text
+  const v = verb.toLowerCase()
+  if (v === 'new') return (await newPreset($, name)).text
+  if (v === 'move') return (await movePreset($, name)).text
+  if (v === 'delete') return (await deletePreset($, name)).text
+  if (v === 'none' && !name) return (await noneNow($)).text
   if (rest) return (await usePreset($, presetName(rest) ?? rest)).text
   const list = await loadPresets($)
-  if (!list.length) return "No presets yet. /sentinel preset save <name> saves this project's setup as one."
+  if (!list.length) return "No presets yet. /sentinel preset new <name> makes an empty one, and /sentinel preset move <name> makes one from this project's settings."
   const using = (await switches($, 'project')).preset
-  const shownAs = (p: SavedPreset) => `${p.name}${p.name === using ? ' (in use here)' : ''}${p.trusted ? '' : " (not trusted: Sentinel didn't save it on this computer)"}`
-  return `Presets: ${list.map(shownAs).join(', ')}. /sentinel preset <name> uses one, and the Library page shows what each would change.`
+  return `Presets: ${list.map(p => `${p.name}${p.name === using ? ' (in use here)' : ''}`).join(', ')}. /sentinel preset <name> uses one, /sentinel preset new <name> makes an empty one, and /sentinel preset move <name> moves this project's settings into one.`
 }
 
-// A preset as the Library page shows it: what it holds, each MCP's state here, and what using it would change now.
+// A preset as the Library page shows it: what it holds, each MCP's state here, the file Export gives, and what
+// pointing this project at it would turn on and off (the presets' own items left out).
 function presetView(p: SavedPreset, l: Awaited<ReturnType<typeof libraryNow>>, tools: string[]): PresetView {
-  const a = applyPreset(l.project, p, { builtins: BUILTIN_NAMES, taken: [...l.items, ...l.flows].map(x => x.name) })
-  const added = [...a.add.instructions, ...a.add.flows].map(x => ({ name: x.name, trusted: p.trusted }))
-  const on = libraryOn([...l.items, ...l.flows, ...added], a.switches, l.personal).on
+  const base = [...l.items, ...l.flows].filter(x => x.scope !== 'preset')
+  const now = l.on.filter(n => base.some(x => x.name === n))
+  const then = libraryOn(base, l.project, l.personal, p.sw).on
+  const bare = <T extends { trusted: boolean }>({ trusted: _t, ...x }: T) => x
+  const { name: _name, ...raw } = presetFrom(p.sw, { instructions: p.instructions.map(bare), flows: p.flows.map(bare) }, p.name)
   return {
-    name: p.name, trusted: p.trusted, file: `~/.sentinel/presets/${p.name}.json`, raw: p.raw,
-    ...(p.weight ? { weight: p.weight } : {}), on: p.on ?? {},
-    instructions: (p.instructions ?? []).map(x => ({ name: x.name, at: x.at, text: x.text })),
-    flows: (p.flows ?? []).map(f => ({ name: f.name, ...(f.description ? { description: f.description } : {}), checks: f.states.flatMap(s => (s.check ? [s.check] : [])) })),
-    mcps: mcpStates(p.mcps ?? [], tools),
-    preview: { turnsOn: on.filter(n => !l.on.includes(n)), turnsOff: l.on.filter(n => !on.includes(n)), adds: added.map(x => x.name), kept: a.kept, weightReset: a.weightReset && handFlipped(l.project) },
+    name: p.name, file: `~/.sentinel/presets/${p.name}/`, raw, trusted: [...p.instructions, ...p.flows].every(x => x.trusted),
+    ...(p.sw.weight ? { weight: p.sw.weight } : {}), on: p.sw.on ?? {},
+    instructions: p.instructions.map(x => ({ name: x.name, at: x.at, text: x.text, trusted: x.trusted })),
+    flows: p.flows.map(f => ({ name: f.name, ...(f.description ? { description: f.description } : {}), checks: f.states.flatMap(s => (s.check ? [s.check] : [])), trusted: f.trusted })),
+    mcps: mcpStates(p.sw.mcps ?? [], tools),
+    preview: { turnsOn: then.filter(n => !now.includes(n)), turnsOff: now.filter(n => !then.includes(n)) },
   }
 }
 
-// /sentinel weight light|standard|thorough [personal]. The weight decides that file's built-ins, so their switches go.
+// /sentinel weight light|standard|thorough [preset|everywhere]. The weight decides that file's built-ins, so their
+// switches go.
 async function weightNow($: $, weight: string, scope: Scope): Promise<Reply> {
-  if (!(WEIGHTS as readonly string[]).includes(weight)) return no('Use /sentinel weight light, standard or thorough, and personal after it for your default.')
+  if (!(WEIGHTS as readonly string[]).includes(weight)) return no('Use /sentinel weight light, standard or thorough. Add preset or everywhere after it for the preset in use or every project.')
   const l = await libraryNow($)
   const builtins = [...BUILTINS, ...BUILTIN_FLOWS].map(x => x.name)
-  const why = await saveSwitches($, scope, withWeight(scope === 'project' ? l.project : l.personal, weight as Weight, builtins))
+  const why = await saveSwitches($, scope, withWeight(l[scope], weight as Weight, builtins))
   if (why) return no(why)
-  const over = scope === 'personal' && l.project.weight ? ` This project picked ${l.project.weight}, which wins here.` : ''
+  // The closest place with a weight wins.
+  const closer = scope === 'project' ? undefined : l.project.weight ? ['This project', l.project.weight] : scope === 'personal' && l.preset.weight ? [`The preset ${presetIn}`, l.preset.weight] : undefined
+  const over = closer ? ` ${closer[0]} picked ${closer[1]}, which wins here.` : ''
   return { ok: true, text: `The weight is ${weight} ${scopeWords(scope)}.${over || ' The built-ins follow it; your own items keep their switches.'}` }
 }
 
@@ -1775,7 +1873,7 @@ async function trustNow($: $, name: string): Promise<Reply> {
 async function keepAsProject($: $, pl: PlanLibrary): Promise<string | undefined> {
   const l = await libraryNow($)
   const all = [...l.items, ...l.flows]
-  const base = libraryOn(all, { weight: pl.weight }, l.personal).on
+  const base = libraryOn(all, { weight: pl.weight }, l.personal, l.preset).on
   const on = Object.fromEntries(all.filter(x => base.includes(x.name) !== pl.on.includes(x.name)).map(x => [x.name, pl.on.includes(x.name)]))
   return saveSwitches($, 'project', { weight: pl.weight, ...(Object.keys(on).length ? { on } : {}) })
 }
@@ -1797,7 +1895,7 @@ async function draftFlow($: $, i: PlanInput, label: string): Promise<Result> {
   const bare = 'states' in f ? f.states.filter(s => !s.check && !s.wait).map(s => s.id) : []
   const dir = DIRS[kind]
   return record($, {
-    result: `Sentinel holds the ${kind} "${f.name}" for the user. They save it from the band above the prompt or the dashboard, to the project (.sentinel/${dir}) or their personal ${dir} (~/.sentinel/${dir})${taken ? `, where it replaces the ${taken.scope} ${kind} of that name` : ''}. Show it to them in your reply, then stop and wait.`
+    result: `Sentinel holds the ${kind} "${f.name}" for the user. They save it from the band above the prompt or the dashboard, to this project (.sentinel/${dir})${presetIn ? `, the preset ${presetIn} (~/.sentinel/presets/${presetIn}/${dir})` : ''} or every project (~/.sentinel/${dir})${taken ? `, where it replaces the ${placeOf(taken.scope)} ${kind} of that name` : ''}. Show it to them in your reply, then stop and wait.`
       + (bare.length ? ` ${bare.join(', ')} ${bare.length > 1 ? 'have' : 'has'} no check and no wait, so nothing would show ${bare.length > 1 ? 'they are' : 'it is'} done; say so.` : ''),
   }, { kind: 'plan', label })
 }
@@ -1808,15 +1906,16 @@ async function libraryList($: $): Promise<string> {
   const mark = (on?: boolean) => (on ? 'on ' : 'off')
   const untrusted = (name: string) => ` Off until you trust it: Sentinel didn't save this file on this computer, or it changed since. Check it, then /sentinel trust ${name}.`
   const short = (t: string) => (t.length > 120 ? `${t.slice(0, 119)}…` : t)
-  const from = v.project.weight ? 'set for this project' : v.personal.weight ? 'your default' : "Sentinel's default"
+  const from = v.project.weight ? 'set for this project' : v.using?.weight ? `from the preset ${v.using.name}` : v.personal.weight ? 'set for every project' : "Sentinel's default"
   return [
     `Weight: ${v.weight} (${from}).`,
+    ...(v.using?.missing ? [`The preset ${v.using.name} isn't on this computer, so this project runs on its own settings and every project's.`] : []),
     'Instructions:',
-    ...v.instructions.map(x => `${mark(x.on)} ${x.name} (${x.scope}, ${x.at}): ${x.title ?? x.description ?? short(x.text)}${x.trusted ? '' : untrusted(x.name)}`),
+    ...v.instructions.map(x => `${mark(x.on)} ${x.name} (${placeOf(x.scope)}, ${x.at}): ${x.title ?? x.description ?? short(x.text)}${x.trusted ? '' : untrusted(x.name)}`),
     'Flows:',
-    ...(flowsSeen ?? []).map(f => `${mark(v.flowsOn[f.name])} ${f.name} (${f.scope}): ${f.description ? `${f.description} ` : ''}States: ${f.states.map(x => x.id).join(', ')}. Adds itself ${ruleText(f.when)}.`
+    ...(flowsSeen ?? []).map(f => `${mark(v.flowsOn[f.name])} ${f.name} (${placeOf(f.scope)}): ${f.description ? `${f.description} ` : ''}States: ${f.states.map(x => x.id).join(', ')}. Adds itself ${ruleText(f.when)}.`
       + (f.when && !f.trusted ? untrusted(f.name) : '')),
-    "Switch one with /sentinel on <name> or /sentinel off <name>, and pick a weight with /sentinel weight light, standard or thorough. Add personal to set your default instead of this project's. Add a flow to a draft with /sentinel add <flow> start, end, before <state> or after <state>.",
+    'Switch one with /sentinel on <name> or /sentinel off <name>, and pick a weight with /sentinel weight light, standard or thorough. Add preset or everywhere after it to set it in the preset in use or for every project. Add a flow to a draft with /sentinel add <flow> start, end, before <state> or after <state>.',
   ].join('\n') + (flowBad.length ? `\nNot read: ${flowBad.join('; ')}` : '')
 }
 
@@ -1852,7 +1951,7 @@ async function changeDraft($: $, edit: (held: PlanInput) => PlanInput | string, 
   return why || done
 }
 
-// /sentinel flow save project|personal, or discard: what to do with the flow Claude drafted.
+// /sentinel flow save project|preset|everywhere, or discard: what to do with the flow Claude drafted.
 async function flowCommand($: $, arg: string): Promise<string> {
   const f = (await read($, run)).flowDraft
   if (arg === 'discard') {
@@ -1862,9 +1961,9 @@ async function flowCommand($: $, arg: string): Promise<string> {
   }
   const name = /^trust (\S+)$/.exec(arg)?.[1]
   if (name) return (await trustNow($, name)).text
-  const scope = /^save (project|personal)$/.exec(arg)?.[1]
-  if (!isScope(scope)) return 'Use /sentinel flow save project, /sentinel flow save personal, /sentinel flow trust <flow> or /sentinel flow discard.'
-  return keepFlow($, scope)
+  const word = /^save (project|preset|everywhere)$/.exec(arg)?.[1]
+  if (!word) return 'Use /sentinel flow save project, preset or everywhere, /sentinel flow trust <flow> or /sentinel flow discard.'
+  return keepFlow($, scopeOf(word))
 }
 
 async function keepFlow($: $, scope: Scope): Promise<string> {
@@ -2074,9 +2173,9 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
             .then(x => x.isDelivered, () => false)
           if (sent) return
           await change($, x => memberOff(x, id, 'its agent could not be reached', now(), Date.now()))
-          tell($, `${TAG} The member for ${id} has \`${st.check}\` failing (${why}), and Sentinel couldn't reach it to retry. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
+          nudge($, `${TAG} The member for ${id} has \`${st.check}\` failing (${why}), and Sentinel couldn't reach it to retry. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
         } else {
-          tell($, `${TAG} The member for ${id} stopped ${RETRIES + 1} times with \`${st.check}\` failing: ${why}. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/ for a look. Brief ${id} again with what to change, or take it on yourself when it comes up.` )
+          nudge($, `${TAG} The member for ${id} stopped ${RETRIES + 1} times with \`${st.check}\` failing: ${why}. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/ for a look. Brief ${id} again with what to change, or take it on yourself when it comes up.` )
         }
         return
       }
@@ -2084,7 +2183,7 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
       if (checked === before) break
       if (n === CHECK_RUNS) {
         await change($, x => (x.running?.[id]?.agent === m.agent ? memberOff(x, id, 'its files kept changing', now(), Date.now()) : x))
-        tell($, `${TAG} The member for ${id} passed \`${st.check}\`, but ${id}'s files changed each time it ran, ${CHECK_RUNS} runs in all. Something still writes to them, or the check itself does. Nothing came back: Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
+        nudge($, `${TAG} The member for ${id} passed \`${st.check}\`, but ${id}'s files changed each time it ran, ${CHECK_RUNS} runs in all. Something still writes to them, or the check itself does. Nothing came back: Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
         return
       }
     }
@@ -2106,7 +2205,7 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       await change($, x => (x.running?.[id]?.agent === m.agent ? memberOff(x, id, 'its work did not apply', now(), Date.now()) : x))
-      tell($, `${TAG} The member for ${id} passed its check, but its work did not apply to the project: ${why}. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
+      nudge($, `${TAG} The member for ${id} passed its check, but its work did not apply to the project: ${why}. Sentinel took ${id} off it, and its worktree stays at .claude/worktrees/${m.name}/. Brief ${id} again, or take it on yourself when it comes up.` )
       return
     }
     // A loop back can still let the member go while git apply runs. Its work is in the project then, on a reopened state.
@@ -2126,13 +2225,14 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
       : undefined
     void after($)
     if (late) {
-      if (files.length || kept) tell($, [files.length ? `${TAG} ${id} was reopened while Sentinel brought back its member's work, and that work reached the project anyway: ${files.join(', ')}. Look at those files before you build on them.` : TAG, kept].filter(Boolean).join(' ') )
+      if (files.length || kept) nudge($, [files.length ? `${TAG} ${id} was reopened while Sentinel brought back its member's work, and that work reached the project anyway: ${files.join(', ')}. Look at those files before you build on them.` : TAG, kept].filter(Boolean).join(' ') )
       return
     }
     const what = files.length ? `Sentinel applied its changes to the project: ${files.join(', ')}.` : "It changed none of the state's files."
     const beside = (await parallelOn($)) ? besideNote(landed) : undefined
     const long = overdue || flying.length ? `A background run the member started was still going after ${HOLD_MS / 60_000} minutes, so Sentinel stopped it and checked the work without it.` : undefined
-    tell($, [`${TAG} ${id} is in: its member passed${st.check ? ` \`${st.check}\`` : ''} in its worktree. ${what}`, long, kept, beside, 'Continue with the plan.'].filter(Boolean).join('\n') )
+    // Told on the next tool result while the main conversation works, since a prompt waits for the turn to end.
+    nudge($, [`${TAG} ${id} is in: its member passed${st.check ? ` \`${st.check}\`` : ''} in its worktree. ${what}`, long, kept, beside, 'Continue with the plan.'].filter(Boolean).join('\n') )
   } finally {
     bringing.delete(id)
   }
@@ -2178,13 +2278,13 @@ async function atStart($: $): Promise<string | undefined> {
 
 // When this session started: its MCP servers connect over its first half minute or so.
 let sessionAt = 0
-// What isn't ready of the MCP servers the project needs, or undefined when all are. In a session under 45 s old a
-// server may still be connecting, so Sentinel looks again every 3 s, for 15 s at most.
-async function mcpGate($: $): Promise<{ why: string; it: string; blocked: string } | undefined> {
-  const needed = (await switches($, 'project')).mcps ?? []
-  if (!needed.length) return undefined
+// What isn't ready of the MCP servers named (a plan's, or else the ones needed here now), or undefined when all are. In
+// a session under 45 s old a server may still be connecting, so Sentinel looks again every 3 s, for 15 s at most.
+async function mcpGate($: $, names?: string[]): Promise<{ why: string; it: string; blocked: string } | undefined> {
+  const need = names ?? (await needed($)).map(x => x.name)
+  if (!need.length) return undefined
   const clock = () => $.clock.now().catch(() => Date.now())
-  const look = async () => mcpStates(needed, (await $.tool.list().catch(() => [])).map(t => t.name))
+  const look = async () => mcpStates(need, (await $.tool.list().catch(() => [])).map(t => t.name))
   let states = await look()
   const until = Math.min((await clock()) + 15_000, sessionAt + 45_000)
   while (mcpProblem(states) && (await clock()) < until && (await nap($, 3000))) states = await look()
@@ -2202,7 +2302,7 @@ async function mcpAtStart($: $): Promise<string | undefined> {
   if (!isLive(r) || !r.active) return undefined
   const visit = `${r.startedAt}:${r.active}:${r.tasks?.[r.active]?.visits?.length ?? 0}`
   if (mcpFine === visit) return undefined
-  const mcp = await mcpGate($)
+  const mcp = await mcpGate($, r.library?.mcps)
   if (!mcp) return void (mcpFine = visit)
   if (blockedOn(r)?.what !== mcp.blocked) {
     const t = now()
@@ -2779,7 +2879,6 @@ function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: bo
 // The session's cost and the limits, read after each model response. The reading costs nothing. The price of 1% is learned
 // whether a plan runs or not, and all the user's projects share it, as the limit is the account's.
 const PRICES = 'usage-prices'
-let watching: Watch | undefined
 // One at a time, as a reading applied after a newer one would look like the session's cost dropping.
 let metering: Promise<unknown> = Promise.resolve()
 const meter = ($: $) => (metering = metering.then(() => metered($)).catch(() => undefined))
@@ -2791,8 +2890,8 @@ async function metered($: $) {
   let prices = parsePrices(await $.store.get(PRICES).catch(() => undefined))
   const week = u.rateLimits.find(w => w.kind === WEEKLY)
   if (week) {
-    const seen = watch(watching, week.percentUsed, usd, week.resetsAt, at)
-    watching = seen.watch
+    const seen = watch((await read($, watching)) ?? undefined, week.percentUsed, usd, week.resetsAt, at)
+    await update($, watching, () => seen.watch)
     if (seen.price) await $.store.set(PRICES, (prices = keptPrices(prices, seen.price)))
   }
   await change($, r => addUsage(r, usd, u.rateLimits, perPoint(prices)))
@@ -3034,7 +3133,7 @@ async function fromPage($: $, m: Record<string, unknown>) {
     // The experimental switch isn't one of the draft's choices: it stays as the plan was drafted.
     const picked = [...l.items, ...l.flows].filter(x => x.trusted && x.name !== STATE_SETTINGS && (m.on as unknown[]).includes(x.name)).map(x => x.name)
     const on = r.held?.library?.on.includes(STATE_SETTINGS) ? [...picked, STATE_SETTINGS] : picked
-    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, personal: l.personal, settings: cardSettings(held.library?.settings, m.weight as Weight, on) }) }), '')
+    const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, preset: l.preset, personal: l.personal, settings: cardSettings(held.library?.settings, m.weight as Weight, on) }) }), '')
     return why ? toast(why) : undefined
   }
   // An answer on the draft card's settings. The row comes from the draft as it stands, so a stale page changes nothing.
@@ -3077,17 +3176,19 @@ async function fromPage($: $, m: Record<string, unknown>) {
     if (out.ok && m.fromDraft === true) await change($, x => ({ ...x, flowDraft: undefined }))
     return flowReply(out)
   }
-  // Presets and the project's needed MCPs. swap: a server of the user's in place of one of the preset's, or null to
+  // Presets and the needed MCPs. swap: on an import, a server of the user's in place of one of the preset's, or null to
   // leave it out.
   const swap = m.swap && typeof m.swap === 'object' && !Array.isArray(m.swap)
     ? Object.fromEntries(Object.entries(m.swap).filter((x): x is [string, string | null] => x[1] === null || (typeof x[1] === 'string' && !!x[1].trim()))) : undefined
-  if (m.kind === 'presetUse' && typeof m.name === 'string') return flowReply(await usePreset($, m.name, swap))
-  if (m.kind === 'presetSave' && typeof m.name === 'string') return flowReply(await savePreset($, m.name))
-  if (m.kind === 'presetUndo') return flowReply(await undoPreset($))
+  if (m.kind === 'presetUse' && typeof m.name === 'string') return flowReply(await usePreset($, m.name))
+  if (m.kind === 'presetNone') return flowReply(await noneNow($))
+  if (m.kind === 'presetNew' && typeof m.name === 'string') return flowReply(await newPreset($, m.name))
+  if (m.kind === 'presetMove' && typeof m.name === 'string') return flowReply(await movePreset($, m.name))
   if (m.kind === 'presetDelete' && typeof m.name === 'string') return flowReply(await deletePreset($, m.name))
-  if (m.kind === 'presetImport' && typeof m.name === 'string' && typeof m.content === 'string') return flowReply(await importPreset($, m.name, m.content.slice(0, 200_000)))
+  if (m.kind === 'presetImport' && typeof m.name === 'string' && typeof m.content === 'string') return flowReply(await importPreset($, m.name, m.content.slice(0, 200_000), swap))
   if ((m.kind === 'mcpAdd' || m.kind === 'mcpDrop') && typeof m.name === 'string') {
-    const text = await mcpCommand($, `${m.kind === 'mcpAdd' ? 'add' : 'drop'} ${m.name}`)
+    const where = m.scope === 'preset' ? ' preset' : m.scope === 'personal' ? ' everywhere' : ''
+    const text = await mcpCommand($, `${m.kind === 'mcpAdd' ? 'add' : 'drop'} ${m.name}${where}`)
     await libraryView($)
     return flowReply({ ok: true, text })
   }

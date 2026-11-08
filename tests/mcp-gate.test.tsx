@@ -8,10 +8,12 @@
 //  5. A server gone when a state starts (a new session picked the plan up) goes unnoticed, or the run never goes on.
 //  6. /sentinel mcp loses the list, keeps a name twice, or another switch change wipes it.
 //  7. Claude or another plugin changes the list.
+//  8. One place's list hides another's: this project's, the preset's in use, or every project's.
+//  9. A running plan's list changes when the files do.
 import { expect, mock } from 'claude-code/testing'
 import { blockedOn } from '../hooks/core'
 import type { Run } from '../types'
-import { ROOT, TOOL, engine, said, test } from './kit'
+import { HOME, ROOT, TOOL, engine, said, test } from './kit'
 
 const FILE = `${ROOT}/.sentinel/library.json`
 const COPY = { id: 'copy', label: 'Copy', check: 'npm test -- copy', files: ['docs/**'] }
@@ -156,4 +158,56 @@ test('only the user changes the list, and a bad list in the file reads as none w
   expect(await sentinel('lock')).toMatch(/^Locked "P"/)
   await sentinel('mcp add Maestro')
   expect(saved()).toEqual({ on: { 'fails-first': false }, mcps: ['Maestro'] })
+})
+
+test('the needed servers add up across this project, the preset in use and every project', async ($: any, on: any) => {
+  const { eng, sentinel, drafted } = await session($, on)
+  const GD = `${HOME}/.sentinel/presets/game-dev/library.json`
+  eng.files[GD] = JSON.stringify({ mcps: ['Unity'] })
+  eng.files[FILE] = JSON.stringify({ mcps: ['Notion'], preset: 'game-dev' })
+  eng.files[`${HOME}/.sentinel/library.json`] = JSON.stringify({ on: { 'quote-the-source': false }, mcps: ['maestro', 'notion'] })
+  eng.setTools(['Read', NOTION])
+  expect(await sentinel('mcp')).toBe('This project needs: Notion (connected), Unity (from game-dev, not connected in this session), maestro (from every project, not connected in this session). This session has: Notion.')
+  await drafted()
+  expect(eng.memory.run?.draft?.library?.mcps).toEqual(['Notion', 'Unity', 'maestro'])
+  expect(await sentinel('lock')).toBe("Unity and maestro aren't connected in this session. Connect them with /mcp, then lock again. Nothing was locked.")
+  // Each place keeps its own list.
+  expect(await sentinel('mcp drop unity preset')).toBe("Unity is off the preset game-dev's list.")
+  expect(await sentinel('mcp drop maestro everywhere')).toBe("maestro is off every project's list.")
+  expect(JSON.parse(eng.files[GD]!)).toEqual({})
+  expect(await sentinel('mcp add Unity everywhere')).toBe("Unity is on every project's list. It isn't connected in this session, so plans here won't lock until it is.")
+  expect(JSON.parse(eng.files[`${HOME}/.sentinel/library.json`]!).mcps).toEqual(['notion', 'Unity'])
+})
+
+test('a running plan keeps the list it locked with when the files change', async ($: any, on: any) => {
+  const { eng, sentinel, running } = await session($, on, ['Unity'])
+  eng.setTools([UNITY])
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await $.tool.call(plan))).toMatch(/^Locked "P"/)
+  expect(running().library?.mcps).toEqual(['Unity'])
+  // Taken off the list mid-run, Unity is still what this plan needs.
+  await sentinel('mcp drop Unity')
+  eng.setTools(['Read'])
+  const r = await $.tool.call({ tool: TOOL, action: 'advance', to: 'form', outcome: 'Copied.' })
+  expect([said(r), ...(r.context ?? [])].join('\n')).toMatch(/Unity isn't connected in this session/)
+})
+
+test('/sentinel lock records the list as it stands then, not as it stood at the draft', async ($: any, on: any) => {
+  const { eng, sentinel, drafted } = await session($, on)
+  eng.setTools(['Read', UNITY])
+  await drafted()
+  await sentinel('mcp add Unity')
+  expect(await sentinel('lock')).toMatch(/^Locked "P"/)
+  expect(eng.memory.run?.library?.mcps).toEqual(['Unity'])
+})
+
+test('a plan locked with no needs gets none from a server added mid-run', async ($: any, on: any) => {
+  const { sentinel, running } = await session($, on)
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  expect(said(await $.tool.call(plan))).toMatch(/^Locked "P"/)
+  expect(running().library?.mcps).toEqual([])
+  await sentinel('mcp add Unity')
+  const r = await $.tool.call({ tool: TOOL, action: 'advance', to: 'form', outcome: 'Copied.' })
+  expect([said(r), ...(r.context ?? [])].join('\n')).not.toMatch(/isn't connected/)
+  expect(blockedOn(running())).toBeUndefined()
 })

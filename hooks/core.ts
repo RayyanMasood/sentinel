@@ -1,6 +1,6 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
 import { usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
@@ -36,16 +36,17 @@ export const COMMANDS: readonly (readonly [string, readonly (readonly [string, s
   ]],
   ['The Library', [
     ['library|flows', 'list the instructions and flows with their switches, and the weight'],
-    ['on <name>|off <name>', 'switch an item on or off for this project; add personal for your default'],
-    ['weight light|standard|thorough', 'pick the weight for this project; add personal for your default'],
+    ['on <name>|off <name>', 'switch an item on or off for this project; add preset or everywhere for the preset in use or every project'],
+    ['weight light|standard|thorough', 'pick the weight for this project; add preset or everywhere for the preset in use or every project'],
     ['trust <name>', "turn on an instruction or flow file Sentinel didn't save on this computer"],
-    ['flow save project|flow save personal|flow discard', 'keep or drop the flow or instruction Claude drafted'],
-    ['preset', 'list your presets: saved setups to use in other projects'],
-    ['preset save <name>', "save this project's weight, switches, own items and needed MCPs as a preset"],
-    ['preset <name>|preset undo', "use a preset here (it sets only what it names), or take the last use back"],
+    ['flow save project|flow save preset|flow save everywhere|flow discard', 'keep or drop the flow or instruction Claude drafted'],
+    ['preset', 'list your presets: settings shared by the projects that use one'],
+    ['preset <name>|preset none', "use a preset here, under this project's own settings, or stop using it"],
+    ['preset new <name>', 'make an empty preset and use it here'],
+    ['preset move <name>', "move this project's own settings into a preset and use it here"],
     ['preset delete <name>', 'delete a preset'],
-    ['mcp', 'list the MCP servers this project needs, and whether this session has them'],
-    ['mcp add <server>|mcp drop <server>', "put a server on this project's list or take it off; plans here won't lock while one is missing"],
+    ['mcp', 'list the MCP servers needed here, and whether this session has them'],
+    ['mcp add <server>|mcp drop <server>', "put a server on this project's list or take it off; add preset or everywhere for the preset in use or every project"],
   ]],
   ['The System map', [
     ['redraw <part>', 'ask Claude to reread a part or an area and redraw it; you answer before anything changes'],
@@ -1002,6 +1003,8 @@ export function revised(r: Run, i: PlanInput): PlanInput | string {
     ...base, action: 'define', states: order.map(id => sent.get(id) ?? had.get(id)!), loops,
     title: i.title ?? base.title, source: i.source ?? base.source, start: i.start ?? base.start, decisions: i.decisions ?? base.decisions, named: i.named, messages: i.messages,
     ...(i.depth ? { depth: i.depth } : {}),
+    // Sent, they replace the draft's list; kept, they lose the steps the new order leaves out.
+    ...(i.points ? { points: i.points } : base.points ? { points: dropPoints(base.points, (base.states ?? []).map(idOf).filter(id => !order.includes(id))) } : {}),
     ...(i.drawn ? { drawn: i.drawn } : {}),
     ...(i.library ? { library: i.library } : {}),
   }
@@ -1045,7 +1048,7 @@ const REFUSALS: Record<Exclude<Refused['why'], 'none'>, (q: string) => string> =
   short: q => `"${shown(q)}" is too short to count: quote at least ${MIN_WORDS} words, or a whole message.`,
   excluded: q => `"${shown(q)}" comes from a part of the plan marked out of scope, so it doesn't show this was asked for.`,
   empty: q => `"${shown(q)}" has no words in it.`,
-  long: q => `"${shown(q)}" is over ${MAX_QUOTE_WORDS} words. Quote the sentence that asks for this state.`,
+  long: q => `"${shown(q)}" is over ${MAX_QUOTE_WORDS} words. Quote the sentence that asks for it.`,
 }
 // A refusal first: the rarer verdict says more than "missing" from every other source does.
 const RANK: Record<string, number> = { missing: 0, short: 1, excluded: 2, empty: 3 }
@@ -1053,13 +1056,31 @@ const RANK: Record<string, number> = { missing: 0, short: 1, excluded: 2, empty:
 // Each state says where it came from, and Sentinel compares the words itself. A state a flow put in is the user's own, one
 // done before the lock has nothing left to prove, and one that is only there for a depth answer goes if they leave it unticked.
 // Sets asked or added on `states`. used: the sources to keep, which take a typed message only if a quote needs it.
-function proofOf(i: PlanInput, states: StateDef[], at: number, depth: Depth[], kept: Source[], t: string): { used: Source[]; refused: Refused[]; text: string } {
+function proofOf(i: PlanInput, states: StateDef[], at: number, depth: Depth[], points: Point[], kept: Source[], t: string): { used: Source[]; refused: Refused[]; text: string } {
   const typed: Source[] = (i.messages ?? []).map(m => ({ kind: 'message' as const, text: m.text, at: m.at })).reverse()
   const docs = [...kept, ...typed]
   const used = [...kept]
   const refused: Refused[] = []
   const lines: string[] = []
   const exempt = new Set([...states.slice(0, at).map(s => s.id), ...states.filter(s => s.flow).map(s => s.id), ...depth.flatMap(d => d.state ?? [])])
+  // One quote against the sources. A state's, or a point's: owner names it in the refusal.
+  const quoted = (q: string, owner: string) => {
+    let why: Refused['why'] = squash(q).split(' ').length > MAX_QUOTE_WORDS ? 'long' : 'missing'
+    const from = why === 'long' ? undefined : docs.find(d => {
+      const v = checkQuote(d.text, q)
+      if (v !== 'ok' && RANK[v]! > RANK[why]!) why = v
+      return v === 'ok'
+    })
+    if (from) {
+      if (!used.includes(from)) used.push(from)
+      return
+    }
+    // What goes on the record is saved, so its nearest passage comes from what is saved already, never an unused message.
+    const near = why === 'missing' ? nearest(kept.map(d => d.text).join('\n'), q) : ''
+    const told = why === 'missing' ? nearest(docs.map(d => d.text).join('\n'), q) : ''
+    refused.push({ state: owner, quote: shown(q), why, ...(near ? { nearest: near } : {}), t })
+    lines.push(`- ${owner}: ${REFUSALS[why](q)}${told ? ` Nearest: "${shown(told)}".` : ''}`)
+  }
   for (const [k, st] of states.entries()) {
     if (exempt.has(st.id)) continue
     const sent = i.states![k]!
@@ -1074,24 +1095,9 @@ function proofOf(i: PlanInput, states: StateDef[], at: number, depth: Depth[], k
       continue
     }
     states[k] = { ...st, asked }
-    for (const q of asked) {
-      let why: Refused['why'] = squash(q).split(' ').length > MAX_QUOTE_WORDS ? 'long' : 'missing'
-      const from = why === 'long' ? undefined : docs.find(d => {
-        const v = checkQuote(d.text, q)
-        if (v !== 'ok' && RANK[v]! > RANK[why]!) why = v
-        return v === 'ok'
-      })
-      if (from) {
-        if (!used.includes(from)) used.push(from)
-        continue
-      }
-      // What goes on the record is saved, so its nearest passage comes from what is saved already, never an unused message.
-      const near = why === 'missing' ? nearest(kept.map(d => d.text).join('\n'), q) : ''
-      const told = why === 'missing' ? nearest(docs.map(d => d.text).join('\n'), q) : ''
-      refused.push({ state: st.id, quote: shown(q), why, ...(near ? { nearest: near } : {}), t })
-      lines.push(`- ${st.id}: ${REFUSALS[why](q)}${told ? ` Nearest: "${shown(told)}".` : ''}`)
-    }
+    for (const q of asked) quoted(q, st.id)
   }
+  for (const [k, p] of points.entries()) quoted(p.said, `point ${k + 1}`)
   const text = [
     docs.length ? "Sentinel compared each state's quotes with the sources and refused these:" : 'There is nothing to compare quotes with yet: no approved plan, readable file or typed message.',
     ...lines,
@@ -1174,7 +1180,7 @@ export const addsMidRun = (r: Run) => isLive(r) && !r.draft && !!r.library?.on.i
 const BREAKING_SAMPLES = ['package.json', '.github/x.yml', '.env', 'migrations/x.sql', 'auth/x.ts']
 const reachOf = (files: string[]) => files.map(f => breakingKind(f) ?? breakingKind(BREAKING_SAMPLES.find(p => globMatch(f, p)) ?? '')).find(Boolean)
 
-const FIXED_MID_RUN = ['title', 'source', 'start', 'decisions', 'depth', 'settings'] as const
+const FIXED_MID_RUN = ['title', 'source', 'start', 'decisions', 'depth', 'points', 'settings'] as const
 
 // States added while the plan runs. The rest stays as the user locked it and the work carries on: a state with a quote
 // goes in, one Claude added goes in tagged with its reason, and that one stops at its start if it can reach a risky path.
@@ -1208,7 +1214,7 @@ function addStates(r: Run, i: PlanInput, t: string): Acted {
   if (unmapped) return refuse(r, unmapped)
   const more = loopsFrom(i.loops, inOrder())
   if (typeof more === 'string') return refuse(r, more)
-  const proof = proofOf({ ...i, states: sent }, fresh, 0, [], r.sources ?? [], t)
+  const proof = proofOf({ ...i, states: sent }, fresh, 0, [], [], r.sources ?? [], t)
   if (proof.refused.length) return refuse({ ...r, refused: [...(r.refused ?? []), ...proof.refused].slice(-MAX_REFUSED) }, proof.text)
   for (const [k, s] of fresh.entries()) {
     const look = s.added ? reachOf(s.files) : undefined
@@ -1263,8 +1269,10 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   // The user ticks depth items only on a draft they lock themselves; a plan-mode sign-off locks at once.
   const depth = r.review ? depthOf(i.depth, states) : []
   if (typeof depth === 'string') return refuse(r, depth)
-  const kept = [...(keptSources(r) ?? []), ...(i.named ? [i.named] : [])]
-  const proof = i.library?.on.includes('quote-the-source') ? proofOf(i, states, at, depth, kept, t) : undefined
+  const points = pointsOf(i.points, states)
+  if (typeof points === 'string') return refuse(r, points)
+  const kept =[...(keptSources(r) ?? []), ...(i.named ? [i.named] : [])]
+  const proof = i.library?.on.includes('quote-the-source') ? proofOf(i, states, at, depth, points, kept, t) : undefined
   if (proof?.refused.length) return refuse({ ...r, refused: [...(r.refused ?? []), ...proof.refused].slice(-MAX_REFUSED) }, proof.text)
   // A state nothing asked for waits for the user's answer, even on a plan they approved. An answer they gave on this
   // draft stands while the reason stays the same.
@@ -1303,7 +1311,7 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
     const waits = (r.review || !additions.length ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`)
       + (looser.length ? `Looser than the plan, so these wait for the user's answer: ${looser.join(', ')}. If they lock it without answering, the plan's weight stands.\n` : '')
     const text = `${waits}Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
-    return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined }, quiet: true }, ok: true, event: 'drafted', text }
+    return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined, points: points.length ? points : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
   return { run, ok: true, event: 'locked', text: `Locked "${plan.title}": ${rail}.${before}\n${here(run, true)}` }
 }
@@ -1385,6 +1393,33 @@ function depthOf(raw: PlanInput['depth'], states: StateDef[]): Depth[] | string 
   }
   return out
 }
+
+// A draft's points as the model sent them, checked. A string says what is wrong. The quotes are compared in proofOf.
+function pointsOf(raw: PlanInput['points'], states: StateDef[]): Point[] | string {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) return 'points is a list: { said, states } for a point the plan delivers, { said, left } for one you left out.'
+  const out: Point[] = []
+  for (const [k, x] of raw.entries()) {
+    const p = (x ?? {}) as Record<string, unknown>
+    const n = `Point ${k + 1}`
+    const said = typeof p.said === 'string' ? p.said.trim() : ''
+    if (!said) return `${n} needs "said": the user's words that ask for it.`
+    const ids = Array.isArray(p.states) ? [...new Set(p.states.filter((s): s is string => typeof s === 'string').map(s => s.trim()).filter(Boolean))] : []
+    const left = clip(p.left, 300)
+    if (!ids.length === !left) return `${n} ("${shown(said)}") needs "states", the steps that deliver it, or "left", why you left it out. Send one of them.`
+    const gone = ids.find(id => !states.some(s => s.id === id))
+    if (gone !== undefined) return `${n} names "${gone}", which is not one of the states. Send "points" again as it should be.`
+    out.push(left ? { said, left } : { said, states: ids })
+  }
+  return out
+}
+
+// The points without the steps `gone`. One left with no steps shows as left out.
+const dropPoints = (points: Point[], gone: string[]): Point[] => points.map(p => {
+  if (!('states' in p) || !p.states.some(id => gone.includes(id))) return p
+  const states = p.states.filter(id => !gone.includes(id))
+  return states.length ? { said: p.said, states } : { said: p.said, left: 'Its steps were taken out.' }
+})
 
 // The checks of the states before `start`; define needs their results.
 export function priorChecks(i: PlanInput): string[] {
@@ -1507,7 +1542,7 @@ export function dropStates(held: PlanInput, gone: string[]): PlanInput {
     .map(s => (s.needs?.some(m => gone.includes(m.trim())) ? { ...s, needs: [...new Set(s.needs.flatMap(m => (gone.includes(m.trim()) ? outside : [m])))] } : s))
   const at = held.start ? ids.indexOf(held.start.trim()) : -1
   const start = at >= 0 && gone.includes(ids[at]!) ? states.slice(at).find(s => !gone.includes(idOf(s))) : undefined
-  return { ...held, states: kept, ...(held.loops ? { loops: held.loops.filter(l => !l.some(id => gone.includes(id))) } : {}), ...(start ? { start: idOf(start) } : {}) }
+  return { ...held, states: kept, ...(held.points ? { points: dropPoints(held.points, gone) } : {}), ...(held.loops ? { loops: held.loops.filter(l => !l.some(id => gone.includes(id))) } : {}), ...(start ? { start: idOf(start) } : {}) }
 }
 
 // A new plan's define with the user's rules applied: each flow with `when` goes in where the rule says. One already in
@@ -1568,24 +1603,31 @@ const WEIGHT_RANK: Record<Weight, number> = { light: 0, standard: 1, thorough: 2
 // own: the user's own instruction, with its own list of weights if any. A file in a built-in's place isn't.
 type LibItem = { name: string; weights?: readonly Weight[]; trusted?: boolean; own?: boolean }
 const sw = (s: Switches, name: string) => (s.on && Object.hasOwn(s.on, name) ? s.on[name] : undefined)
-// An item's switch flipped by hand, if it has one. A project that picks a weight takes the built-ins over, so the user's
-// switch no longer counts for them. Their own items keep it, and so does state-settings, which is in no weight.
-const handOn = (it: LibItem, project: Switches, personal: Switches) => sw(project, it.name) ?? (it.weights && !it.own && project.weight && it.name !== STATE_SETTINGS ? undefined : sw(personal, it.name))
+// An item's switch flipped by hand, if it has one, from the closest place that has one: this project, the preset in
+// use, every project. A place that picks a weight takes the built-ins over, so a farther switch no longer counts for
+// them. The user's own items keep it, and so does state-settings, which is in no weight.
+function handOn(it: LibItem, ...places: Switches[]): boolean | undefined {
+  for (const s of places) {
+    const v = sw(s, it.name)
+    if (v !== undefined) return v
+    if (s.weight && it.weights && !it.own && it.name !== STATE_SETTINGS) return undefined
+  }
+  return undefined
+}
 
 // Which items are on. A built-in lists the weights that turn it on; the user's own items list none and are on unless
-// switched off. A project that picks a weight takes the built-ins over: its switches and that weight decide them.
-// Otherwise the project's switch counts first, then the user's, then the user's weight (Standard when neither picked
-// one). An item that isn't trusted is off.
-export function libraryOn(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}): { weight: Weight; on: string[] } {
-  const weight = project.weight ?? personal.weight ?? DEFAULT_WEIGHT
-  const on = items.filter(it => it.trusted !== false && (handOn(it, project, personal) ?? it.weights?.includes(weight) ?? true))
+// switched off. The closest place wins: a switch there, or its weight for the built-ins (Standard when no place picked
+// one). An item that isn't trusted is off. preset: the switches of the preset in use, between the other two.
+export function libraryOn(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}, preset: Switches = {}): { weight: Weight; on: string[] } {
+  const weight = project.weight ?? preset.weight ?? personal.weight ?? DEFAULT_WEIGHT
+  const on = items.filter(it => it.trusted !== false && (handOn(it, project, preset, personal) ?? it.weights?.includes(weight) ?? true))
   return { weight, on: on.map(it => it.name) }
 }
 
 // The switches flipped by hand that decide an item.
-export function handOf(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}): Record<string, boolean> {
+export function handOf(items: readonly LibItem[], project: Switches = {}, personal: Switches = {}, preset: Switches = {}): Record<string, boolean> {
   return Object.fromEntries(items.flatMap(it => {
-    const v = handOn(it, project, personal)
+    const v = handOn(it, project, preset, personal)
     return v === undefined ? [] : [[it.name, v]]
   }))
 }
@@ -1827,8 +1869,8 @@ export function toldFor(r: Run, at: InstructionAt, st?: StateDef): InstructionDe
 }
 
 const RULES_WIN = "Where the project's own rules (such as CLAUDE.md) differ from these, the project's rules win."
-const MAY_SKIP = 'If one of these doesn\'t fit this state, skip it and record why with "decide". If two of them disagree, pick one and record why the same way.'
-const MEMBER_SKIPS = "If one of these doesn't fit this state, skip it and say why when you report back. If two of them disagree, pick one and say why the same way."
+const MAY_SKIP = 'If one of these doesn\'t fit this state, skip it and record why with "decide", naming it in "skip". If two of them disagree, pick one and record why the same way.'
+const MEMBER_SKIPS = "If one of these doesn't fit this state, skip it and say why when you report back, naming it. If two of them disagree, pick one and say why the same way."
 // ponytail: rerunOf runs only in the main conversation, so a member's state gets this note in place of the rerun.
 export const memberGap = (r: Run, st: StateDef) =>
   (r.library && onFor(r, st, 'fails-without-change') ? "Sentinel won't run your check without your code changes, as fails-without-change does for the main conversation. Make sure your check fails without them, and say so when you report back." : '')
@@ -2130,6 +2172,7 @@ function amend(r: Run, i: PlanInput, t: string): Acted {
 }
 
 function decide(r: Run, i: PlanInput, t: string): Acted {
+  if (i.skip !== undefined) return skipFor(r, i, t)
   const topic = i.topic?.trim()
   const choice = i.choice?.trim()
   if (!topic || !choice) return refuse(r, 'decide needs a topic and a choice.')
@@ -2141,6 +2184,30 @@ function decide(r: Run, i: PlanInput, t: string): Acted {
     log: [...r.log, { t, icon: '◆', tone: 'acc', text: `Decided · ${text}` }],
   }
   return { run, ok: true, text: 'Recorded. Continue with the plan.' }
+}
+
+const skipsOf = (r: Run, id: string) => r.audit.flatMap(a => (a.skip && a.state === id ? [a.skip] : []))
+
+// Claude skips an instruction for a state, by name, so the page can show which one and why. Only one the state was told
+// can be skipped: the checks Sentinel runs itself aren't told.
+function skipFor(r: Run, i: PlanInput, t: string): Acted {
+  const name = String(i.skip).trim()
+  const id = i.to?.trim() || r.active
+  const st = r.plan?.states.find(s => s.id === id)
+  if (!st) return refuse(r, `There is no state "${id ?? ''}" to skip ${name} for.`)
+  const why = i.reason?.trim()
+  if (!why) return refuse(r, `Skipping ${name} needs a one-line why in "reason".`)
+  const can = [...new Set([...toldFor(r, 'start', st), ...toldFor(r, 'close', st)].map(x => x.name))]
+  if (!can.includes(name)) return refuse(r, `${st.id} wasn't told ${name}, so there is nothing to skip. ${can.length ? `These can: ${can.join(', ')}.` : 'It was told no instruction.'}`)
+  const text = `Skipped ${name} for ${st.id}: ${why}`
+  return {
+    run: {
+      ...r, escalatedAt: undefined,
+      audit: [...r.audit, { step: r.step + 1, t, state: st.id, kind: 'decided', text, by: 'claude', skip: { name, why: why.slice(0, MAX_WHY) } }],
+      log: [...r.log, { t, icon: '◆', tone: 'acc', text: `Decided · ${text}` }],
+    },
+    ok: true, text: 'Recorded. Continue with the plan.',
+  }
 }
 
 function escalate(r: Run, i: PlanInput, t: string, now: number): Acted {
@@ -2254,7 +2321,7 @@ export type LedgerRow = {
 
 export type VM = {
   phase: 'none' | 'draft' | 'live' | 'complete'
-  // Only with the Library's per-state settings on.
+  // The plan's weight, with any Library; the settings Claude chose, only with the per-state settings on.
   planWeight?: Weight
   settingRows?: SettingRow[]
   paused: boolean
@@ -2268,7 +2335,7 @@ export type VM = {
   // needs: every state it needs, the one before it when it lists none. waits: those not done yet.
   // skipped: why the user skipped it; it still shows as done.
   // weightNow: what the state runs at, with the Library's per-state settings on. noRerun: a member running it misses Sentinel's rerun.
-  states: (StateDef & { weightNow?: Weight; noRerun?: true; asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
+  states: (StateDef & { weightNow?: Weight; skips?: { name: string; why: string }[]; noRerun?: true; asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
   // Some state lists its needs, so the views show what each one needs.
   deps: boolean
   loops: { from: string; to: string; count: number; hot: boolean }[]
@@ -2319,6 +2386,8 @@ export type VM = {
   system?: SystemView
   // A draft's depth answers, which the user ticks as they lock it.
   depth?: Depth[]
+  // What the user asked for, as the draft lists it. Empty when Claude listed none.
+  points?: Point[]
   // Where the states came from, while the plan compares quotes. quoted of of: states with a quote, of those with a quote
   // or Claude's reason, as a flow's state and one done before the lock have neither.
   proof?: { quoted: number; of: number; sources: SourceFact[]; refused: (Refused & { says: string })[] }
@@ -2655,7 +2724,8 @@ export function summarize(top: Run, look: MapLook = {}): VM {
         needs: s.id === 'done' ? [] : needsOf(plan.states, s.id),
         waits: phase === 'complete' || done.has(s.id) || s.id === 'done' ? [] : needsOf(plan.states, s.id).filter(n => !done.has(n)),
         ...(r.skipped?.[s.id] ? { skipped: r.skipped[s.id] } : {}),
-        ...(s.id !== 'done' && r.library?.states ? { weightNow: weightFor(r, s) } : {}),
+        ...(s.id !== 'done' && r.library ? { weightNow: weightFor(r, s) } : {}),
+        ...(skipsOf(r, s.id).length ? { skips: skipsOf(r, s.id) } : {}),
         ...(s.id !== 'done' && memberGap(r, s) ? { noRerun: true as const } : {}),
       }))
     : []
@@ -2755,7 +2825,9 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     ...(top.flowDraft && { flowDraft: top.flowDraft }),
     ...((r.drawing || (!plan && look.map)) && { system: systemOf(r, r.drawing ?? standing(look.map!, look), states, phase, lastCheck, blockedOn(r), look) }),
     ...(top.draft && top.held?.depth && { depth: top.held.depth }),
-    ...(r.library?.states ? { planWeight: r.library.weight, settingRows: settingRows(r) } : {}),
+    ...(top.draft && { points: top.held?.points ?? [] }),
+    ...(r.library ? { planWeight: r.library.weight } : {}),
+    ...(r.library?.states ? { settingRows: settingRows(r) } : {}),
     ...(facts && { proof: {
       quoted: plan!.states.filter(s => s.asked?.length).length,
       of: plan!.states.filter(s => s.asked?.length || s.added).length,

@@ -1,21 +1,18 @@
-// A preset: a project's Library setup in one file, and what using it changes. Each test names a way it could go wrong.
+// A preset: its file for Export and Import, and a project's settings moved into it. Each test names a way it could go wrong.
 //   node --test tests/preset.test.mjs
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { applyPreset, presetFrom, presetName, presetOf } from '../hooks/preset.ts'
+import { moveInto, presetFrom, presetName, presetOf, withSwap } from '../hooks/preset.ts'
 
 const ins = (name, at = 'always') => ({ name, at, text: `say ${name}` })
 const flow = name => ({ name, states: [{ id: 'a', label: 'do it' }] })
 const BUILTINS = ['fast-checks', 'fails-first', 'state-settings']
-const o = (more = {}) => ({ builtins: BUILTINS, taken: [], ...more })
 
 test('a name is slugged, and the reserved sub-commands, empty names and long names are refused', () => {
   assert.equal(presetName('Game dev'), 'game-dev')
   assert.equal(presetName('  --a__b!!c--  '), 'a-b-c')
-  assert.equal(presetName('save'), undefined)
-  assert.equal(presetName('Undo'), undefined)
-  assert.equal(presetName('delete'), undefined)
-  assert.equal(presetName('save-2'), 'save-2')
+  for (const n of ['new', 'Move', 'delete', 'NONE']) assert.equal(presetName(n), undefined)
+  assert.equal(presetName('new-2'), 'new-2')
   assert.equal(presetName('!!!'), undefined)
   assert.equal(presetName(''), undefined)
   assert.equal(presetName('a'.repeat(40)), 'a'.repeat(40))
@@ -88,66 +85,30 @@ test('presetFrom carries only what is present and omits empty parts', () => {
   assert.deepEqual(presetFrom({ on: {}, mcps: [] }, { instructions: [], flows: [] }, 'p'), { name: 'p' })
 })
 
-test('a different weight resets hand-flipped built-ins but keeps state-settings and the project\'s own items', () => {
-  const r = applyPreset({ weight: 'light', on: { 'fast-checks': false, 'state-settings': true, mine: false }, preset: 'old', mcps: ['m'] }, { name: 'p', weight: 'thorough' }, o())
-  assert.equal(r.weightReset, true)
-  assert.equal(r.switches.weight, 'thorough')
-  assert.deepEqual(r.switches.on, { 'state-settings': true, mine: false })
-  assert.deepEqual(r.switches.mcps, ['m'])
-  assert.equal(r.switches.preset, 'p')
+test('a move keeps what the project had above the preset: its weight ends the preset\'s built-in switches, and its switches win', () => {
+  const r = moveInto({ weight: 'light', on: { 'fast-checks': false, 'state-settings': true, mine: true } }, { weight: 'thorough', on: { 'fails-first': false, mine: false } }, BUILTINS)
+  assert.deepEqual(r, { weight: 'thorough', on: { 'state-settings': true, mine: false, 'fails-first': false } })
 })
 
-test('the same weight, or none named, leaves the project\'s switches alone', () => {
-  const proj = { weight: 'light', on: { 'fast-checks': false } }
-  for (const p of [{ name: 'p', weight: 'light' }, { name: 'p' }]) {
-    const r = applyPreset(proj, p, o())
-    assert.equal(r.weightReset, false)
-    assert.equal(r.switches.weight, 'light')
-    assert.deepEqual(r.switches.on, { 'fast-checks': false })
-  }
-  assert.equal(applyPreset({}, { name: 'p', weight: 'light' }, o()).weightReset, true)
+test('a project with no weight leaves the preset\'s weight and its built-in switches', () => {
+  assert.deepEqual(moveInto({ weight: 'light', on: { 'fast-checks': false, a: true } }, { on: { a: false } }, BUILTINS), { weight: 'light', on: { 'fast-checks': false, a: false } })
+  assert.deepEqual(moveInto({}, {}, BUILTINS), {})
 })
 
-test('a project with no weight and no preset weight keeps none', () => {
-  assert.equal('weight' in applyPreset({}, { name: 'p' }, o()).switches, false)
+test('a move adds the project\'s MCPs to the preset\'s once, in the preset\'s spelling', () => {
+  assert.deepEqual(moveInto({ mcps: ['Unity'] }, { weight: 'light', mcps: ['unity', 'Notion'] }, BUILTINS).mcps, ['Unity', 'Notion'])
+  assert.deepEqual(moveInto({}, { mcps: ['Notion'] }, BUILTINS), { mcps: ['Notion'] })
 })
 
-test('the preset\'s on goes over the project\'s, and on is left out when empty', () => {
-  const r = applyPreset({ on: { a: true, b: true } }, { name: 'p', on: { b: false, c: true } }, o())
-  assert.deepEqual(r.switches.on, { a: true, b: false, c: true })
-  assert.equal('on' in applyPreset({}, { name: 'p' }, o()).switches, false)
-  assert.equal('on' in applyPreset({ weight: 'light', on: { 'fast-checks': true } }, { name: 'p', weight: 'thorough' }, o()).switches, false)
+test('an import\'s MCPs follow the swap: another name, left out, or kept, with no repeats', () => {
+  assert.deepEqual(withSwap(['Unity', 'Notion', 'x'], { Unity: 'unity-editor', Notion: null }), ['unity-editor', 'x'])
+  assert.deepEqual(withSwap(['a', 'b'], { b: 'A' }), ['a'])
+  assert.deepEqual(withSwap(['a']), ['a'])
 })
 
-test('items whose name is free are added, and taken ones are kept as the project has them', () => {
-  const p = { name: 'p', instructions: [ins('free-i'), ins('own-i')], flows: [flow('free-f'), flow('own-f')] }
-  const r = applyPreset({}, p, o({ taken: ['own-i', 'own-f'] }))
-  assert.deepEqual(r.add.instructions.map(x => x.name), ['free-i'])
-  assert.deepEqual(r.add.flows.map(x => x.name), ['free-f'])
-  assert.deepEqual(r.kept.sort(), ['own-f', 'own-i'])
-  assert.deepEqual(applyPreset({}, { name: 'p' }, o()).add, { instructions: [], flows: [] })
-})
-
-test('mcps keep the project\'s list and spelling, add the preset\'s without repeats, and follow the swap', () => {
-  const r = applyPreset({ mcps: ['GitHub'] }, { name: 'p', mcps: ['github', 'slack', 'old', 'gone'] }, o({ swap: { old: 'new', gone: null } }))
-  assert.deepEqual(r.switches.mcps, ['GitHub', 'slack', 'new'])
-  const r2 = applyPreset({ mcps: ['a'] }, { name: 'p', mcps: ['x'] }, o({ swap: { x: 'A' } }))
-  assert.deepEqual(r2.switches.mcps, ['a'])
-  assert.equal('mcps' in applyPreset({}, { name: 'p', mcps: ['gone'] }, o({ swap: { gone: null } })).switches, false)
-  assert.equal('mcps' in applyPreset({}, { name: 'p' }, o()).switches, false)
-})
-
-test('inputs are never mutated', () => {
-  const proj = { weight: 'light', on: { 'fast-checks': false }, mcps: ['m'] }
-  const p = { name: 'p', weight: 'thorough', on: { z: true }, mcps: ['n'], instructions: [ins('i')] }
-  const swap = { n: 'q' }
-  const before = JSON.stringify([proj, p, swap])
-  applyPreset(proj, p, o({ swap }))
-  assert.equal(JSON.stringify([proj, p, swap]), before)
-})
-
-test('the project\'s own on is not mutated when the weight stays', () => {
-  const proj = { weight: 'light', on: { a: true } }
-  applyPreset(proj, { name: 'p', weight: 'light', on: { b: false } }, o())
-  assert.deepEqual(proj, { weight: 'light', on: { a: true } })
+test('a move never changes what it is given', () => {
+  const preset = { weight: 'light', on: { 'fast-checks': false }, mcps: ['m'] }, project = { weight: 'thorough', on: { z: true }, mcps: ['n'] }
+  const before = JSON.stringify([preset, project])
+  moveInto(preset, project, BUILTINS)
+  assert.equal(JSON.stringify([preset, project]), before)
 })

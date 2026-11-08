@@ -3,8 +3,9 @@
 // How it can fail, and where each is tested below:
 //  1. A run with no figures grows an empty row.
 //  2. The running plan's view leaves a figure out.
-//  3. A 5-hour figure only shows when it is reported, and a share only with a weekly figure.
+//  3. A 5-hour figure only shows when it is reported, and a share only with a weekly figure and a price.
 //  4. The finished plan's summary loses them.
+//  5. The cost is left out until there is a share.
 import { expect } from 'claude-code/testing'
 import { emptyRun, summarize } from '../hooks/core'
 import { renderPane } from '../hooks/views'
@@ -36,32 +37,32 @@ const pane = (r: Run) => text(renderPane(EL, summarize(r), 'map', OFF))
 const summary = (r: Run) => text(renderPane(EL, summarize(r), 'focus', OFF))
 const row = (s: string, word: string) => s.split('\n').find(l => l.startsWith(word)) ?? ''
 
-test('a run with no figures has no usage row', () => {
+test('a run with no figures has no usage row, and one with only a cost shows the cost', () => {
   expect(pane(live())).not.toMatch(/usage|week /i)
   expect(summary(done())).not.toMatch(/usage|week /i)
-  expect(pane(live({ ...USAGE, windows: [], began: [] }))).not.toMatch(/usage|week /i)
+  expect(row(pane(live({ ...USAGE, windows: [], began: [] })), 'usage')).toMatch(/usage\s+this plan \$7\.00$/)
 })
 
 test('a running plan shows the week and its share, under the tokens', () => {
   const s = pane(live(USAGE))
-  expect(row(s, 'usage')).toContain('week 52% · this plan about 1.4%')
+  expect(row(s, 'usage')).toContain('week 52% · this plan $7.00, about 1.4%')
   const lines = s.split('\n')
   expect(lines.findIndex(l => l.startsWith('usage'))).toBe(lines.findIndex(l => l.startsWith('tokens')) + 1)
 })
 
-test('until there is a price the share says estimating', () => {
-  expect(row(pane(live({ ...USAGE, perPoint: undefined })), 'usage')).toContain('this plan estimating')
+test('until there is a price the cost shows alone', () => {
+  expect(row(pane(live({ ...USAGE, perPoint: undefined })), 'usage')).toMatch(/this plan \$7\.00$/)
 })
 
 test('the 5-hour figure shows when it is reported', () => {
-  expect(row(pane(live({ ...USAGE, windows: [WEEK, FIVE] })), 'usage')).toContain('week 52% · 5 hours 23% · this plan about 1.4%')
+  expect(row(pane(live({ ...USAGE, windows: [WEEK, FIVE] })), 'usage')).toContain('week 52% · 5 hours 23% · this plan $7.00, about 1.4%')
 })
 
 test('with no weekly figure there is no share to show', () => {
-  expect(row(pane(live({ ...USAGE, windows: [FIVE], began: [FIVE] })), 'usage')).toMatch(/usage\s+5 hours 23%$/)
+  expect(row(pane(live({ ...USAGE, windows: [FIVE], began: [FIVE] })), 'usage')).toMatch(/usage\s+5 hours 23% · this plan \$7\.00$/)
 })
 
 test('a finished plan\'s summary keeps them', () => {
   const s = summary(done(USAGE))
-  expect(s).toMatch(/^usage\s+week 52% · this plan about 1\.4%/m)
+  expect(s).toMatch(/^usage\s+week 52% · this plan \$7\.00, about 1\.4%/m)
 })

@@ -504,6 +504,21 @@ button.mcard:not(.now):hover { border-color: var(--ink-4); }
 .mcard .t1 { display: flex; align-items: center; gap: 7px; min-width: 0; height: 20px; font: 500 13px/20px var(--f-code); }
 .mcard .idt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcard .t1 .mini, .mcard .t1 .cnt { margin-left: auto; }
+/* The weight a state runs at: small and muted, amber where it isn't the plan's. +1 and −1 share the amber, as both mean
+   the state isn't run the plan's usual way. */
+.wm { display: inline-flex; flex: none; gap: 1.5px; }
+.wm b { display: block; width: 4px; height: 9px; border-radius: 1px; background: color-mix(in srgb, var(--ink) 12%, transparent); }
+.wm b.on { background: color-mix(in srgb, var(--ink) 45%, transparent); }
+.wm.own b.on { background: var(--amber-fill); }
+.wx { flex: none; font: 600 11px/14px var(--f-code); color: var(--amber); }
+.mcard .t1 .wm, .mcard .t1 .wx { margin-left: auto; }
+.mcard .t1 .mini ~ .wm, .mcard .t1 .mini ~ .wx, .mcard .t1 .wx ~ .wx, .mcard .t1 .wx ~ .wm { margin-left: 0; }
+.mnote .wm { margin-right: 6px; gap: 1.5px; }
+.mnote .wm + .wm { margin-left: -2px; }
+.mnote .wx { margin-right: 4px; }
+.mnote .wx + .wx { margin-right: 6px; }
+.wline { display: flex; align-items: center; gap: 8px; }
+.planset { margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--hair-2); cursor: help; }
 .mcard .gn { font: 600 14px/20px var(--f-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcard .lb { font-size: 13px; line-height: 18px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mcard .t3 { display: flex; align-items: center; gap: var(--s2); margin-top: auto; height: 16px; overflow: hidden; font: 600 12.5px/16px var(--f-disp); color: var(--ink-3); white-space: nowrap; }
@@ -882,8 +897,14 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 .pset .field { width: min(100%, 360px); }
 .stub .mcpw { display: flex; align-items: flex-start; gap: 6px; font-weight: 600; color: var(--stub-ink); }
 .stub .mcpw .ic { flex: none; margin-top: 2px; }
+/* Three places: what Change for reaches, where an MCP comes from, and the preset in use. */
+.lbar .swhint { margin: 0 0 0 var(--s2); }
+.pline .warn { font-size: 14px; }
+.pneed .mini { margin-left: -2px; }
+.pset h3 .mini { margin-left: var(--s2); vertical-align: 2px; }
+.presetsec .sh .btn[disabled] { opacity: .5; }
 @media (max-width: 860px) { .pgrid { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 620px) { .prow { grid-template-columns: minmax(0, 1fr); gap: var(--s1); } }
+@media (max-width: 620px) { .prow { grid-template-columns: minmax(0, 1fr); gap: var(--s1); } .lbar .swhint { flex-basis: 100%; margin: 0; } }
 .seg .n { margin-left: 6px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 #t-ins[hidden], #t-flows[hidden], .wsect[hidden] { display: none; }
 /* Weights: three ready sets of built-ins. Picking one sets their switches; your own items keep theirs. */
@@ -1281,6 +1302,8 @@ button.key-i:hover { color: var(--ink); }
 
 /* Beside the map: what the run leaves, the view's list, and the picked part with why it shows what it shows. */
 .pside { position: sticky; top: var(--s4); max-height: calc(100vh - 32px); overflow-y: auto; display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+/* A panel hides its overflow, which lets a flex item shrink below its content. Here the column scrolls instead. */
+.pside > * { flex-shrink: 0; }
 #sysp .pd { padding: var(--s4) var(--s5) var(--s5); overflow-wrap: anywhere; }
 .pd-h { display: flex; align-items: flex-start; gap: var(--s2); }
 .pd-h .box { margin-top: 4px; }
@@ -1474,7 +1497,7 @@ button.key-i:hover { color: var(--ink); }
   <div class="grid" id="runGrid" hidden>
     <div class="stack">
       <section class="sect" id="planPanel" aria-labelledby="planH" style="scroll-margin-top: 64px">
-        <div class="sh"><h2 id="planH">Plan</h2><span class="quiet" id="planSub"></span><span class="sp"></span>
+        <div class="sh"><h2 id="planH">Plan</h2><span class="quiet" id="planSub"></span><span class="quiet planset" id="planSet" hidden></span><span class="sp"></span>
           <span id="selSeg" hidden><button type="button" class="btn sm" data-act="select" id="selBtn" aria-pressed="false" title="Tick states of this plan to make a flow of them">Select states</button></span>
           <span class="seg" id="viewSeg"><button type="button" data-v="map" aria-pressed="false">Map</button><button type="button" data-v="line" aria-pressed="false">One line</button><button type="button" data-v="list" aria-pressed="false">List</button></span></div>
         <div class="pbody" id="pbody">
@@ -1549,7 +1572,7 @@ button.key-i:hover { color: var(--ink); }
   <div class="lbar">
     <span class="seg" id="libTabs"><button type="button" data-tab="ins">Instructions<span class="n" id="nIns"></span></button><button type="button" data-tab="flows">Flows<span class="n" id="nFl"></span></button></span>
     <span class="sp"></span>
-    <span class="label">Switches for</span><span class="seg" id="swScope"><button type="button" data-sws="project">This project</button><button type="button" data-sws="personal">My default</button></span>
+    <span class="label">Change for</span><span class="seg" id="swScope"></span><span class="hint swhint" id="swHint"></span>
   </div>
   <p class="hint" id="fOff" hidden>This page was opened as a file, so it can't save, delete or switch anything. Type <code>/sentinel browser</code> to open the dashboard through Sentinel, or use <code>/sentinel library</code> in the chat.</p>
   <p class="hint err" id="fsaid" role="alert" hidden></p>
@@ -1856,6 +1879,8 @@ function sayLine(kind) {
 }
 
 // The figures under the words: what the draft holds, how the run went, or where it stands now.
+// A cost from the usage figures, with the share of the week once Sentinel knows what 1% costs.
+const costWords = c => `${esc(c.cost)}${c.share ? ` · ${esc(c.share)} of your week` : ''}`
 function fields(kind) {
   const f = (k, v, t = '') => `<div class="fd"${t ? ` title="${esc(t)}"` : ''}><span class="label">${k}</span><b>${v}</b></div>`
   const S = vm.spend || [], tk = tokenSplit(S), ts = tasks()
@@ -1865,9 +1890,11 @@ function fields(kind) {
     w.resetsAt ? `Resets ${hm(Date.parse(w.resetsAt))}` : '',
     w.was != null ? `Was ${w.was}% when you signed off` : '',
     'Counts every session on your account',
-  ].filter(Boolean).join('. '))).join('') + (u.plan ? f('This plan', esc(u.plan), u.plan === 'estimating'
-    ? `Cost $${u.usd.toFixed(2)} so far. A share of your week shows once your week has moved a few percent while Sentinel watched.`
-    : `Cost $${u.usd.toFixed(2)} so far. An estimate, from this plan's cost and what 1% of your week has cost you.`) : '')
+  ].filter(Boolean).join('. '))).join('') + f('This plan', costWords(u.plan), [
+    "What this plan has cost so far, at API prices. A subscription doesn't charge it.",
+    u.plan.share ? 'The share of your week is an estimate, from that cost and what 1% of your week has cost you.'
+      : u.windows.some(w => w.name === 'Week') ? 'The share of your week shows once your week has moved by 1% while Sentinel watched.' : '',
+  ].filter(Boolean).join(' '))
   if (kind === 'draft') {
     const fl = [...new Set(ts.filter(s => s.flow).map(s => s.flow.as))]
     return f('States', ts.length) + (fl.length ? f('Flows', esc(and(fl))) : '')
@@ -1954,6 +1981,8 @@ function pass() {
   // A needed MCP that isn't ready shows above Lock, which Sentinel refuses until it is.
   const bad = notReady()
   const mw = bad.length ? `${mcpWords(bad)}. Connect ${bad.length > 1 ? 'them' : 'it'} with /mcp, then lock.` : ''
+  // A preset the project names that this computer lacks: the plan locks on the other two places, which the card says.
+  const gone = vm.library?.using?.missing ? missingText() : ''
   // Opened as a file, or after the session closed, the page shows what needs you and the answers go in the chat.
   if (!online() && s.acts) {
     const asks = s.acts.some(x => x[3] !== 'pause' && x[3] !== 'openflows')
@@ -1970,6 +1999,7 @@ function pass() {
   put($('fields'), fields(kind))
   put($('stub'), `<span class="stub-k">${s.k}</span><h2>${s.h}</h2>${s.p ? `<p>${s.p}</p>` : ''}`
     + (mw && s.acts?.some(x => x[3] === 'lock') ? `<p class="mcpw">${icon('warn')}<span>${esc(mw)}</span></p>` : '')
+    + (gone && s.acts?.some(x => x[3] === 'lock') ? `<p class="mcpw">${icon('warn')}<span>${esc(gone)}</span></p>` : '')
     + (s.acts?.length ? `<div class="acts">${s.acts.map(([l, ic, c, act, off]) => `<button type="button" class="btn ${c}" data-act="${act}"${off ? ' disabled' : ''}>${ic ? icon(ic) : ''}${l}</button>`).join('')}</div>` : '')
     + (s.fine ? `<p class="fine">${s.fine}</p>` : '')
     + (n && sendErr === n.key ? '<p class="fine err" role="alert">Sentinel didn\'t get that. The session may have ended, so answer in the chat.</p>' : ''))
@@ -2064,7 +2094,7 @@ const SLIP = {
     const flows = `Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p>`
     return `<div class="slip-h"><h2>Before you lock it</h2>${from ? `<span class="quiet">From ${esc(srcName(from))}. ${esc(from.origin)}.</span>` : vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
       + `<div class="slip-b">${where ? `${where}<div>${locking}<h3 class="gap">${flows}</div>` : `<div>${locking}</div><div><h3>${flows}</div>`}`
-      + quotesBlock() + settingsBlock() + depthBlock() + planInsBlock()
+      + pointsBlock() + quotesBlock() + settingsBlock() + depthBlock() + planInsBlock()
       + chgBox('draftchg', 'For example: split a state into the route and its tests.') + '</div>'
   },
   stuck() {
@@ -2097,6 +2127,17 @@ function whereFrom() {
   return `<div><h3>Where the states came from</h3><ul class="lst">`
     + `<li class="${p.quoted ? 'm-ok' : 'm-warn'}">${icon(p.quoted ? 'check' : 'warn')}<span><b>${p.quoted} of ${p.of} states</b> quote what you approved or typed, word for word. Sentinel compared them, with no model involved.${p.sources.length ? ' <button type="button" class="lnk" data-src="">See the saved copy</button>' : ''}</span></li>`
     + `${notes.join('')}</ul>${tasks().filter(s => s.added).map(addedRow).join('')}</div>`
+}
+// What you asked for: each point Claude listed, quoted, with the states that deliver it or Claude's reason for leaving it
+// out. Sentinel compared each quote with your words. A plan that compares quotes and lists none says so.
+function pointsBlock() {
+  const ps = vm.points ?? []
+  if (!vm.proof && !ps.length) return ''
+  const row = p => p.left
+    ? `<li class="m-warn">${icon('warn')}<span>“${esc(p.said)}” <b>Left out.</b> Claude's reason: “${esc(p.left)}”</span></li>`
+    : `<li class="m-ok">${icon('check')}<span>“${esc(p.said)}” ${p.states.map(code).join(' ')}</span></li>`
+  return `<div class="wide" id="points"><h3>What you asked for</h3><ul class="lst">${ps.length ? ps.map(row).join('')
+    : `<li class="m-warn">${icon('warn')}<span>Claude listed none of the points you asked for.</span></li>`}</ul></div>`
 }
 // The quotes stay folded until opened, and stay open while the draft changes under them.
 let quotesOpen = false
@@ -2435,6 +2476,12 @@ function colsOf(S) {
 function renderView() {
   const S = tasks(), nf = new Set(S.filter(s => s.flow).map(s => s.flow.as)).size
   put($('planSub'), `${nStates(S.length)}${nf ? ` · ${nf} flow${nf === 1 ? '' : 's'}` : ''}${par() ? ' · runs side by side' : ''}${vm.phase === 'draft' ? ' · not locked' : ''}`)
+  // The plan's weight, and what Claude turned on or off for the whole plan. A setting still waiting for the user's answer
+  // isn't applied, so it isn't counted; the draft card asks about it.
+  const set = (vm.settingRows ?? []).filter(r => r.kind === 'plan' && !r.owed), ons = set.filter(r => r.on).length, offs = set.length - ons
+  $('planSet').hidden = !vm.planWeight
+  put($('planSet'), vm.planWeight ? `${cap(vm.planWeight)}${ons ? ` · ${ons} turned on` : ''}${offs ? ` · ${offs} turned off` : ''}` : '')
+  $('planSet').title = set.map(r => `${insTitle(r.name)} ${r.on ? 'on' : 'off'} for the whole plan: ${r.why ?? r.quote ?? ''}.`).join(' ')
   renderList()
   renderLine()
   setView(view)
@@ -2553,15 +2600,15 @@ function slot(at, state, label) {
 // Each flow shows its states as they would go in here, filled from the state it goes after (or the plan, at an end).
 function picker(label, at, state) {
   const all = vm.flows ?? [], q = pickQ.toLowerCase(), near = state ? byId(state) : null
-  const fl = all.filter(f => (pickScope === 'All' || f.scope === pickScope.toLowerCase()) && `${f.name} ${f.description ?? ''}`.toLowerCase().includes(q))
-  const rows = fl.length ? fl.map(f => `<li><div><b>${esc(f.name)}</b><span class="tag sm">${cap(f.scope)}</span>${f.description ? `<p>${esc(f.description)}</p>` : ''}`
+  const fl = all.filter(f => (pickScope === 'All' || f.scope === tabKey(pickScope)) && `${f.name} ${f.description ?? ''}`.toLowerCase().includes(q))
+  const rows = fl.length ? fl.map(f => `<li><div><b>${esc(f.name)}</b><span class="tag sm">${esc(SCOPE[f.scope])}</span>${f.description ? `<p>${esc(f.description)}</p>` : ''}`
       + `<ol>${fill(f.states, near, vm.title).map(x => `<li><code>${ph(`${f.name}-${x.id}`)}</code>${esc(x.label)}</li>`).join('')}</ol></div>`
       + `<button type="button" class="btn sm" data-act="add" data-name="${esc(f.name)}" data-at="${at}"${state ? ` data-state="${esc(state)}"` : ''}>Add here</button></li>`).join('')
     : `<li class="pk-none">${all.length ? 'No flow matches.' : 'No saved flows yet.'}</li>`
   return `<div class="picker"><div class="pk-top"><h3>${esc(label)}</h3><span class="sp"></span><button type="button" class="btn sm" data-act="close">Close</button></div>`
     + (all.length ? `<div class="pk-bar"><div class="sbox"><input class="field" type="search" placeholder="Find a flow" aria-label="Find a flow" data-act="find" value="${esc(pickQ)}"><span class="sgo" aria-hidden="true">${icon('search')}</span></div>`
-      + `<span class="seg" data-act="pkscope">${['All', 'Project', 'Personal'].map(x => `<button type="button" data-scope="${x}" aria-pressed="${x === pickScope}">${x}</button>`).join('')}</span></div>` : '')
-    + `<ul class="pk-list">${rows}</ul><p class="pk-foot">Project flows are in <code>.sentinel/flows</code>, personal ones in <code>~/.sentinel/flows</code>. <button type="button" class="lnk" data-act="newflow">Make a new flow</button></p></div>`
+      + `<span class="seg" data-act="pkscope">${tabsFor('project').filter(([, k]) => k !== 'built-in').map(([x]) => `<button type="button" data-scope="${esc(x)}" aria-pressed="${x === pickScope}">${esc(x)}</button>`).join('')}</span></div>` : '')
+    + `<ul class="pk-list">${rows}</ul><p class="pk-foot">This project's flows are in <code>.sentinel/flows</code>${pres() ? `, ${esc(SCOPE.preset)}'s in <code>~/.sentinel/presets/${esc(SCOPE.preset)}/flows</code>` : ''} and every project's in <code>~/.sentinel/flows</code>. <button type="button" class="lnk" data-act="newflow">Make a new flow</button></p></div>`
 }
 // A changed snapshot keeps the list where it was scrolled and the focus on the same row.
 function renderList() {
@@ -2722,13 +2769,24 @@ const cpos = (x, y, w = CW) => `left: ${x}px; top: ${y}px; width: ${w}px; height
 const checksN = () => new Set(tasks().filter(s => s.check).map(s => s.check)).size
 const backTitle = (from, to, n) => `<title>${esc(from)} can send the run back to ${esc(to)}. ${n ? `Used ${n}×.` : 'Not used yet.'}</title>`
 
+// The weight a state runs at, as three small bars as on the Library's weight cards: one for Light, two for Standard,
+// three for Thorough. Amber where it isn't the plan's weight. A run saved before the Library has none.
+const LEVEL = { light: 1, standard: 2, thorough: 3 }
+const weightBars = (w, own) => `<span class="wm${own ? ' own' : ''}" aria-hidden="true">${[1, 2, 3].map(n => `<b${n <= LEVEL[w] ? ' class="on"' : ''}></b>`).join('')}</span>`
+const runsAt = s => (s.id === 'done' ? undefined : s.weightNow ?? vm.planWeight)
+const weightSay = s => (runsAt(s) === vm.planWeight ? `Runs at ${cap(runsAt(s))}, the plan's weight.` : `Runs at ${cap(runsAt(s))}. The plan's weight is ${cap(vm.planWeight)}.`)
+const insTitle = n => vm.library?.instructions?.find(i => i.name === n)?.title ?? n
+// +1 for each instruction Claude added to a state, −1 for each it skipped there. Nothing on a state with the plan's set.
+const marks = s => `${s.adds?.length ? `<span class="wx">+${s.adds.length}</span>` : ''}${s.skips?.length ? `<span class="wx">−${s.skips.length}</span>` : ''}`
+const changesSay = s => [...(s.adds ?? []).map(a => `Adds ${insTitle(a.name)}: ${a.why}.`), ...(s.skips ?? []).map(a => `Skips ${insTitle(a.name)}: ${a.why}.`)].join(' ')
 function scard(s, u, pos, top) {
-  const k = stOf(s), ms = took(s), id = esc(s.id)
+  const k = stOf(s), ms = took(s), id = esc(s.id), w = runsAt(s)
   const mine = { ask: 'You', wait: 'You', blocked: 'You', stuck: 'Stuck', paused: 'Paused' }[runKind()]
   const mini = k === 'now' ? `<span class="mini tone">${mine ?? (par() ? 'Main' : 'Now')}</span>` : k === 'run' ? '<span class="mini run">Member</span>' : s.wait && k === 'ahead' ? '<span class="mini">You</span>' : ''
   const t3 = ms != null ? `<span class="num" data-clock="${id}">${fmtDur(ms, true)}</span><span class="dbar"><i data-bar="${id}" style="width: ${barPct(ms, top)}%"></i></span>${bk(backTo([s.id]))}`
     : `<span>${s.skipped ? 'Skipped' : k === 'done' ? 'Done before the lock' : graph() && s.waits?.length ? `Waits for ${and(s.waits.map(esc))}` : s.wait === 'after' ? 'Ends on your OK' : s.wait ? 'Starts on your OK' : s.once ? 'Its check runs once' : s.check ? 'Ends on its check' : 'No check to run'}</span>`
-  return `<button type="button" class="mcard ${k}" data-task="${id}" data-u="${u}" style="${pos}" title="${esc(s.skipped ? `Skipped: ${s.skipped}` : graph() && s.waits?.length && ms == null ? `${s.label}. Waits for ${and(s.waits)}` : s.label)}"><span class="t1"><span class="box ${k}"></span><span class="idt">${id}</span>${mini}</span>`
+  const title = s.skipped ? `Skipped: ${s.skipped}` : graph() && s.waits?.length && ms == null ? `${s.label}. Waits for ${and(s.waits)}` : s.label
+  return `<button type="button" class="mcard ${k}" data-task="${id}" data-u="${u}" style="${pos}" title="${esc(w ? `${title}. ${weightSay(s)} ${changesSay(s)}`.trim() : title)}"><span class="t1"><span class="box ${k}"></span><span class="idt">${id}</span>${mini}${w ? marks(s) + weightBars(w, w !== vm.planWeight) : ''}</span>`
     + `<span class="lb">${esc(s.label)}</span><span class="t3">${t3}</span></button>`
 }
 function endCard(u, pos) {
@@ -3014,6 +3072,8 @@ function mapKey(G, m) {
   return '<span class="label">Key</span><div class="mnote">' + (G
     ? `<span>${keyLine('k-ar')}A state starts once every line into it is done, so states in different columns can run at the same time. A line is darker once its state is done.</span>${back}<span>Each state runs in one agent: the main conversation, or a member agent in its own worktree. Click a state for its page.</span>`
     : `<span>${keyLine('k-ar')}The order. Darker once the state before it is done.</span>${back}${m.groups ? '<span>A stacked card is a group folded shut. Click it, or a group\'s name, to open or fold it. Click a state for its page.</span>' : '<span>Click a state for its page.</span>'}`)
+    + (vm.planWeight ? `<span>${weightBars('standard')}${weightBars('thorough', true)}The weight a state runs at: one bar for Light, two for Standard, three for Thorough. Amber where it isn't the plan's ${cap(vm.planWeight)}.</span>` : '')
+    + (tasks().some(s => s.adds?.length || s.skips?.length) ? '<span><span class="wx">+1</span><span class="wx">−1</span>An instruction added to, or skipped for, that state alone. Point at the card for which.</span>' : '')
     + (m.note ? `<span><b>${m.note}</b></span>` : '') + '</div>'
 }
 let mapAt = ''
@@ -3512,14 +3572,18 @@ function renderDetail() {
 }
 
 // What asked for this state, in its source's own words, or why Claude added it. The rest of the page is Claude's description.
-// The state's own settings, with the Library's settings per state on, and what a member running it misses.
+// The weight the state runs at, its own settings with the Library's settings per state on (settingRows come only then),
+// and what a member running it misses.
 function stateSettings(s) {
-  const own = vm.planWeight && s.weight && s.weight !== vm.planWeight ? s.weight : '', adds = (vm.planWeight && s.adds) || [], gap = par() && s.noRerun
-  if (!own && !adds.length && !gap) return ''
+  const on = !!vm.settingRows, w = runsAt(s), gap = par() && s.noRerun
+  const own = on && s.weight && s.weight !== vm.planWeight ? s.weight : '', adds = (on && s.adds) || []
+  if (!w && !gap) return ''
   return '<h3>Settings for this state</h3>'
+    + (w ? `<p class="wline">${weightBars(w, w !== vm.planWeight)}<span>${weightSay(s)}</span></p>` : '')
     + (own ? `<p><span class="mini">${cap(own)}</span> ${s.weightQuote ? `You asked: “${esc(s.weightQuote)}”` : `Claude's reason: “${esc(s.weightWhy ?? '')}”`}</p>`
       + (s.weightNow !== own ? `<p class="qsrc">It runs at ${cap(s.weightNow)}${vm.phase === 'draft' ? ' unless you keep this on the draft card' : ', because nobody kept this on the draft'}.</p>` : s.weightOk && !s.weightQuote ? '<p class="qsrc">You kept it on the draft.</p>' : '') : '')
     + adds.map(a => `<p><span class="mini">+ ${esc(a.name)}</span> Claude's reason: “${esc(a.why)}”</p>`).join('')
+    + (s.skips ?? []).map(a => `<p><span class="mini">− ${esc(a.name)}</span> Skipped here. Claude's reason: “${esc(a.why)}”</p>`).join('')
     + (gap ? '<p class="qsrc">A member agent running this state gets no rerun without its changes. It is told to check that itself and say so.</p>' : '')
 }
 function askedFor(s, h = 'h3') {
@@ -3557,10 +3621,10 @@ function taskPage(s, i, T) {
   }[k]
   const f = (lab, v, sub = '') => `<div class="fd"><span class="label">${lab}</span>${v}${sub}</div>`
   const by = s.spans?.length && T.some(x => x.spans?.some(p => p.by)) ? cap(s.spans.map(p => p.by ? 'a member agent' : 'the main conversation').filter((w, j, a) => w !== a[j - 1]).join(', then ')) : ''
-  const week = vm.usage?.steps?.[s.id]
+  const costHere = vm.usage?.steps?.[s.id]
   const stats = f('Status', `<b><span class="box ${s.skipped ? 'ahead' : k}"></span>${word}</b>`)
     + (by ? f('Runs in', `<b>${by}</b>`) : '')
-    + (week ? f('Used', `<b>${esc(cap(week))}${week === 'estimating' ? '' : ' of your week'}</b>`) : '')
+    + (costHere ? f('Used', `<b>${costWords(costHere)}</b>`) : '')
     + (ms != null ? f('Took', `<b data-took="${esc(s.id)}">${fmtDur(ms)}</b>`, `<small data-share="${esc(s.id)}">${shareOf(ms, run)}</small>`)
       + f(open ? 'Started' : 'Started to finished', `<b>${hm(s.from)}${open ? '' : ' to ' + hm(s.to)}</b>`,
         `<small>${cap([s.visits > 1 ? `entered ${s.visits} times` : '', s.since ? 'still running' : '', held ? 'paused' : ''].filter(Boolean).join(', '))}</small>`) : '')
@@ -3701,15 +3765,18 @@ document.addEventListener('pointermove', e => {
 const CHEV = '<svg class="ic" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5,1.5 L7,5 L3.5,8.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'
 const post = body => fetch('answer', { method: 'POST', headers: { 'content-type': 'application/json', 'x-sentinel-token': KEY }, body: JSON.stringify(body) }).then(r => r.ok, () => false)
 const LOST = "Sentinel didn't get that. The session may have ended."
-const flowFile = (scope, name) => `${scope === 'project' ? '.sentinel/flows' : '~/.sentinel/flows'}/${name}.json`
+// The file a flow or an instruction saves to: this project's .sentinel, the preset's folder, or every project's.
+const fpath = (kind, scope, name) => `${scope === 'project' ? '' : '~/'}.sentinel/${scope === 'preset' ? `presets/${vm.library?.using?.name}/` : ''}${kind}/${name}.json`
+const flowFile = (scope, name) => fpath('flows', scope, name)
 const ruleText = w => !w ? 'when you add it' : w.at === 'start' || w.at === 'end' ? `at the ${w.at} of every plan` : `${w.at} ${w.files?.length ? `states that edit ${w.files.join(' ')}` : 'every state'}`
 const steps = f => `<span class="steps">${f.states.map(s => `<span class="st todo">${esc(s.id)}${s.wait ? '<span class="cnt">&nbsp;· you</span>' : ''}</span>`).join(CHEV)}</span>`
 // A placeholder such as {{state.id}} shows as a small tag.
 const ph = t => esc(t).replace(/\{\{[a-z.]+\}\}/g, m => `<span class="phd">${m}</span>`)
 const words = t => t.split(/\s+/).filter(Boolean)
 let fview = null, from = { place: '', at: 0, err: '' }, delAsk = null, libScope = 'All', dflKey = '', prefill = null
-// libTab: the Library's tab (ins or flows). swScope: whose switches it shows, this project's or your default's.
-let libTab = 'ins', swScope = 'project'
+// libTab: the Library's tab (ins or flows). swScope: the place Change for is on: project, preset or personal (every
+// project). swNext: a preset just made, which Change for moves to once the snapshot has it.
+let libTab = 'ins', swScope = 'project', swNext = ''
 const said = place => from.place === place ? (from.err ? { ok: false, text: from.err } : vm.flowSaid?.at >= from.at ? vm.flowSaid : null) : null
 function flowSend(place, body, done) {
   from = { place, at: Date.now(), err: '', done }
@@ -3743,10 +3810,11 @@ function fill(states, t, title) {
 // A flow's states as a short sheet: the id, what it does, and how it shows it is done.
 const sheet = states => `<ol class="sheet">${states.map((x, i) => `<li><span class="n">${i + 1}</span><b>${ph(x.id || 'new state')}</b><p>${ph(x.label)}</p><code>${x.check ? ph(x.check) : x.wait ? waitTx(x) : 'Nothing to run'}</code></li>`).join('')}</ol>`
 const ruleHtml = w => !w ? 'Only when you add it' : w.at === 'start' || w.at === 'end' ? `At the ${w.at} of every plan` : `${cap(w.at)} ${w.files?.length ? `states that edit ${w.files.map(code).join(' ')}` : 'every state'}`
-const insFile = (scope, name) => `${scope === 'project' ? '.sentinel/instructions' : '~/.sentinel/instructions'}/${name}.json`
+const insFile = (scope, name) => fpath('instructions', scope, name)
 // kind: flow or instruction, for the file a name saves to.
 const fileOf = (kind, scope, name) => (kind === 'instruction' ? insFile : flowFile)(scope, name || `new-${kind}`)
-const scopeOpts = (group, name, on, kind = 'flow') => ['project', 'personal'].map(sc => `<label class="opt"><input type="radio" name="${group}" value="${sc}"${sc === on ? ' checked' : ''}><span><b>${cap(sc)}</b><span class="d"><code class="fpath" data-scope="${sc}">${esc(fileOf(kind, sc, name))}</code>, ${sc === 'project' ? 'committed with the code' : 'in every project'}</span></span></label>`).join('')
+const SAVED = { project: () => 'committed with the code', preset: () => `only in projects that use ${esc(vm.library.using.name)}`, personal: () => 'in every project' }
+const scopeOpts = (group, name, on, kind = 'flow') => below('project').map(sc => `<label class="opt"><input type="radio" name="${group}" value="${sc}"${sc === (below('project').includes(on) ? on : 'project') ? ' checked' : ''}><span><b>${esc(SCOPE[sc])}</b><span class="d"><code class="fpath" data-scope="${sc}">${esc(fileOf(kind, sc, name))}</code>, ${SAVED[sc]()}</span></span></label>`).join('')
 const renamed = (root, name, kind = 'flow') => root.querySelectorAll('.fpath').forEach(c => (c.textContent = fileOf(kind, c.dataset.scope, name)))
 const nameBad = (n, kind = 'flow') => /^[a-z0-9][a-z0-9-]*$/.test(n) ? '' : n ? 'Use lowercase letters, digits and dashes in the name.' : `Give the ${kind} a name.`
 
@@ -4512,7 +4580,14 @@ const WEIGHTS = [
   { id: 'standard', name: 'Standard', time: 1, say: 'Failure lists before code, tests seen to fail, and a check that must fail before the work starts.' },
   { id: 'thorough', name: 'Thorough', time: 3, say: 'Adds end-to-end proof, a rerun without the change, and measured test deletion. Slow when a check runs a whole suite.' },
 ]
-const SCOPE = { 'built-in': 'Built-in', project: 'Project', personal: 'Personal' }
+// Where an item or a switch lives, as the page names it. The preset in use goes by its name.
+const SCOPE = { 'built-in': 'Built-in', project: 'This project', personal: 'Every project', get preset() { return vm.library?.using?.name ?? 'Preset' } }
+// The same place inside a sentence.
+const LNAME = sc => (sc === 'project' || sc === 'personal' ? SCOPE[sc].toLowerCase() : SCOPE[sc])
+// The list filters: a label each, and the scope it shows.
+const scopeTabs = () => [['All', 'All'], ['Built-in', 'built-in'], ['Every project', 'personal'], ...(pres() ? [[SCOPE.preset, 'preset']] : []), ['This project', 'project']]
+const tabsFor = scope => scopeTabs().filter(([, k]) => k === 'All' || shownIn({ scope: k }, scope))
+const tabKey = label => scopeTabs().find(([l]) => l === label)?.[1] ?? 'All'
 // As Sentinel words the told text (toldHere in hooks/core.ts, and the system prompt section).
 const HEAD = { draft: () => 'While you draft a plan:', start: id => `Your instructions for ${id}:`, close: id => `Before you advance ${id}:`, final: () => 'Before the plan completes:', always: () => 'Every turn:' }
 const RULES_WIN = "Where the project's own rules (such as CLAUDE.md) differ from these, the project's rules win."
@@ -4549,14 +4624,30 @@ const FREE_NOTE = 'Claude makes the calls that would wait for you, and lists the
 const weighted = i => i.weights && !i.own && i.name !== XS
 const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
 // What a weight picked on the draft moves: what it sets, and your own with a list unless you switched them, as libraryOn has it.
-const moves = i => weighted(i) || (i.own && i.weights?.length && pick(switches().project, i.name) === undefined && pick(switches().personal, i.name) === undefined)
-const switches = () => ({ project: vm.library?.project ?? {}, personal: vm.library?.personal ?? {} })
-const shownIn = (i, scope) => scope === 'project' || i.scope !== 'project'
-// Which items are on, as libraryOn in hooks/core.ts works it out: for this project, or for your default alone.
+const moves = i => weighted(i) || (i.own && i.weights?.length && below('project').every(k => pick(switches()[k], i.name) === undefined))
+// The three places, closest first: this project, the preset it uses, every project. The preset counts only while it is
+// on this computer.
+const ORDER = ['project', 'preset', 'personal']
+const pres = () => { const u = vm.library?.using; return u && !u.missing ? u : undefined }
+const below = scope => ORDER.slice(ORDER.indexOf(scope)).filter(k => k !== 'preset' || pres())
+const switches = () => ({ project: vm.library?.project ?? {}, preset: pres() ?? {}, personal: vm.library?.personal ?? {} })
+// What a place shows: its own items and those of the places beyond it.
+const shownIn = (i, scope) => scope === 'project' || (scope === 'preset' ? i.scope !== 'project' : i.scope === 'built-in' || i.scope === 'personal')
+// What decides an item, seen from a place, as libraryOn in hooks/core.ts has it: the closest switch, except that a
+// weight picked in a place puts the weighted items' switches beyond it aside. by: the place, or null for the weight.
+function decide(i, scope, sw = switches()) {
+  const keys = below(scope), wAt = keys.findIndex(k => sw[k]?.weight)
+  for (let k = 0; k < keys.length; k++) {
+    if (weighted(i) && wAt >= 0 && k > wAt) break
+    const v = pick(sw[keys[k]] ?? {}, i.name)
+    if (v !== undefined) return { v, by: keys[k] }
+  }
+  return { by: null }
+}
+// Which items are on, seen from a place.
 function onMap(scope, sw = switches()) {
-  const project = scope === 'project' ? sw.project : {}, personal = sw.personal, weight = project.weight ?? personal.weight ?? 'standard'
-  const on = {}
-  for (const i of libItems()) on[i.name] = i.trusted !== false && (pick(project, i.name) ?? (weighted(i) && project.weight ? undefined : pick(personal, i.name)) ?? (i.weights ? i.weights.includes(weight) : true))
+  const weight = below(scope).map(k => sw[k]?.weight).find(Boolean) ?? 'standard', on = {}
+  for (const i of libItems()) { const d = decide(i, scope, sw); on[i.name] = i.trusted !== false && (d.by ? d.v : i.weights ? i.weights.includes(weight) : true) }
   return { weight, on }
 }
 // A switches file with a weight picked: the weighted items' switches go, so the weight sets them.
@@ -4586,7 +4677,11 @@ function renderLib() {
   $('fsaid').textContent = s && !s.ok ? s.text : ''
   renderDfl()
   document.querySelectorAll('#libTabs button').forEach(b => b.setAttribute('aria-pressed', (b.dataset.tab === 'ins') === ins))
-  document.querySelectorAll('#swScope button').forEach(b => b.setAttribute('aria-pressed', b.dataset.sws === swScope))
+  // Change for: the preset in use is a place only while it is on this computer.
+  if (swNext && pres()?.name === swNext) { swScope = 'preset'; swNext = '' }
+  if (!below('project').includes(swScope)) swScope = 'project'
+  put($('swScope'), below('project').map(sc => `<button type="button" data-sws="${sc}" aria-pressed="${sc === swScope}">${esc(SCOPE[sc])}</button>`).join(''))
+  $('swHint').textContent = swScope === 'preset' ? `Reaches every project that uses ${SCOPE.preset}.` : swScope === 'personal' ? 'Reaches every project.' : ''
   $('askLbl').textContent = `Ask Claude for ${ins ? 'an instruction' : 'a flow'}`
   $('newLbl').textContent = ins ? 'New instruction' : 'New flow'
   $('askfl').textContent = `Describe the ${ins ? 'instruction' : 'flow'}`
@@ -4600,74 +4695,127 @@ function renderLib() {
   else renderFlows()
 }
 
-// ---- presets and the MCPs a project needs ----
+// ---- presets and the MCPs needed here ----
 
-// pOpen: the chooser is open. pSel: the preset picked in it. pSaving: the save box shows in place of its details.
-// pSwap: for the picked preset, one of your servers in place of one it needs, or null to leave it out. pDel: the
-// preset Delete asks about. pName: what is typed as a new preset's name.
-let pOpen = false, pSel = '', pSaving = false, pSwap = {}, pDel = '', pName = ''
+// pOpen: the chooser is open. pSel: the preset picked in it, '' for No preset. pMode: what its right side shows: detail,
+// new, make or import. pDel: the preset Delete asks about. pName: a new preset's name as typed. pImp: the file picked to
+// import. pSwap: for each MCP that file needs and this computer lacks, one of your servers in its place, or null.
+let pOpen = false, pSel = '', pMode = 'detail', pDel = '', pName = '', pImp = null, pSwap = {}
 const MCP_WORD = { connected: 'Connected', 'sign-in': 'Needs sign-in', missing: 'Not connected' }
 const notReady = () => (vm.library?.mcps ?? []).filter(m => m.state !== 'connected')
-// As Sentinel names a preset: lowercase letters, digits and dashes.
+// As Sentinel names a preset: lowercase letters, digits and dashes, and none of /sentinel preset's own words.
 const slug = t => t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+const RESERVED = ['new', 'move', 'delete', 'none']
 // What isn't ready of a list of MCPs, in words.
 function mcpWords(list) {
   const of = st => list.filter(m => m.state === st).map(m => m.name)
   const miss = of('missing'), sign = of('sign-in')
   return [miss.length && `${and(miss)} ${miss.length > 1 ? "aren't" : "isn't"} connected`, sign.length && `${and(sign)} ${sign.length > 1 ? 'need' : 'needs'} you to sign in`].filter(Boolean).join(', and ')
 }
-const mcpChip = (m, drop) => `<span class="pneed"><b>${esc(m.name)}</b><span class="tag ${m.state === 'connected' ? 'on' : 'off'}">${MCP_WORD[m.state]}</span>${drop ? `<button type="button" class="px" data-p="drop" data-mcp="${esc(m.name)}" aria-label="Take ${esc(m.name)} off this project's list" title="Take it off this project's list">×</button>` : ''}</span>`
-const pTitle = n => vm.library.instructions.find(i => i.name === n)?.title ?? n
-const pSays = x => [x.weight && cap(x.weight), x.instructions.length && plural(x.instructions.length, 'instruction'), x.flows.length && plural(x.flows.length, 'flow'),
-  Object.keys(x.on).length && `${Object.keys(x.on).length} switch${Object.keys(x.on).length > 1 ? 'es' : ''}`, x.mcps.length && `needs ${and(x.mcps.map(m => m.name))}`].filter(Boolean).join(' · ') || 'Nothing set'
-function nameHint() {
+// A preset the project names that this computer lacks.
+const missingText = () => `${vm.library.using.name} isn't on this computer, so this project runs on its own settings and Every project's.`
+// An MCP with its state, and the place that lists it when that isn't this project. drop: the × that takes it off.
+const mcpChip = (m, drop) => `<span class="pneed"><b>${esc(m.name)}</b><span class="tag ${m.state === 'connected' ? 'on' : 'off'}">${MCP_WORD[m.state]}</span>${m.scope && m.scope !== 'project' ? `<span class="mini">${esc(SCOPE[m.scope])}</span>` : ''}`
+  + `${drop ? `<button type="button" class="px" data-p="drop" data-mcp="${esc(m.name)}" aria-label="Take ${esc(m.name)} off ${esc(LNAME(m.scope))}'s list" title="Take it off ${esc(LNAME(m.scope))}'s list">×</button>` : ''}</span>`
+const pTitle = n => libItems().find(i => i.name === n)?.title ?? n
+const pNames = ns => ns.map(n => esc(pTitle(n))).join(', ')
+const pSays = x => [x.weight && cap(x.weight), Object.keys(x.on).length && `${Object.keys(x.on).length} switch${Object.keys(x.on).length > 1 ? 'es' : ''}`, x.instructions.length && plural(x.instructions.length, 'instruction'),
+  x.flows.length && plural(x.flows.length, 'flow'), x.mcps.length && `needs ${and(x.mcps.map(m => m.name))}`].filter(Boolean).join(' · ') || 'Empty'
+const prow = (label, body) => `<div class="prow"><span class="label">${label}</span><div>${body}</div></div>`
+// The name typed for New or Make. Make may name a preset that is there, and moves into it.
+const pTaken = s => vm.library.presets.some(x => x.name === s)
+const nameOk = make => { const s = slug(pName); return !!s && !RESERVED.includes(s) && (make || !pTaken(s)) }
+function nameHint(make) {
   const s = slug(pName)
-  if (!pName.trim()) return "Lowercase letters, digits and dashes. It's the file name too."
-  if (!s || ['save', 'undo', 'delete'].includes(s)) return '<span class="warn">Use letters or digits. save, undo and delete can\'t be names.</span>'
-  return `Saves to ${code(`~/.sentinel/presets/${s}.json`)}${vm.library.presets.some(x => x.name === s) ? ', in place of the preset there now' : ''}.`
+  if (!pName.trim()) return "Lowercase letters, digits and dashes. It's the folder name too."
+  if (!s || RESERVED.includes(s)) return '<span class="warn">Use letters or digits. new, move, delete and none can\'t be names.</span>'
+  if (pTaken(s)) return make ? `This moves into the preset ${esc(s)} there now.` : `<span class="warn">There is a preset called ${esc(s)} already.</span>`
+  return `Saves to ${code(`~/.sentinel/presets/${s}/`)}.`
+}
+const nameField = ph => `<label class="label" for="pname">Name</label><input class="field" id="pname" maxlength="40" placeholder="${ph}" autocomplete="off"><p class="hint" id="pslug"></p>`
+// This project's own settings, which Make or Move takes into a preset. Empty when it has none.
+function ownRows(L) {
+  const on = Object.keys(L.project?.on ?? {}), mine = libItems().filter(i => i.scope === 'project'), ins = mine.filter(i => i.kind !== 'flow'), fl = mine.filter(i => i.kind === 'flow')
+  return [L.project?.weight && prow('Weight', cap(L.project.weight)), on.length && prow('Switches', pNames(on)), ins.length && prow('Instructions', ins.map(i => esc(i.title ?? i.name)).join(', ')),
+    fl.length && prow('Flows', fl.map(f => esc(f.name)).join(', ')), L.project?.mcps?.length && prow('Needs', L.project.mcps.map(esc).join(', '))].filter(Boolean).join('')
+}
+// The items only in a preset, with each flow's checks, which are shell commands.
+const onlyHere = (ins, fl) => [...ins.map(i => `<p><b>${esc(i.name)}</b><span class="mini">Instruction</span><span class="pdesc">${esc(i.text)}</span></p>`),
+  ...fl.map(f => `<p><b>${esc(f.name)}</b><span class="mini">Flow</span><span class="pdesc">${f.description ? `${esc(f.description)}. ` : ''}${f.checks.length ? `Checks: ${f.checks.map(code).join(' ')}` : 'No checks.'}</span></p>`)].join('')
+const UNTRUSTED = "<p class=\"warn\">Sentinel didn't make this preset on this computer, so its instructions and flows stay off until you trust each one. Read each flow's checks first: they are shell commands.</p>"
+
+function presetDetail(x, L, live) {
+  const inUse = L.using?.name === x.name, on = Object.entries(x.on), pv = x.preview, own = onlyHere(x.instructions, x.flows)
+  const ons = on.filter(([, v]) => v).map(([k]) => k), offs = on.filter(([, v]) => !v).map(([k]) => k)
+  return `<h3>${esc(x.name)}${inUse ? '<span class="mini tone">In use</span>' : ''}</h3>
+    ${x.trusted ? '' : UNTRUSTED}
+    ${prow('Weight', x.weight ? cap(x.weight) : "<span class=\"quiet\">Not set, so Every project's applies</span>")}
+    ${prow('Switches', on.length ? [ons.length && `On: ${pNames(ons)}`, offs.length && `Off: ${pNames(offs)}`].filter(Boolean).join('<br>') : '<span class="quiet">None</span>')}
+    ${prow('Only here', `<div class="padds">${own || '<span class="quiet">Nothing</span>'}</div>${own ? `<p class="hint">These live in ${esc(x.name)} alone, and show only in projects that use it.</p>` : ''}`)}
+    ${prow('Needs', x.mcps.length ? `<div class="pneeds">${x.mcps.map(m => mcpChip(m)).join('')}</div>` : '<span class="quiet">No MCPs</span>')}
+    ${inUse ? '' : prow('Here', `${pv.turnsOn.length ? `Turns on ${pNames(pv.turnsOn)}. ` : ''}${pv.turnsOff.length ? `Turns off ${pNames(pv.turnsOff)}. ` : ''}${pv.turnsOn.length || pv.turnsOff.length ? '' : 'Changes no switch you have now. '}<span class="quiet">This project's own settings stay, and still win.</span>`)}
+    <div class="pact">${!live ? '' : inUse ? `<button type="button" class="btn pri" data-p="edit">Change ${esc(x.name)}</button>` : `<button type="button" class="btn pri" data-p="use">Use ${esc(x.name)}</button>`}<button type="button" class="btn" data-p="export">Export</button>
+      ${!live ? `<span class="hint">Use it in the chat: ${code(`/sentinel preset ${x.name}`)}.</span>`
+        : pDel === x.name ? `<span class="hint">${inUse ? `This project uses ${esc(x.name)}. ` : ''}Delete it for good, with its own instructions and flows? Projects that use it go back to their own settings and Every project's.</span><button type="button" class="btn" data-p="delyes">Delete</button><button type="button" class="btn ghost" data-p="delno">Keep it</button>`
+        : `<button type="button" class="btn ghost" data-p="del">Delete</button><span class="hint">${inUse ? `Changes to ${esc(x.name)} reach every project that uses it.` : 'Pick No preset to go back. Nothing is copied, so nothing is left behind.'}</span>`}</div>`
+}
+const noneBox = (u, live) => `<h3>No preset${u ? '' : '<span class="mini tone">In use</span>'}</h3><p>This project runs on its own settings and Every project's.</p>
+  ${u && live ? `<div class="pact"><button type="button" class="btn pri" data-p="none">Use no preset</button><span class="hint">${esc(u.name)}'s settings, instructions and flows stop applying here. Nothing is deleted.</span></div>` : ''}`
+const newBox = () => `<h3>New preset</h3>${nameField('For example, mobile-app')}
+  <p>It starts empty. This project uses it, and Change for picks it, so what you switch or save next goes into it.</p>
+  <div class="pact"><button type="button" class="btn pri" data-p="create">Make it</button><button type="button" class="btn ghost" data-p="back">Not now</button></div>`
+const makeBox = (p, own) => p
+  ? `<h3>Move this project's settings into ${esc(p.name)}</h3>${own}
+    <p>They leave this project and live in ${esc(p.name)} alone, so they reach every project that uses it. Where ${esc(p.name)} sets the same thing, this project's choice replaces it.</p>
+    <p class="hint">They leave ${code('.sentinel/')} in this repo. Teammates get them by using ${esc(p.name)}: Export sends it.</p>
+    <div class="pact"><button type="button" class="btn pri" data-p="domove">Move them</button><button type="button" class="btn ghost" data-p="back">Not now</button></div>`
+  : `<h3>Make a preset from this project</h3>${nameField('For example, game-dev')}<p class="label">What moves into it</p>${own}
+    <p>They move, so each lives in one place. This project then uses the new preset, and works as it does now.</p>
+    <p class="hint">They leave ${code('.sentinel/')} in this repo. Teammates get them by using the preset: Export sends it.</p>
+    <div class="pact"><button type="button" class="btn pri" data-p="domake">Make it</button><button type="button" class="btn ghost" data-p="back">Not now</button></div>`
+// The file picked to import, read here so the page can ask about the MCPs this computer lacks before it goes in.
+// Sentinel checks it again, so this only shows what the file says.
+function importBox(L) {
+  const r = pImp.raw, list = k => (Array.isArray(r[k]) ? r[k].filter(x => x && typeof x === 'object') : []), str = v => (typeof v === 'string' ? v : '')
+  const has = n => (L.servers ?? []).some(s => s.name.toLowerCase() === n.toLowerCase())
+  const mcps = (Array.isArray(r.mcps) ? r.mcps : []).filter(n => typeof n === 'string' && n.trim()), lack = mcps.filter(n => !has(n))
+  const on = r.on && typeof r.on === 'object' ? Object.entries(r.on) : []
+  const own = onlyHere(list('instructions').map(i => ({ name: str(i.name), text: str(i.text) })),
+    list('flows').map(f => ({ name: str(f.name), description: str(f.description), checks: (Array.isArray(f.states) ? f.states : []).map(s => str(s?.check)).filter(Boolean) })))
+  const swapOf = n => `<label class="pswap"><select class="field" data-swap="${esc(n)}" aria-label="In place of ${esc(n)}"><option value="keep">Keep ${esc(n)}</option>${(L.servers ?? []).map(s => `<option value="use:${esc(s.name)}"${pSwap[n] === s.name ? ' selected' : ''}>Use ${esc(s.name)} instead</option>`).join('')}<option value="out"${pSwap[n] === null ? ' selected' : ''}>Leave it out</option></select></label>`
+  return `<h3>Import ${esc(slug(pImp.name.replace(/\.json$/i, '')))}</h3>${UNTRUSTED}
+    ${prow('Weight', str(r.weight) ? esc(cap(r.weight)) : '<span class="quiet">Not set</span>')}
+    ${prow('Switches', on.length ? on.map(([k, v]) => `${esc(pTitle(k))} ${v ? 'on' : 'off'}`).join(', ') : '<span class="quiet">None</span>')}
+    ${prow('Only here', `<div class="padds">${own || '<span class="quiet">Nothing</span>'}</div>`)}
+    ${prow('Needs', mcps.length ? `<div class="pneeds">${mcps.map(n => mcpChip({ name: n, state: has(n) ? 'connected' : 'missing' })).join('')}</div>${lack.map(swapOf).join('')}${lack.length ? '<p class="hint">This computer has no server by that name. It may call it something else: pick yours, or leave it out. Asked once, and written into your copy.</p>' : ''}` : '<span class="quiet">No MCPs</span>')}
+    <div class="pact"><button type="button" class="btn pri" data-p="doimport">Import it</button><button type="button" class="btn ghost" data-p="back">Cancel</button></div>`
 }
 
 function renderPresets() {
   const L = vm.library, host = $('presets'), live = online()
   host.hidden = !L?.presets
   if (!L?.presets) return
-  const list = L.presets, needs = L.mcps ?? [], bad = notReady(), was = $('pname'), typing = was && document.activeElement === was ? [was.selectionStart, was.selectionEnd] : null
-  if (!list.some(x => x.name === pSel)) { pSel = list.some(x => x.name === L.preset) ? L.preset : list[0]?.name ?? ''; pSwap = {} }
+  const list = L.presets, u = L.using, p = pres(), needs = L.mcps ?? [], bad = notReady(), was = $('pname'), typing = was && document.activeElement === was ? [was.selectionStart, was.selectionEnd] : null
+  if (pSel && !list.some(x => x.name === pSel)) pSel = ''
   if (!pOpen) {
     const left = (L.servers ?? []).filter(s => !needs.some(m => m.name.toLowerCase() === s.name.toLowerCase()))
-    return put(host, `<div class="panel pline"><span class="label">Preset</span>${L.preset ? `<span class="wn">${esc(L.preset)}</span>` : '<span class="pnone">None</span>'}
-      <span class="label">Needs</span><span class="pneeds">${needs.map(m => mcpChip(m, live)).join('') || '<span class="pnone">No MCPs</span>'}${live && left.length ? `<select class="field" id="mcpAdd" aria-label="Add an MCP this project needs"><option value="">Add an MCP</option>${left.map(s => `<option>${esc(s.name)}</option>`).join('')}</select>` : ''}</span>
+    return put(host, `<div class="panel pline"><span class="label">Preset</span>${u ? `<span class="wn">${esc(u.name)}</span>` : '<span class="pnone">None</span>'}
+      ${u?.missing ? `<span class="warn">${esc(missingText())}</span>${live ? `<button type="button" class="btn sm" data-p="import">Import ${esc(u.name)}</button>` : ''}` : ''}
+      <span class="label">Needs</span><span class="pneeds">${needs.map(m => mcpChip(m, live && m.scope === swScope)).join('') || '<span class="pnone">No MCPs</span>'}${live && left.length ? `<select class="field" id="mcpAdd" aria-label="Add an MCP ${esc(LNAME(swScope))} needs"><option value="">Add an MCP</option>${left.map(s => `<option>${esc(s.name)}</option>`).join('')}</select>` : ''}</span>
       ${bad.length ? `<span class="hint">Connect with ${code('/mcp')} to lock plans here.</span>${live ? '<button type="button" class="btn sm" data-p="check">Check again</button>' : ''}` : ''}
-      <span class="sp"></span>${live && L.undo ? `<button type="button" class="btn sm ghost" data-p="undo" title="Take back ${esc(L.undo)}">Undo</button>` : ''}
-      <button type="button" class="btn sm" data-p="open">${L.preset ? 'Change' : 'Choose a preset'}</button></div>`)
+      <span class="sp"></span><button type="button" class="btn sm" data-p="open">${u ? 'Change' : 'Choose a preset'}</button></div>`)
   }
-  const p = list.find(x => x.name === pSel), saving = pSaving || !p
-  const row = (label, body) => `<div class="prow"><span class="label">${label}</span><div>${body}</div></div>`
-  const named = xs => xs.map(n => esc(pTitle(n))).join(', ') || '<span class="quiet">Nothing</span>'
-  const theirs = 'This project has its own of that name, which stays.'
-  const swapOf = m => `<label class="pswap"><select class="field" data-swap="${esc(m.name)}" aria-label="In place of ${esc(m.name)}"><option value="keep">Keep ${esc(m.name)} on the list</option><option value="out"${pSwap[m.name] === null ? ' selected' : ''}>Leave it out</option>${(L.servers ?? []).map(s => `<option value="use:${esc(s.name)}"${pSwap[m.name] === s.name ? ' selected' : ''}>Use ${esc(s.name)} instead</option>`).join('')}</select></label>`
-  const detail = p && `<h3>${L.preset === p.name ? `${esc(p.name)}<span class="mini tone">In use</span>` : `${esc(p.name)} would change this project`}</h3>
-    ${p.trusted ? '' : `<p class="warn">Sentinel didn't save this preset on this computer, so what it adds stays off until you trust each one with ${code('/sentinel trust <name>')}. Read each flow's checks below first: they are shell commands.</p>`}
-    ${row('Weight', p.weight ? `${cap(p.weight)} <span class="quiet">${p.weight === L.weight ? '(no change)' : `(now ${cap(L.weight)})`}</span>${p.preview.weightReset ? '<p class="hint">It resets the built-ins you switched by hand.</p>' : ''}` : '<span class="quiet">Not set, so it stays as it is</span>')}
-    ${row('Turns on', named(p.preview.turnsOn))}
-    ${row('Turns off', named(p.preview.turnsOff))}
-    ${row('Adds', `<div class="padds">${[
-      ...p.instructions.map(i => `<p><b>${esc(i.name)}</b><span class="mini">Instruction</span><span class="pdesc">${p.preview.kept.includes(i.name) ? theirs : esc(i.text)}</span></p>`),
-      ...p.flows.map(f => `<p><b>${esc(f.name)}</b><span class="mini">Flow</span><span class="pdesc">${p.preview.kept.includes(f.name) ? theirs : `${f.description ? `${esc(f.description)}. ` : ''}${f.checks.length ? `Checks: ${f.checks.map(code).join(' ')}` : 'No checks.'}`}</span></p>`),
-    ].join('') || '<span class="quiet">Nothing</span>'}</div>`)}
-    ${p.mcps.length ? row('Needs', `<div class="pneeds">${p.mcps.map(m => mcpChip(m)).join('')}</div>${live && p.mcps.some(m => m.state !== 'connected') ? `${p.mcps.filter(m => m.state !== 'connected').map(swapOf).join('')}<p class="hint">Another computer can name a server differently. Pick yours in its place, or leave it out.</p>` : ''}`) : ''}
-    <div class="pact">${live ? `<button type="button" class="btn pri" data-p="use">Use ${esc(p.name)}</button>` : ''}<button type="button" class="btn" data-p="export">Export</button>
-      ${!live ? '' : pDel === p.name ? '<span class="hint">Delete it for good?</span><button type="button" class="btn" data-p="delyes">Delete</button><button type="button" class="btn ghost" data-p="delno">Keep it</button>' : '<button type="button" class="btn ghost" data-p="del">Delete</button>'}
-      ${pDel === p.name ? '' : `<span class="hint">${live ? 'Everything not listed stays as it is. Undo takes it back right after.' : `Use it in the chat: ${code(`/sentinel preset ${p.name}`)}.`}</span>`}</div>`
-  const saveBox = `<h3>Save this setup as a preset</h3>
-    <label class="label" for="pname">Name</label>
-    <input class="field" id="pname" maxlength="40" placeholder="For example, game-dev" autocomplete="off">
-    <p class="hint" id="pslug"></p>
-    <p class="hint">It keeps this project's weight, switches, needed MCPs, and its own trusted instructions and flows.</p>
-    <div class="pact">${live ? '<button type="button" class="btn pri" data-p="save">Save preset</button>' : `<span class="hint">Save it in the chat: ${code('/sentinel preset save <name>')}.</span>`}${p ? '<button type="button" class="btn ghost" data-p="nosave">Not now</button>' : ''}</div>`
-  put(host, `<div class="sh"><h2>Choose a preset</h2><span class="sp"></span>${live ? '<button type="button" class="btn sm" data-p="saving">Save this setup as a preset</button><button type="button" class="btn sm" data-p="import">Import</button>' : ''}<button type="button" class="btn sm ghost" data-p="close">Close</button></div>
-    <div class="pgrid"><div class="panel plist" role="group" aria-label="Presets">${list.map(x => `<button type="button" class="pick" data-preset="${esc(x.name)}" aria-pressed="${!saving && x.name === pSel}"><span class="ptop"><b>${esc(x.name)}</b>${L.preset === x.name ? '<span class="mini tone">In use</span>' : ''}${x.trusted ? '' : '<span class="tag sm off">Not trusted</span>'}</span><span class="psay">${esc(pSays(x))}</span></button>`).join('') || "<p class=\"pnone\">No presets yet. Save this project's setup as the first one.</p>"}</div>
-    <div class="panel pset"><div class="pb">${saving ? saveBox : detail}</div></div></div>`)
+  const inUse = '<span class="mini tone">In use</span>', own = ownRows(L)
+  const pick = (key, title, say, extra) => `<button type="button" class="pick" data-preset="${esc(key)}" aria-pressed="${pMode === 'detail' && pSel === key}"><span class="ptop"><b>${esc(title)}</b>${extra}</span><span class="psay">${esc(say)}</span></button>`
+  const picks = [pick('', 'No preset', "This project's own settings, and Every project's.", u ? '' : inUse),
+    ...list.map(x => pick(x.name, x.name, pSays(x), `${u?.name === x.name ? inUse : ''}${x.trusted ? '' : '<span class="tag sm off">Not trusted</span>'}`))].join('')
+  const x = list.find(y => y.name === pSel)
+  const box = pMode === 'new' ? newBox() : pMode === 'make' ? makeBox(p, own) : pMode === 'import' && pImp ? importBox(L) : x ? presetDetail(x, L, live) : noneBox(u, live)
+  put(host, `<div class="sh"><h2>Presets</h2><span class="sp"></span>${live ? `<button type="button" class="btn sm" data-p="new">New preset</button>
+      <button type="button" class="btn sm" data-p="make"${own ? '' : ' disabled title="This project has no settings of its own yet"'}>${p ? `Move this project's settings into ${esc(p.name)}` : 'Make one from this project'}</button>
+      <button type="button" class="btn sm" data-p="import">Import</button>` : ''}<button type="button" class="btn sm ghost" data-p="close">Close</button></div>
+    <div class="pgrid"><div class="panel plist" role="group" aria-label="Presets">${picks}</div>
+    <div class="panel pset"><div class="pb">${box}</div></div></div>`)
   // What you typed stays out of the markup, so a snapshot redraws the box only when the presets change. When one does,
   // the new box gets your text, and the focus and selection if you were typing.
   const i = $('pname')
@@ -4675,66 +4823,83 @@ function renderPresets() {
     i.value = pName
     if (typing) { i.focus(); i.setSelectionRange(...typing) }
   }
-  if (i) $('pslug').innerHTML = nameHint()
+  if (i) $('pslug').innerHTML = nameHint(pMode === 'make')
 }
-// Close, open, pick and save move the focus where the next key should go.
+// Close, open, pick and the boxes move the focus where the next key should go.
 const pFocus = sel => $('presets').querySelector(sel)?.focus()
+const pClose = () => { pOpen = false; pMode = 'detail'; pDel = ''; pName = ''; pImp = null; pSwap = {} }
 $('presets').addEventListener('click', e => {
-  const pick = e.target.closest('[data-preset]')
-  if (pick) {
-    if (pSel !== pick.dataset.preset) pSwap = {}
-    pSel = pick.dataset.preset; pSaving = false; pDel = ''
+  const pk = e.target.closest('[data-preset]')
+  if (pk) {
+    pSel = pk.dataset.preset; pMode = 'detail'; pDel = ''
     renderPresets()
     return pFocus(`[data-preset="${CSS.escape(pSel)}"]`)
   }
   const b = e.target.closest('[data-p]'), act = b?.dataset.p
   if (!b || b.disabled) return
-  const p = vm.library.presets.find(x => x.name === pSel)
-  if (act === 'open' || act === 'close') { pOpen = act === 'open'; pSaving = false; pDel = ''; renderPresets(); return pFocus(pOpen ? '[aria-pressed=true], #pname' : '[data-p=open]') }
-  if (act === 'saving' || act === 'nosave') { pSaving = act === 'saving'; renderPresets(); return pFocus(pSaving ? '#pname' : '[aria-pressed=true]') }
-  if (act === 'check') return flowSend('lib', { kind: 'mcpCheck' }, () => ['Checked again', notReady().length ? `${mcpWords(notReady())}.` : 'Every MCP this project needs is connected.']).then(renderLib)
-  if (act === 'drop') return flowSend('lib', { kind: 'mcpDrop', name: b.dataset.mcp }, s => ['Needed MCPs', s.text]).then(renderLib)
-  if (act === 'undo') return flowSend('lib', { kind: 'presetUndo' }, s => ['Preset taken back', s.text]).then(renderLib)
-  if (act === 'use' && p) {
-    pOpen = false
-    return flowSend('lib', { kind: 'presetUse', name: p.name, ...(Object.keys(pSwap).length ? { swap: pSwap } : {}) }, s => ['Preset used', p.name, s.text]).then(ok => { renderLib(); if (ok) pFocus('[data-p=undo], [data-p=open]') })
-  }
-  if (act === 'save') {
-    const s = slug(pName)
-    if (!s || ['save', 'undo', 'delete'].includes(s)) return pFocus('#pname')
-    pSaving = false; pSel = s; pName = ''
-    return flowSend('lib', { kind: 'presetSave', name: s }, r => ['Preset saved', s, r.text]).then(renderLib)
-  }
+  const x = vm.library.presets.find(y => y.name === pSel)
+  if (act === 'open') { pOpen = true; pMode = 'detail'; pDel = ''; pSel = pres()?.name ?? ''; renderPresets(); return pFocus('[aria-pressed=true]') }
+  if (act === 'close') { pClose(); renderPresets(); return pFocus('[data-p=open]') }
+  if (act === 'new' || act === 'make') { pMode = act; pName = ''; pDel = ''; renderPresets(); return pFocus('#pname, .pset .btn.pri') }
+  if (act === 'back') { pMode = 'detail'; pImp = null; pSwap = {}; renderPresets(); return pFocus('[aria-pressed=true]') }
   if (act === 'import') return $('pfile').click()
-  if (act === 'export' && p) {
+  if (act === 'check') return flowSend('lib', { kind: 'mcpCheck' }, () => ['Checked again', notReady().length ? `${mcpWords(notReady())}.` : 'Every MCP needed here is connected.']).then(renderLib)
+  if (act === 'drop') return flowSend('lib', { kind: 'mcpDrop', name: b.dataset.mcp, scope: swScope }, s => ['Needed MCPs', s.text]).then(renderLib)
+  if (act === 'use' && x) { pClose(); return flowSend('lib', { kind: 'presetUse', name: x.name }, s => ['Preset in use', x.name, s.text]).then(ok => { renderLib(); if (ok) pFocus('[data-p=open]') }) }
+  if (act === 'none') { pClose(); return flowSend('lib', { kind: 'presetNone' }, s => ['No preset', s.text]).then(renderLib) }
+  // Change: Change for goes to the preset, so what you switch or save next goes into it.
+  if (act === 'edit') { pClose(); swScope = 'preset'; renderLib(); return $('wsect')?.scrollIntoView({ block: 'start', behavior: 'smooth' }) }
+  if (act === 'create' || act === 'domake') {
+    if (!nameOk(act === 'domake')) return pFocus('#pname')
+    const name = slug(pName)
+    pClose(); pSel = name
+    if (act === 'create') swNext = name
+    return flowSend('lib', { kind: act === 'create' ? 'presetNew' : 'presetMove', name }, s => [act === 'create' ? 'Preset made' : 'Settings moved', name, s.text]).then(renderLib)
+  }
+  if (act === 'domove' && pres()) { const name = pres().name; pClose(); return flowSend('lib', { kind: 'presetMove', name }, s => ['Settings moved', name, s.text]).then(renderLib) }
+  if (act === 'doimport' && pImp) {
+    const body = { kind: 'presetImport', name: pImp.name, content: pImp.content, ...(Object.keys(pSwap).length ? { swap: pSwap } : {}) }
+    pSel = slug(pImp.name.replace(/\.json$/i, '')); pMode = 'detail'; pImp = null; pSwap = {}
+    return flowSend('lib', body, s => ['Preset imported', pSel, s.text]).then(renderLib)
+  }
+  if (act === 'export' && x) {
     const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([`${JSON.stringify(p.raw, null, 2)}\n`], { type: 'application/json' }))
-    a.download = `${p.name}.json`
+    a.href = URL.createObjectURL(new Blob([`${JSON.stringify(x.raw, null, 2)}\n`], { type: 'application/json' }))
+    a.download = `${x.name}.json`
     a.click()
     return setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
   if (act === 'del' || act === 'delno') { pDel = act === 'del' ? pSel : ''; renderPresets(); return pFocus(`[data-p=${act === 'del' ? 'delno' : 'del'}]`) }
-  if (act === 'delyes' && p) { pDel = ''; flowSend('lib', { kind: 'presetDelete', name: p.name }, ['Preset deleted', p.file]).then(renderLib) }
+  if (act === 'delyes' && x) { pDel = ''; flowSend('lib', { kind: 'presetDelete', name: x.name }, ['Preset deleted', x.name]).then(renderLib) }
 })
 $('presets').addEventListener('change', e => {
   const t = e.target
-  if (t.id === 'mcpAdd' && t.value) flowSend('lib', { kind: 'mcpAdd', name: t.value }, s => ['Needed MCPs', s.text]).then(renderLib)
+  if (t.id === 'mcpAdd' && t.value) flowSend('lib', { kind: 'mcpAdd', name: t.value, scope: swScope }, s => ['Needed MCPs', s.text]).then(renderLib)
   if (t.dataset.swap) { if (t.value === 'keep') delete pSwap[t.dataset.swap]; else pSwap[t.dataset.swap] = t.value === 'out' ? null : t.value.slice(4) }
 })
-$('presets').addEventListener('input', e => { if (e.target.id === 'pname') { pName = e.target.value; $('pslug').innerHTML = nameHint() } })
+$('presets').addEventListener('input', e => { if (e.target.id === 'pname') { pName = e.target.value; $('pslug').innerHTML = nameHint(pMode === 'make') } })
 $('presets').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && e.target.id === 'pname') { e.preventDefault(); $('presets').querySelector('[data-p=save]')?.click() }
-  if (e.key === 'Escape' && pOpen) { pOpen = false; pSaving = false; renderPresets(); pFocus('[data-p=open]') }
+  if (e.key === 'Enter' && e.target.id === 'pname') { e.preventDefault(); $('presets').querySelector('.pset .btn.pri')?.click() }
+  if (e.key === 'Escape' && pOpen) { pClose(); renderPresets(); pFocus('[data-p=open]') }
 })
-// Import: the file as it is, which Sentinel checks and keeps untrusted. The page server takes up to 64 KB a message.
+// Import: the file is read here to ask about its MCPs, then goes to Sentinel as it is, which checks it and keeps it
+// untrusted. One that doesn't read as an object goes straight there, and Sentinel says what is wrong. The page server
+// takes up to 64 KB a message.
 $('pfile').addEventListener('change', async e => {
   const f = e.target.files?.[0]
   if (!f) return
-  const body = { kind: 'presetImport', name: f.name, content: await f.text() }
+  const content = await f.text()
   e.target.value = ''
-  if (new Blob([JSON.stringify(body)]).size > 64_000) { from = { place: 'lib', at: Date.now(), err: `${f.name} is too big to be a preset.` }; return renderLib() }
-  pSel = slug(f.name.replace(/\.json$/i, '')); pSaving = false
-  flowSend('lib', body, s => ['Preset imported', pSel, s.text]).then(renderLib)
+  if (new Blob([JSON.stringify({ kind: 'presetImport', name: f.name, content })]).size > 64_000) { from = { place: 'lib', at: Date.now(), err: `${f.name} is too big to be a preset.` }; return renderLib() }
+  let raw = null
+  try { raw = JSON.parse(content) } catch { raw = null }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    pSel = slug(f.name.replace(/\.json$/i, ''))
+    return flowSend('lib', { kind: 'presetImport', name: f.name, content }, s => ['Preset imported', pSel, s.text]).then(renderLib)
+  }
+  pImp = { name: f.name, content, raw }; pSwap = {}; pOpen = true; pMode = 'import'; pDel = ''
+  renderLib()
+  pFocus('.pset .btn.pri')
 })
 
 // ---- instructions ----
@@ -4748,7 +4913,9 @@ function renderIns() {
   $('wsect').hidden = !L
   if (!L) { put($('ilist'), ''); put($('tot'), ''); put($('idet'), ''); put($('xsw'), ''); return }
   const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope) && i.name !== XS)
-  $('wLabel').textContent = `${swScope === 'project' ? 'This project' : 'Your default'}: ${wName(w)}${swScope === 'project' && !sw.project.weight ? ', from your default' : ''}`
+  // Where the weight comes from, when it isn't the place on screen.
+  const wFrom = below(swScope).find(k => sw[k]?.weight)
+  $('wLabel').textContent = `${SCOPE[swScope]}: ${cap(w.weight)}${!wFrom ? ', the usual' : wFrom !== swScope ? ` from ${LNAME(wFrom)}` : ''}${w.diff ? `, ${plural(w.diff, 'change')}` : ''}`
   put($('weights'), WEIGHTS.map(p => {
     const c = costOf(onMap(swScope, { ...sw, [swScope]: withWeight(sw[swScope], p.id) }).on, shown), nb = libItems().filter(i => i.scope === 'built-in' && i.weights?.includes(p.id)).length
     return `<button type="button" class="wcard" data-weight="${p.id}" aria-pressed="${w.weight === p.id}"${live ? '' : ' disabled'}>
@@ -4758,22 +4925,23 @@ function renderIns() {
     </button>`
   }).join(''))
 
-  const scopes = ['All', 'Built-in', 'Project', 'Personal'].filter(x => swScope === 'project' || x !== 'Project')
+  const scopes = tabsFor(swScope).map(([l]) => l)
   if (!scopes.includes(insScope)) insScope = 'All'
-  put($('insScope'), scopes.map(x => `<button type="button" data-ins-scope="${x}" aria-pressed="${x === insScope}">${x}</button>`).join(''))
-  const m = onMap(swScope), mine = swScope === 'project' ? onMap('personal') : null, q = insQ.trim().toLowerCase()
+  put($('insScope'), scopes.map(x => `<button type="button" data-ins-scope="${esc(x)}" aria-pressed="${x === insScope}">${esc(x)}</button>`).join(''))
+  const m = onMap(swScope), q = insQ.trim().toLowerCase()
   const xs = L.instructions.find(i => i.name === XS)
   put($('xsw'), xs ? `<label class="ck sw"><input type="checkbox" data-sw="${XS}"${m.on[XS] ? ' checked' : ''}${live ? '' : ' disabled'} aria-label="${esc(xs.title)} on"></label>
     <div><b>${esc(xs.title)}</b><span class="tag sm">Experimental</span><p>Claude can set a weight for one state, add an instruction to one state, or skip one with a reason, and each shows on the draft. This is here for testing. With it off, plans run as they did before.</p></div>` : '')
-  const list = all.filter(i => (insScope === 'All' || i.scope === insScope.toLowerCase()) && `${i.name} ${i.title ?? ''} ${i.description ?? ''} ${i.text}`.toLowerCase().includes(q))
+  const list = all.filter(i => (insScope === 'All' || i.scope === tabKey(insScope)) && `${i.name} ${i.title ?? ''} ${i.description ?? ''} ${i.text}`.toLowerCase().includes(q))
   if (!all.some(i => insKey(i) === insSel)) insSel = all[0] ? insKey(all[0]) : ''
   const row = i => {
-    const k = insKey(i), on = !!m.on[i.name], differs = mine && i.scope !== 'project' && i.trusted !== false && on !== !!mine.on[i.name]
+    // What decided it, when that is a place beyond the one on screen.
+    const k = insKey(i), on = !!m.on[i.name], d = decide(i, swScope), by = d.by && d.by !== swScope && i.trusted !== false ? d.by : ''
     return `<div class="irow${on ? '' : ' off'}" data-ins="${esc(k)}" tabindex="0" aria-selected="${k === insSel}">
       <label class="ck sw" data-stop><input type="checkbox" data-sw="${esc(i.name)}"${on ? ' checked' : ''}${i.trusted === false || !live ? ' disabled' : ''} aria-label="${esc(i.title ?? i.name)} on"></label>
       <div class="im"><b>${esc(i.title ?? i.name)}</b>${i.title ? `<span class="id">${esc(i.name)}</span>` : ''}<p>${esc(i.description ?? i.text)}</p>
         ${i.files?.length ? `<p class="files">Only states that edit ${esc(i.files.join(' '))}</p>` : ''}
-        ${differs ? `<p class="diff">${mine.on[i.name] ? 'On' : 'Off'} in your default, ${on ? 'on' : 'off'} here</p>` : ''}</div>
+        ${by ? `<p class="diff">${on ? 'On' : 'Off'} here, from ${esc(LNAME(by))}</p>` : ''}</div>
       <div class="meta">${kindCell(i)}${i.trusted === false ? '<span class="tag off">Not trusted</span>' : costCell(i)}<span class="tag sm">${SCOPE[i.scope]}</span></div>
     </div>`
   }
@@ -4793,9 +4961,10 @@ function renderIns() {
 function renderIdet(i, on, sw) {
   if (!i) return put($('idet'), '<div class="pb"><p class="quiet">Pick an instruction to see what it does.</p></div>')
   const live = online(), told = i.kind === 'told', st = exampleState(), mo = MOM[i.at], name = esc(i.name)
-  // The switch this scope holds for it, which "use the default" clears.
-  const held = Object.hasOwn(sw[swScope].on ?? {}, i.name) && (swScope === 'project' || i.weights)
-  const reset = !held ? '' : swScope === 'personal' || sw.project.weight ? 'Use the weight here' : 'Use my default here'
+  // The switch this place holds for it, which the reset clears, and what decides it then.
+  const held = Object.hasOwn(sw[swScope].on ?? {}, i.name) && (swScope !== 'personal' || i.weights)
+  const next = below(swScope)[1], then = next && decide(i, next)
+  const reset = !held ? '' : then?.by ? `Use ${LNAME(then.by)}'s setting here` : 'Use the weight here'
   put($('idet'), `<div class="ph"><h2>${esc(i.title ?? i.name)}</h2><span class="sp"></span><label class="ck sw"><input type="checkbox" data-sw="${name}"${on[i.name] ? ' checked' : ''}${i.trusted === false || !live ? ' disabled' : ''} aria-label="On"></label></div>
     <div class="pb">
       ${i.trusted === false ? `<div class="callout">${icon('warn')}<div><p><b>Off until you trust it.</b> Sentinel didn't save this file on this computer, or it changed since. Read what it tells Claude, then trust it.</p>${live ? '<button type="button" class="btn sm" data-act="libtrust" style="margin-top: 8px">Trust it</button>' : ''}</div></div>` : ''}
@@ -4824,10 +4993,10 @@ let libQ = '', flowSel = ''
 const flowKey = f => f.scope + '/' + f.name
 function renderFlows() {
   const live = online(), all = (vm.flows ?? []).filter(f => shownIn(f, swScope)), m = onMap(swScope)
-  const scopes = ['All', 'Built-in', 'Project', 'Personal'].filter(x => swScope === 'project' || x !== 'Project')
+  const scopes = tabsFor(swScope).map(([l]) => l)
   if (!scopes.includes(libScope)) libScope = 'All'
-  put($('libScope'), scopes.map(x => `<button type="button" data-lib="${x}" aria-pressed="${x === libScope}">${x}</button>`).join(''))
-  const q = libQ.trim().toLowerCase(), fl = all.filter(f => (libScope === 'All' || f.scope === libScope.toLowerCase()) && `${f.name} ${f.description ?? ''}`.toLowerCase().includes(q))
+  put($('libScope'), scopes.map(x => `<button type="button" data-lib="${esc(x)}" aria-pressed="${x === libScope}">${esc(x)}</button>`).join(''))
+  const q = libQ.trim().toLowerCase(), fl = all.filter(f => (libScope === 'All' || f.scope === tabKey(libScope)) && `${f.name} ${f.description ?? ''}`.toLowerCase().includes(q))
   $('nflows').textContent = plural(fl.length, 'flow')
   if (!all.some(f => flowKey(f) === flowSel)) flowSel = all[0] ? flowKey(all[0]) : ''
   const rule = f => !f.when ? '<span class="quiet">None</span>' : f.trusted === false ? '<span class="tag off">Off until you check it</span>' : m.on[f.name] ? '<span class="tag on">On</span>' : '<span class="tag off">Off</span>'
@@ -4871,7 +5040,7 @@ function renderDfl() {
       <h3>Save to</h3><fieldset class="opts"><legend class="vh">Save to</legend>${scopeOpts('dscope', d.name, 'project')}</fieldset>
       <h3>Adds itself</h3>${d.when ? `<label class="ck"><input type="checkbox" id="dattach" checked> ${ruleHtml(d.when)}</label><p class="hint" style="margin-top: 6px">Untick it to add the flow only when you choose to.</p>` : '<p class="quiet">Only when you add it.</p>'}
       <div class="acts0">${live ? '<button type="button" class="btn pri" data-act="savedraft">Save flow</button><button type="button" class="btn" data-act="dchg" aria-expanded="false">Ask for changes</button><button type="button" class="btn" data-act="drafted">Open in the editor</button><button type="button" class="btn ghost" data-act="discard">Discard</button>'
-        : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${code('/sentinel flow save personal')} or ${code('/sentinel flow discard')}.</p>`}</div>
+        : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${pres() ? `${code('/sentinel flow save preset')}, ` : ''}${code('/sentinel flow save everywhere')} or ${code('/sentinel flow discard')}.</p>`}</div>
     </div></div>`
 }
 // An instruction Claude drafted: the same card, with what Claude would be told in place of the states.
@@ -4890,7 +5059,7 @@ function insDraft(d, live) {
       <h3>Save to</h3><fieldset class="opts"><legend class="vh">Save to</legend>${scopeOpts('dscope', d.name, 'project', 'instruction')}</fieldset>
       <p class="hint" style="margin-top: 6px">It is on once saved. Switch it off in the Library.</p>
       <div class="acts0">${live ? '<button type="button" class="btn pri" data-act="savedraft">Save instruction</button><button type="button" class="btn" data-act="dchg" aria-expanded="false">Ask for changes</button><button type="button" class="btn" data-act="drafted">Open in the editor</button><button type="button" class="btn ghost" data-act="discard">Discard</button>'
-        : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${code('/sentinel flow save personal')} or ${code('/sentinel flow discard')}.</p>`}</div>
+        : `<p class="hint">Save it in the chat: ${code('/sentinel flow save project')}, ${pres() ? `${code('/sentinel flow save preset')}, ` : ''}${code('/sentinel flow save everywhere')} or ${code('/sentinel flow discard')}.</p>`}</div>
     </div></div>`
 }
 // The draft as it would be saved: with the name, the line and the rule as the user left them.

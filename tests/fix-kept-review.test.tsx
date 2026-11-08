@@ -88,7 +88,7 @@ test('a state with no files of its own is asked again, since nothing says what w
 })
 
 test('a review passed hands-free is not the user\'s, so a loop back asks once they are back', () => {
-  let r = { ...go({ ...emptyRun(), signedOff: true }, PLAN(), T0), handsFree: true as const }
+  let r: Run = { ...go({ ...emptyRun(), signedOff: true }, PLAN(), T0), handsFree: true }
   r = go(look(r), { action: 'advance', to: 'service', evidence: 'found it' }, at(1))
   r = go(pass(edit(r, 'src/a.ts'), 'npm test -- svc'), { action: 'advance', to: 'page' }, at(2))
   r = go(pass(edit(r, 'web/view.html'), 'npm test -- page'), { action: 'advance', to: 'verify' }, at(3))

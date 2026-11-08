@@ -49,18 +49,20 @@ export type InstructionDef = { name: string; description?: string; at: Instructi
 export type Weight = 'light' | 'standard' | 'thorough'
 // A switches file: .sentinel/library.json (the project's, committed) or ~/.sentinel/library.json (the user's default).
 // on: an item's switch by name, where it differs from its default.
-// mcps: the MCP servers a project needs, as the user named them. preset: the preset it last used. Both are the project's.
+// mcps: the MCP servers a project needs, as the user named them. preset: the preset this project uses, by name; only the
+// project's file has one.
 export type Switches = { weight?: Weight; on?: Record<string, boolean>; mcps?: string[]; preset?: string }
 // What a plan was locked with: the weight, every item on by name, and the instructions Claude is told.
 // states: only with the state-settings switch on, what lets a state differ from the plan. hand: the switches flipped by
 // hand, which no weight moves. weights: which weights turn on each instruction a state's weight can move. spare: the told
 // instructions off for this plan that a state's weight or addition can bring in.
 // settings: what Claude set for this plan, with why or the user's quote. held: looser and waiting for the user, so not in effect.
+// mcps: the MCP servers the plan needs, from all three places, as they stood when it locked.
 export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; held?: true }
 // One row of the draft card's settings: what differs from the plan, for the states it covers. owed: it waits for the user.
 // kept: they kept a looser one. id: what an answer names.
 export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true; looser?: true }
-export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[] }
+export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[]; mcps?: string[] }
 // The system map, saved in .sentinel/system.json (committed). A part is flat with a parent id, so one part is one line
 // and two people editing different parts merge cleanly.
 // drawnAt: the commit the part was last drawn at. An outside part has evidence in place of files.
@@ -148,7 +150,9 @@ export type MapChanges = {
   added: { id: string; name: string }[]; dropped: { id: string; name: string }[]
   edited: { id: string; name: string; what: string[] }[]; linesAdded: SysLine[]; linesDropped: SysLine[]
 }
-export type LibraryScope = 'built-in' | 'project' | 'personal'
+// project: this project's .sentinel. preset: the preset it uses, ~/.sentinel/presets/<name>. personal: every project's,
+// ~/.sentinel. The closest wins, in that order.
+export type LibraryScope = 'built-in' | 'project' | 'preset' | 'personal'
 // One instruction as the dashboard shows it. kind: told (Claude reads the text) or checks (Sentinel acts itself).
 // runs: the check runs it adds per state; slow: they can take as long as the check. needs: what it depends on.
 export type LibraryItem = InstructionDef & {
@@ -157,20 +161,22 @@ export type LibraryItem = InstructionDef & {
 }
 // The Library as the dashboard reads it: the weight in force, both switches files as saved, the instructions, and
 // which flows are on (the flows themselves are in `flows`).
-// presets: each preset with what using it would change now. mcps: the project's needed MCP servers with their state
-// here. servers: the ones this session has, by the name the page offers. preset: the one the project last used. undo:
-// the preset a use can still be taken back from.
+// presets: each preset on this computer. mcps: the MCP servers needed here, from all three places, each with its state
+// and the place that lists it. servers: the ones this session has, by the name the page offers. using: the preset this
+// project uses, with its switches, or missing when it isn't on this computer.
 export type LibraryView = {
   weight: Weight; project: Switches; personal: Switches; instructions: LibraryItem[]; flowsOn: Record<string, boolean>
-  presets?: PresetView[]; mcps?: McpState[]; servers?: { server: string; name: string; signIn: boolean }[]; preset?: string; undo?: string
+  presets?: PresetView[]; mcps?: McpState[]; servers?: { server: string; name: string; signIn: boolean }[]
+  using?: Switches & { name: string; missing?: true }
 }
-export type McpState = { name: string; state: 'connected' | 'sign-in' | 'missing'; server?: string }
-// raw: the file as it reads, for Export. preview: turnsOn and turnsOff by name, adds what it would add, kept what the
-// project already has by name, weightReset when its weight resets switches the user flipped by hand.
+export type McpState = { name: string; state: 'connected' | 'sign-in' | 'missing'; server?: string; scope?: LibraryScope }
+// A preset as the Library page shows it. file: its folder. raw: its one file, for Export. trusted: every item in it is.
+// preview: what using it here would turn on and off, by name, its own items left out.
 export type PresetView = {
   name: string; trusted: boolean; file: string; raw: object; weight?: Weight; on: Record<string, boolean>
-  instructions: { name: string; at: InstructionAt; text: string }[]; flows: { name: string; description?: string; checks: string[] }[]
-  mcps: McpState[]; preview: { turnsOn: string[]; turnsOff: string[]; adds: string[]; kept: string[]; weightReset: boolean }
+  instructions: { name: string; at: InstructionAt; text: string; trusted: boolean }[]
+  flows: { name: string; description?: string; checks: string[]; trusted: boolean }[]
+  mcps: McpState[]; preview: { turnsOn: string[]; turnsOff: string[] }
 }
 
 // What a quote can be compared with. approved: the plan the user approved in plan mode, with their edits (name: its file).
@@ -246,7 +252,8 @@ export type Trap = {
 export type AuditKind = 'refused' | 'blocked' | 'decided' | 'amended' | 'auto' | 'asked' | 'escalated'
 // state: the state that was active when it happened; none for what was decided at the lock.
 // by: 'claude' marks a choice Claude recorded with decide, which is the only kind that can excuse a rerun.
-export type Audit = { step: number; t: string; kind: AuditKind; text: string; state?: string; by?: 'claude' }
+// skip: an instruction Claude skipped for `state`, by name, so the page can say which.
+export type Audit = { step: number; t: string; kind: AuditKind; text: string; state?: string; by?: 'claude'; skip?: { name: string; why: string } }
 
 export type Tone = 'ok' | 'err' | 'warn' | 'acc' | 'ask' | 'dim'
 export type LogLine = { t: string; icon: string; tone: Tone; text: string }
@@ -259,11 +266,11 @@ export type UsageWindow = { kind: string; percentUsed: number; resetsAt?: string
 export type Usage = { usd: number; last: number; byState: Record<string, number>; windows: UsageWindow[]; began: UsageWindow[]; perPoint?: number }
 export type UsageView = {
   windows: { name: string; percent: number; resetsAt?: string; was?: number }[]
-  usd: number
-  // The share of the week, as words: about 1.4%. Left out with no weekly figure.
-  plan?: string
-  steps: Record<string, string>
+  // The cost, as words ($4.20), and the share of the week (about 1.4%), left out with no weekly figure or no price yet.
+  plan: Cost
+  steps: Record<string, Cost>
 }
+export type Cost = { cost: string; share?: string }
 // One measurement of what 1% of the week costs: usd spent while the figure moved points.
 export type Price = { usd: number; points: number; at: string }
 // The last reading of the weekly figure and the session's cost, and where the running measurement started.
@@ -318,6 +325,8 @@ export type PlanInput = {
   reason?: string
   topic?: string
   choice?: string
+  // decide: the instruction skipped for the active state, or for `to`.
+  skip?: string
   kind?: string
   // define: what the plan is locked with. Sentinel sets it; anything the model sends here is dropped.
   library?: PlanLibrary
@@ -327,6 +336,9 @@ export type PlanInput = {
   messages?: { text: string; at: string }[]
   // define: the model's answers to "what would an expert do here", for the user to tick before the lock.
   depth?: Depth[]
+  // define, revise: what the user asked for. Each point quotes their words, then names the steps that deliver it or says
+  // why Claude left it out.
+  points?: Point[]
   // define, revise, map: the parts, lines and people the plan draws, as an object. Sentinel merges it into the project's map.
   system?: unknown
   // define, revise, map: the map with that drawing merged in, and the ids of the parts nothing builds whose files exist.
@@ -343,6 +355,8 @@ export type PlanInput = {
   text?: string
   at?: string
 }
+// One thing the user asked for: their words, and either the steps that deliver it or Claude's reason for leaving it out.
+export type Point = { said: string; states: string[] } | { said: string; left: string }
 // An answer the user may tick. ask: the question it answers. state: a state of the draft that is there for it, taken
 // out at the lock unless the user ticks it.
 export type Depth = { id: string; text: string; ask?: 'expert' | 'raw' | 'methods' | 'proof'; state?: string }
@@ -453,6 +467,7 @@ declare module 'claude-code' {
     // said: the session's typed messages and the files Claude wrote. Never saved, unlike run.
     // overseers: the agents started to look into a long state, by agent id, with what each answered. They die with the
     // session's process, and so does this.
-    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }>; overseers: Shaped<Record<string, { state: string; word?: string }>> }
+    // watch: the running measurement of what 1% of the week costs, here so a reload of the plugin keeps it.
+    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }>; overseers: Shaped<Record<string, { state: string; word?: string }>>; watch: Shaped<Watch | null> }
   }
 }

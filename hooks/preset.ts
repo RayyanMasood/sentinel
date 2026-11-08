@@ -1,14 +1,16 @@
-// A preset: a project's Library setup in one file (~/.sentinel/presets/<name>.json). Pure: the engine reads and writes
-// the files, this checks what it read and works out what using a preset changes.
+// A preset: a folder, ~/.sentinel/presets/<name>/, laid out as a project's .sentinel is: library.json (weight, on,
+// mcps), instructions/ and flows/. A project points at one and nothing is copied. Pure: the engine reads and writes the
+// files; this checks an imported or exported file and works out a move.
 import type { FlowDef, InstructionDef, Switches, Weight } from '../types'
 import { WEIGHTS } from './builtins.ts'
 import { flowOf, instructionOf, withWeight } from './core.ts'
 
+// A preset as one file, for Export and Import.
 export type Preset = { name: string; weight?: Weight; on?: Record<string, boolean>; instructions?: InstructionDef[]; flows?: FlowDef[]; mcps?: string[] }
 
 export const PRESET_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/
 // The /sentinel preset sub-commands, which can't be names.
-const RESERVED = ['save', 'undo', 'delete']
+const RESERVED = ['new', 'move', 'delete', 'none']
 
 export function presetName(s: string): string | undefined {
   const n = String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
@@ -72,37 +74,30 @@ export function presetOf(raw: unknown, name: string): Preset | string {
   return out
 }
 
-// A project's setup as a preset. The caller passes only the items it trusts.
-export function presetFrom(project: Switches & { mcps?: string[] }, items: { instructions: InstructionDef[]; flows: FlowDef[] }, name: string): Preset {
+// A preset's switches and items as one file. The caller passes the items as their files hold them.
+export function presetFrom(sw: Switches, items: { instructions: InstructionDef[]; flows: FlowDef[] }, name: string): Preset {
   return {
     name,
-    ...(project.weight ? { weight: project.weight } : {}),
-    ...(project.on && Object.keys(project.on).length ? { on: { ...project.on } } : {}),
+    ...(sw.weight ? { weight: sw.weight } : {}),
+    ...(sw.on && Object.keys(sw.on).length ? { on: { ...sw.on } } : {}),
     ...(items.instructions.length ? { instructions: [...items.instructions] } : {}),
     ...(items.flows.length ? { flows: [...items.flows] } : {}),
-    ...(project.mcps?.length ? { mcps: [...project.mcps] } : {}),
+    ...(sw.mcps?.length ? { mcps: [...sw.mcps] } : {}),
   }
 }
 
-export type Applied = { switches: Switches & { mcps?: string[]; preset: string }; add: { instructions: InstructionDef[]; flows: FlowDef[] }; kept: string[]; weightReset: boolean }
+// MCP names with one name added once, ignoring case: the first spelling stays.
+export const addMcps = (to: readonly string[], more: readonly string[]) => more.reduce((xs, m) => (xs.some(x => x.toLowerCase() === m.toLowerCase()) ? xs : [...xs, m]), [...to])
 
-// A preset sets only what it names and changes only what differs. A new weight resets the hand-flipped built-ins, as
-// picking a weight does. swap: another MCP name in place of a preset's, or null to leave it out.
-export function applyPreset(project: Switches & { mcps?: string[]; preset?: string }, p: Preset, o: { builtins: readonly string[]; taken: readonly string[]; swap?: Record<string, string | null> }): Applied {
-  const weightReset = !!p.weight && p.weight !== project.weight
-  const start: Switches = weightReset ? withWeight(project, p.weight!, o.builtins) : { ...(project.weight ? { weight: project.weight } : {}), ...(project.on ? { on: project.on } : {}) }
-  const on = { ...start.on, ...p.on }
-  const mcps = [...(project.mcps ?? [])]
-  for (const m of p.mcps ?? []) {
-    const n = o.swap && Object.hasOwn(o.swap, m) ? o.swap[m] : m
-    if (n && !mcps.some(x => x.toLowerCase() === n.toLowerCase())) mcps.push(n)
-  }
-  const free = (x: { name: string }) => !o.taken.includes(x.name)
-  const all = [...(p.instructions ?? []), ...(p.flows ?? [])].map(x => x.name)
-  return {
-    switches: { ...(start.weight ? { weight: start.weight } : {}), ...(Object.keys(on).length ? { on } : {}), ...(mcps.length ? { mcps } : {}), preset: p.name },
-    add: { instructions: (p.instructions ?? []).filter(free), flows: (p.flows ?? []).filter(free) },
-    kept: all.filter(n => o.taken.includes(n)),
-    weightReset,
-  }
+// A preset's switches with this project's moved in. The project sat above the preset, so its choices win: its weight
+// ends the preset's switches on built-ins (as it did from above), and its switches go over the preset's. The MCPs add up.
+export function moveInto(preset: Switches, project: Switches, builtins: readonly string[]): Switches {
+  const base = project.weight ? withWeight(preset, project.weight, builtins) : preset
+  const on = { ...base.on, ...project.on }
+  const mcps = addMcps(preset.mcps ?? [], project.mcps ?? [])
+  return { ...(base.weight ? { weight: base.weight } : {}), ...(Object.keys(on).length ? { on } : {}), ...(mcps.length ? { mcps } : {}) }
 }
+
+// An imported preset's MCPs with the user's choices: another server's name in place of one, or null to leave it out.
+export const withSwap = (mcps: readonly string[], swap: Record<string, string | null> = {}) =>
+  addMcps([], mcps.flatMap(m => (!Object.hasOwn(swap, m) ? [m] : swap[m] ? [swap[m]!] : [])))
