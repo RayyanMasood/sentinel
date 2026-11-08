@@ -49,7 +49,8 @@ export type InstructionDef = { name: string; description?: string; at: Instructi
 export type Weight = 'light' | 'standard' | 'thorough'
 // A switches file: .sentinel/library.json (the project's, committed) or ~/.sentinel/library.json (the user's default).
 // on: an item's switch by name, where it differs from its default.
-export type Switches = { weight?: Weight; on?: Record<string, boolean> }
+// mcps: the MCP servers a project needs, as the user named them. preset: the preset it last used. Both are the project's.
+export type Switches = { weight?: Weight; on?: Record<string, boolean>; mcps?: string[]; preset?: string }
 // What a plan was locked with: the weight, every item on by name, and the instructions Claude is told.
 // states: only with the state-settings switch on, what lets a state differ from the plan. hand: the switches flipped by
 // hand, which no weight moves. weights: which weights turn on each instruction a state's weight can move. spare: the told
@@ -156,7 +157,21 @@ export type LibraryItem = InstructionDef & {
 }
 // The Library as the dashboard reads it: the weight in force, both switches files as saved, the instructions, and
 // which flows are on (the flows themselves are in `flows`).
-export type LibraryView = { weight: Weight; project: Switches; personal: Switches; instructions: LibraryItem[]; flowsOn: Record<string, boolean> }
+// presets: each preset with what using it would change now. mcps: the project's needed MCP servers with their state
+// here. servers: the ones this session has, by the name the page offers. preset: the one the project last used. undo:
+// the preset a use can still be taken back from.
+export type LibraryView = {
+  weight: Weight; project: Switches; personal: Switches; instructions: LibraryItem[]; flowsOn: Record<string, boolean>
+  presets?: PresetView[]; mcps?: McpState[]; servers?: { server: string; name: string; signIn: boolean }[]; preset?: string; undo?: string
+}
+export type McpState = { name: string; state: 'connected' | 'sign-in' | 'missing'; server?: string }
+// raw: the file as it reads, for Export. preview: turnsOn and turnsOff by name, adds what it would add, kept what the
+// project already has by name, weightReset when its weight resets switches the user flipped by hand.
+export type PresetView = {
+  name: string; trusted: boolean; file: string; raw: object; weight?: Weight; on: Record<string, boolean>
+  instructions: { name: string; at: InstructionAt; text: string }[]; flows: { name: string; description?: string; checks: string[] }[]
+  mcps: McpState[]; preview: { turnsOn: string[]; turnsOff: string[]; adds: string[]; kept: string[]; weightReset: boolean }
+}
 
 // What a quote can be compared with. approved: the plan the user approved in plan mode, with their edits (name: its file).
 // file: a copy of the file the plan's `source` names, taken once (name: that file's path). message: a typed message.

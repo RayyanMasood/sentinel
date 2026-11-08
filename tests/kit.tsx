@@ -61,7 +61,10 @@ export function engine(on: any) {
     return { value: { startedAt: 0, context: {}, ...(await usage) } }
   })
   on('session.cwd', () => ({ value: cwd }))
-  const key = (path: string) => path.replace(/\\/g, '/')
+  // The tools the model has: an MCP server shows as its tools, mcp__<server>__<tool>.
+  let tools: string[] = ['Read', 'Edit', 'Bash']
+  on('tool.list', () => ({ value: tools.map(name => ({ name, description: '', mcp: name.startsWith('mcp__') })) }))
+  const key =(path: string) => path.replace(/\\/g, '/')
   on('fs.read', (_: unknown, e: any) => {
     reads.push(key(e.path))
     // As the real read does for a file that isn't there. Elsewhere a missing file reads as empty.
@@ -258,7 +261,7 @@ export function engine(on: any) {
   return {
     files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory, store,
     helperEnv: () => helperEnv, setRoot: (d: string) => (root = d), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
-    setUsage: (u: object | Promise<object>) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f),
+    setUsage: (u: object | Promise<object>) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f), setTools: (t: string[]) => (tools = t),
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
     setDialog: (d?: (e?: any) => Promise<unknown>) => (dialog = d), setWriteFails: (re?: RegExp) => (writeFails = re), setHead: (h?: string) => (head = h),

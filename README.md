@@ -48,7 +48,7 @@ Sentinel labels each tool call by whether it moved the work forward. Over the la
 
 At `H ≤ 0.25` the run is stuck. Claude gets a note that names the pattern (cycle, drift or static), the file version it went back to and the failure that keeps coming back, with what to try next. The dashboard turns red and offers a field for your own hint, which reaches Claude with its next tool result, and a Pause button.
 
-A state can also drag on with nothing going in circles, so Sentinel watches the time as well. When a state's working time passes 30 minutes, then 1, 2 and 4 hours, Sentinel starts an overseer: a read-only Opus agent that looks at the evidence from outside while the run goes on. It answers FINE, FASTER or WRONG. FINE goes in the dashboard's log. FASTER and WRONG also reach Claude with its next tool result, or start a turn if Claude has stopped by itself, and you get a toast. Nothing stops the run, and time spent waiting on you doesn't count. If the agent can't start, Claude gets the same facts as a note.
+A state can also drag on with nothing going in circles, so Sentinel watches the time as well. When a state's working time passes 30 minutes, then 1, 2 and 4 hours, Sentinel starts an overseer: a read-only Opus agent that looks at the evidence from outside while the run goes on. It answers FINE, FASTER or WRONG. FINE goes in the dashboard's log. FASTER and WRONG also reach Claude with its next tool result, or start a turn if Claude has stopped by itself, and you get a toast. Nothing stops the run, and time spent waiting on you doesn't count. If the agent can't start, Claude gets the same facts as a note. It is the `overseer` built-in, on at every weight: switch it off on the Library page or with `/sentinel off overseer`, and the log still notes the time but no agent starts.
 
 A look runs on Opus for several requests. In a small test repo, one took 4,000 to 8,000 tokens of output, 120,000 written to the cache and 280,000 to 460,000 read from it. A state run by a member gets no overseer yet, and an overseer ends with the session that started it. In a terminal you may see one dim line such as `Prompt dropped by a hook: overseer: fine`, which is Sentinel keeping the agent's own report out of the chat.
 
@@ -98,6 +98,7 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 | `fails-without-change` | before a state closes | Sentinel checks | Thorough |
 | `prove-end-to-end` | before the plan completes | told | Thorough |
 | `measure-before-delete` | every turn | told | Thorough (needs a mutation-testing tool) |
+| `overseer` | while a state runs long | Sentinel checks | Light, Standard, Thorough |
 | `sources-first` | while Claude drafts a plan | told | off; switch it on for projects with a spec and designs |
 | `state-settings` | while Claude drafts a plan | told | off; see [Settings per state](#settings-per-state) |
 | `close-phase` (a flow) | at the end of a plan | flow | off |
@@ -171,6 +172,28 @@ States take the same fields as a plan's. Tags fill in from the state the flow go
 
 **Rules.** A flow with `when` adds itself to each new plan Claude sends after a sign-off: after or before each state that edits the listed `files`, after or before every state when there are none, or once at the `start` or `end`. A rule adds a flow once per plan, and leaves drafts being revised and locked plans alone. A rule puts shell commands into plans nobody reads first, so it runs only from a flow file Sentinel saved on this computer that hasn't changed since. A flow that came with a clone, or that you or Claude wrote, can't be added, by hand or by its rule, until you read it and type `/sentinel trust <flow>` (or save it from Edit on the Library page), since its checks are shell commands.
 
+## Presets
+
+A preset is one file, `~/.sentinel/presets/<name>.json`, holding a project's Library setup: its weight, its switches, its own instructions and flows, and the MCP servers it needs. The same file is what you export and import. Sentinel ships none; you save your own. The commands are in the [Commands](#commands) table.
+
+**Save.** Press "Save this setup as a preset" on the Library page, or type `/sentinel preset save <name>`. It keeps this project's weight, switches, needed MCPs, and its own trusted instructions and flows. Items you haven't trusted here are left out, and the reply names them. The project then counts as using that preset.
+
+**Use.** Pick a preset on the Library page. Its details show what it would turn on and off, what it adds, and the state of each MCP here, before you use it. `/sentinel preset <name>` does the same. A preset sets only what it names, and everything else stays. An instruction or flow whose name the project already has keeps the project's. A different weight resets the built-ins you switched by hand, as picking a weight does, and the preview says so. `/sentinel preset undo` (or Undo on the page) takes the last use back in the same session. Any other Library change ends that chance.
+
+**Import and export.** Export on the page downloads the file, and Import picks one. A preset Sentinel didn't save on this computer (imported, copied into the folder by hand, or edited since) is untrusted. Its instructions and flows are added switched off until you run `/sentinel trust <name>` for each one. Read a flow's check commands on the page first, since checks are shell commands. A preset carries MCP server names only. It never holds how a server starts, its address or its keys, and nothing in it runs on import.
+
+### Needed MCPs
+
+A project lists the MCP servers it relies on as `mcps` in `.sentinel/library.json`, committed with the code. `/sentinel mcp` lists them with their state in this session. `/sentinel mcp add <server>` and `/sentinel mcp drop <server>` change the list, and the Library page has chips for the same.
+
+- A plan doesn't lock while a needed MCP is missing or only offers sign-in. The lock says which one, and to connect it with `/mcp`.
+- In a session under 45 seconds old, Sentinel waits up to 15 seconds for a server that is still connecting.
+- Each step's start checks again. If a server went missing (say a new session picked the plan up), the run stops on you as Needs you until you reply.
+- Names match loosely. Case and the claude.ai or plugin prefix don't matter, so `Notion` matches `claude.ai Notion`.
+- Another computer can name a server differently. When you use a preset, the page lets you pick one of your servers in its place or leave it out.
+
+Sentinel can't connect a server for you, because the plugin API has no way to.
+
 ## Install
 
 Requires Claude Code 2.1.309 or later. At the prompt of a session:
@@ -194,6 +217,7 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | Command | Does |
 | --- | --- |
 | `/sentinel` | open the pane on whatever needs you |
+| `/sentinel help` | list every command with what it does |
 | `/sentinel focus`, `map`, `ledger`, `system` | open the pane on that view; `system` also checks the map against git |
 | `/sentinel redraw <part>` | ask Claude to reread a part or an area and redraw it; you answer a question before anything changes |
 | `/sentinel fine <part>` | clear the Changed since drawn mark on a part or an area until its files change again |
@@ -214,6 +238,12 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel add <flow> start`, `end`, `before <state>`, `after <state>` | add a flow to the draft |
 | `/sentinel drop <flow>` | take a flow out of the draft |
 | `/sentinel flow save project`, `save personal`, `discard` | keep or drop the flow or instruction Claude drafted |
+| `/sentinel preset` | list your presets: saved setups to use in other projects |
+| `/sentinel preset save <name>` | save this project's weight, switches, own items and needed MCPs as a preset |
+| `/sentinel preset <name>`, `preset undo` | use a preset here (it sets only what it names), or take the last use back |
+| `/sentinel preset delete <name>` | delete a preset |
+| `/sentinel mcp` | list the MCP servers this project needs, and whether this session has them |
+| `/sentinel mcp add <server>`, `mcp drop <server>` | put a server on this project's list or take it off; plans here won't lock while one is missing |
 
 Commands that change the plan or your Library run only when you type them, send them through Remote Control, or run them headless with `claude -p`. Run by Claude or another plugin, they are refused.
 

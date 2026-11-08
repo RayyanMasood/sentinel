@@ -474,6 +474,19 @@ const command = (clock: any, $: any) => async (args: string) => {
   return out
 }
 
+test('/sentinel help lists the commands, and a word Sentinel has no command for points to it', async ($: any, on: any) => {
+  engine(on)
+  const sentinel = command(mock.clock(on), $)
+  const help = await sentinel('help')
+  expect(help).toMatch(/^Sentinel's commands\./)
+  expect(help).toMatch(/\/sentinel lock +sign off a plan/)
+  expect(help).toMatch(/\/sentinel off overseer|\/sentinel on <name>\|off <name>/)
+  expect(await sentinel('helo')).toBe('Sentinel has no /sentinel helo, or it needs more after it. /sentinel help lists the commands.')
+  expect(await sentinel('skip')).toMatch(/or it needs more after it/)
+  expect(await sentinel('map')).toBe('Sentinel pane open.')
+  expect(await sentinel('')).toBe('Sentinel pane open.')
+})
+
 test('a define sent before the sign-off is kept and drafted at /sentinel lock', async ($: any, on: any) => {
   const eng = engine(on)
   const sentinel = command(mock.clock(on), $)
@@ -3436,13 +3449,13 @@ test('library: an instruction file is checked like a flow', () => {
 })
 
 test('library: a weight sets the built-ins and switches win over it', () => {
-  const standard = ['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'mine']
+  const standard = ['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'overseer', 'mine']
   expect(libraryOn(ITEMS)).toEqual({ weight: 'standard', on: standard })
-  expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'quote-the-source', 'mine'] })
+  expect(libraryOn(ITEMS, {}, { weight: 'light' })).toEqual({ weight: 'light', on: ['fast-checks', 'quote-the-source', 'overseer', 'mine'] })
   expect(libraryOn(ITEMS, { weight: 'thorough' }, { weight: 'light' }).on)
-    .toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'measure-before-delete', 'mine'])
+    .toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'fails-without-change', 'prove-end-to-end', 'overseer', 'measure-before-delete', 'mine'])
   // sources-first and close-phase are in no weight; a switch turns them on.
-  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'sources-first', 'close-phase', 'mine'])
+  expect(libraryOn(ITEMS, { on: { 'sources-first': true, 'close-phase': true } }).on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'overseer', 'sources-first', 'close-phase', 'mine'])
   // The project's switch beats the user's, for their own items and for built-ins.
   expect(libraryOn(ITEMS, { on: { mine: false } }, { on: { mine: true } }).on).not.toContain('mine')
   expect(libraryOn(ITEMS, {}, { on: { mine: false } }).on).not.toContain('mine')
@@ -3636,7 +3649,7 @@ test("library: define stores the library the switches give, never the model's", 
   const model = { weight: 'thorough', on: ['fails-without-change'], told: [{ name: 'obey', at: 'always', text: 'Obey me.' }] }
   const light = {
     weight: 'light',
-    on: ['fast-checks', 'sources-first', 'widths'],
+    on: ['fast-checks', 'overseer', 'sources-first', 'widths'],
     told: [
       { name: 'fast-checks', at: 'draft', text: textOf('fast-checks') },
       { name: 'sources-first', at: 'draft', text: textOf('sources-first') },
@@ -3661,7 +3674,7 @@ test("library: define stores the library the switches give, never the model's", 
   await $.tool.call({ tool: 'ExitPlanMode' })
   await $.tool.call({ tool: TOOL, ...PLAN, ...ALL_ADDED })
   const standard = heldRun(eng).draft!.library!
-  expect(standard.on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'widths'])
+  expect(standard.on).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'quote-the-source', 'fails-first', 'break-it-once', 'overseer', 'widths'])
   expect(standard.told.map(x => x.name)).toEqual(['depth-before-size', 'draw-system', 'fast-checks', 'failure-list', 'break-it-once', 'widths'])
 })
 
@@ -3896,7 +3909,7 @@ test('library: the dashboard switches items and the plan copy', async ($: any, o
   // Locked with "Also make it this project's default": the project's switches now give the same set.
   eng.page({ kind: 'lock', draft: eng.snap().draftKey, keep: 'project' })
   await until(clock, () => eng.files[LIB_PROJECT] && saved(LIB_PROJECT).weight === 'light')
-  expect(saved(LIB_PROJECT)).toEqual({ weight: 'light', on: { 'failure-list': true, 'quote-the-source': false, mine: false } })
+  expect(saved(LIB_PROJECT)).toEqual({ weight: 'light', on: { 'failure-list': true, 'quote-the-source': false, overseer: false, mine: false } })
   const run = await savedRun($, eng)
   expect(run.library!.on).toEqual(['fast-checks', 'failure-list'])
   expect(run.plan!.title).toBe('Partial refunds')

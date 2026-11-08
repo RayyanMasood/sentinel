@@ -68,6 +68,25 @@ test('nothing starts without a plan', async ($: any, on: any) => {
   expect(eng.spawns).toHaveLength(0)
 })
 
+test('switched off in the Library, no agent starts, and the log still notes the time', async ($: any, on: any) => {
+  const eng = engine(on)
+  const clock = clockFrom(on)
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('tool.register', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  expect(said(await $.command.run({ command: 'sentinel', args: 'off overseer' }))).toBe('overseer is off for this project.')
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await plan($, { action: 'define', title: 'Refunds', states: STATES })
+  await clock.advance(20)
+  await $.turn.start({ text: '', turnId: 't' })
+  await minutes(clock, 31)
+  await until(clock, () => logOf(eng).some(l => /service · .* of working time/.test(l)))
+  await clock.advance(60_000)
+  expect(eng.spawns).toHaveLength(0)
+  expect(eng.submitted.join('\n')).not.toMatch(/overseer/i)
+})
+
 inRun('at 30 minutes one read-only agent starts on Opus, with the evidence in its prompt', async ({ $, eng, clock }) => {
   // A second session.start doesn't start a second agent.
   await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })

@@ -6,8 +6,9 @@ import { STATE_SETTINGS } from './core.ts'
 export const WEIGHTS: readonly Weight[] = ['light', 'standard', 'thorough']
 
 // kind: told (Claude reads the text) or checks (Sentinel acts itself; the text says what it does and is never told).
-// runs: check runs it adds per state. slow: they take as long as the check does. needs: what it depends on.
-export type Builtin = InstructionDef & { title: string; kind: 'told' | 'checks'; weights: Weight[]; runs?: number; slow?: boolean; needs?: string }
+// runs: check runs it adds per state. slow: they take as long as the check does. needs: what it depends on. cost: what it
+// costs, for one that costs something other than check runs.
+export type Builtin = InstructionDef & { title: string; kind: 'told' | 'checks'; weights: Weight[]; runs?: number; slow?: boolean; needs?: string; cost?: string }
 
 export const BUILTINS: readonly Builtin[] = [
   {
@@ -58,6 +59,13 @@ export const BUILTINS: readonly Builtin[] = [
     name: 'prove-end-to-end', title: 'Prove it end to end', at: 'final', kind: 'told', weights: ['thorough'],
     text: 'A feature that crosses parts ends with an end-to-end run that leaves an artifact anyone can rerun and a script can check: '
       + 'the command and its saved output, a rendered image, a log.',
+  },
+  {
+    name: 'overseer', title: 'Look in when a state runs long', at: 'always', kind: 'checks', weights: ['light', 'standard', 'thorough'],
+    cost: 'A read-only Opus agent each time a state passes a mark. In a small repo one look took 4,000 to 8,000 tokens of output and read 280,000 to 460,000 from the cache.',
+    text: "When a state's working time passes 30 minutes, then 1, 2 and 4 hours, Sentinel starts a read-only Opus agent that looks at "
+      + 'it from outside. It answers FINE, FASTER or WRONG, and only FASTER and WRONG reach Claude. The run never stops for it. '
+      + 'Switched off, the log still notes the time and no agent starts.',
   },
   {
     name: 'measure-before-delete', title: 'Delete tests only after measuring', at: 'always', kind: 'told', weights: ['thorough'],

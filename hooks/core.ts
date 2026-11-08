@@ -11,6 +11,61 @@ export const K = 8 // window of recent calls the detector looks at
 export const THETA = 0.25 // stuck at or below this health
 export const AUTO_CAP = 2 // auto-continues in a row without a state change
 export const VIEWS: readonly View[] = ['focus', 'map', 'ledger', 'system']
+
+// Every /sentinel command, for /sentinel help and the slash menu's hint. README.md's Commands table lists the same, and
+// tests/help.test.mjs fails when the two drift apart.
+export const COMMANDS: readonly (readonly [string, readonly (readonly [string, string])[]])[] = [
+  ['See the run', [
+    ['', 'open the pane on whatever needs you'],
+    ['focus|map|ledger|system', 'open the pane on that view; system also checks the map against git'],
+    ['browser', 'open the dashboard in your browser'],
+    ['source', 'print the saved copy of what the plan quotes, with each quote marked'],
+    ['help', 'list these commands'],
+  ]],
+  ['The plan', [
+    ['lock', 'sign off a plan agreed in chat or already under way; again to lock the draft'],
+    ['lock <id> <id>', 'lock the draft with those depth answers ticked'],
+    ['add <flow> start|end|before <state>|after <state>', 'add a flow to the draft'],
+    ['drop <flow>', 'take a flow out of the draft'],
+    ['hands-free|hands-free off', 'let Claude make the calls that would wait for you, or take them back'],
+    ['pause|resume', "stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan"],
+    ['skip <state> [reason]', 'skip a state: Claude leaves it, and its check no longer runs at the end'],
+    ['finish [reason]', 'close the plan where it stands, without the final checks'],
+    ['reset', 'drop the current plan'],
+    ['parallel|parallel on|parallel off', 'say whether parallel states are on, or turn them on or off'],
+  ]],
+  ['The Library', [
+    ['library|flows', 'list the instructions and flows with their switches, and the weight'],
+    ['on <name>|off <name>', 'switch an item on or off for this project; add personal for your default'],
+    ['weight light|standard|thorough', 'pick the weight for this project; add personal for your default'],
+    ['trust <name>', "turn on an instruction or flow file Sentinel didn't save on this computer"],
+    ['flow save project|flow save personal|flow discard', 'keep or drop the flow or instruction Claude drafted'],
+    ['preset', 'list your presets: saved setups to use in other projects'],
+    ['preset save <name>', "save this project's weight, switches, own items and needed MCPs as a preset"],
+    ['preset <name>|preset undo', "use a preset here (it sets only what it names), or take the last use back"],
+    ['preset delete <name>', 'delete a preset'],
+    ['mcp', 'list the MCP servers this project needs, and whether this session has them'],
+    ['mcp add <server>|mcp drop <server>', "put a server on this project's list or take it off; plans here won't lock while one is missing"],
+  ]],
+  ['The System map', [
+    ['redraw <part>', 'ask Claude to reread a part or an area and redraw it; you answer before anything changes'],
+    ['fine <part>', 'clear the Changed since drawn mark until its files change again'],
+  ]],
+]
+
+// /sentinel help: each command with what it does, a long one with its words on the next line.
+export function helpText(): string {
+  const W = 38
+  const row = ([use, does]: readonly [string, string]) => {
+    const cmd = `/sentinel${use ? ` ${use}` : ''}`
+    return cmd.length <= W - 2 ?`  ${cmd.padEnd(W)}${does}` : `  ${cmd}\n  ${' '.repeat(W)}${does}`
+  }
+  return [
+    "Sentinel's commands. Type them at the prompt.",
+    ...COMMANDS.map(([group, rows]) => `\n${group}\n${rows.map(row).join('\n')}`),
+    '\nCommands that change the plan or the Library run only when you type them. Claude can\'t run them.',
+  ].join('\n')
+}
 const MAX_CALLS = 400
 // The plain-words fields on a task page, and a reason or outcome, are cut to this many characters.
 const MAX_TEXT = 400

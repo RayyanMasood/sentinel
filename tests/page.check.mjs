@@ -3,7 +3,7 @@
 // ONLY=system runs the System page's checks alone (about a third of the time). ONLY=others runs everything else. ONLY=hub runs the project tabs, usage figures and grouped Map alone. DUMP=<variant> prints that variant's System view.
 // It fails on a console or policy error, a page wider than its window at 390, 860 or 1440 px (light and dark), a part
 // that doesn't show, or a message the page sends in the wrong shape. SHOTS=<dir> also saves a screenshot of each.
-// SERVE=<variant> (library, light, insDraft, draft or a proof variant) checks nothing: it keeps the server up on that variant for a
+// SERVE=<variant> (library, light, presets, mcpDraft, insDraft, draft or a proof variant) checks nothing: it keeps the server up on that variant for a
 // person to try, prints the address, and prints each message the page sends. No browser package is needed for it.
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -175,6 +175,25 @@ const VARIANTS = {
     ],
   }),
 }
+// Presets and the MCPs a project needs, as the plugin adds them to the Library's snapshot: one preset Sentinel saved
+// here, and one it didn't, whose flow's check is a shell command to read before using it.
+const UNITY = { name: 'Unity', state: 'missing' }, NOTION = { name: 'Notion', state: 'connected', server: 'claude_ai_Notion' }
+const PLAYTEST = { name: 'playtest', at: 'close', text: 'Play the change before calling it done.' }
+const PRESETS = [
+  { name: 'backend', trusted: true, file: '~/.sentinel/presets/backend.json', raw: { weight: 'standard' }, weight: 'standard', on: {}, instructions: [], flows: [], mcps: [],
+    preview: { turnsOn: [], turnsOff: [], adds: [], kept: [], weightReset: false } },
+  { name: 'game-dev', trusted: true, file: '~/.sentinel/presets/game-dev.json', raw: { weight: 'thorough', instructions: [PLAYTEST], mcps: ['Unity'] },
+    weight: 'thorough', on: {}, instructions: [PLAYTEST], flows: [], mcps: [UNITY],
+    preview: { turnsOn: ['fails-without-change'], turnsOff: [], adds: ['playtest'], kept: [], weightReset: true } },
+  { name: 'shared', trusted: false, file: '~/.sentinel/presets/shared.json', raw: { on: { 'fast-checks': false }, mcps: ['Notion'] },
+    on: { 'fast-checks': false }, instructions: [{ name: 'dashboard-widths', at: 'start', text: 'Theirs.' }], flows: [{ name: 'release', description: 'Build before a release', checks: ['npm run build && rm -rf dist'] }], mcps: [NOTION],
+    preview: { turnsOn: [], turnsOff: ['fast-checks'], adds: ['release'], kept: ['dashboard-widths'], weightReset: false } },
+]
+const SERVERS = [{ server: 'claude_ai_Notion', name: 'Notion', signIn: false }, { server: 'plugin_playwright_playwright', name: 'playwright', signIn: false }]
+const withPresets = more => { const v = page(emptyRun()); return { ...v, library: { ...v.library, presets: PRESETS, mcps: [UNITY, NOTION], servers: SERVERS, ...more } } }
+VARIANTS.presets = withPresets({ preset: 'game-dev', undo: 'game-dev' })
+VARIANTS.noPresets = withPresets({ presets: [], mcps: [] })
+VARIANTS.mcpDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, mcps: [UNITY, { name: 'amp', state: 'sign-in', server: 'amp' }] } }
 
 // ---- a system map ----
 // How the System page can fail: the tab shows with no map, or not with one, or stays marked when another page is open; a
@@ -2005,6 +2024,90 @@ try {
   await sent('saveflow without weights', b => b.kind === 'saveflow' && b.flow.name === 'quick-weights' && !('weights' in b.flow))
   await p.context().close()
 
+  // Presets and needed MCPs. How it can fail: the line misses the preset, a chip's state or the /mcp hint; × or Add send
+  // the wrong name, or Add offers a server already needed; Check again or Undo send nothing; the chooser opens on the
+  // wrong preset, or its details miss the weight change, what turns on or off, what it adds, a flow's checks, what the
+  // project keeps or the untrusted warning; a swap isn't sent, or outlives a change of preset; Export downloads the wrong
+  // file; Delete goes without asking; Save sends a name Sentinel refuses; Import sends the wrong fields, or a file the
+  // page server would refuse; the reply to Use never shows; a draft hides a missing MCP above Lock.
+  const title = n => BUILTINS.find(b => b.name === n).title
+  p = await open('presets', '#library')
+  const line = await p.locator('.pline').textContent()
+  check(line.includes('game-dev') && /Unity\s*Not connected/.test(line) && /Notion\s*Connected/.test(line) && line.includes('Connect with /mcp to lock plans here.'), 'preset line: the name, each MCP and the hint')
+  check(same(await p.locator('#mcpAdd option').allTextContents(), ['Add an MCP', 'playwright']), 'Add offers only servers not needed yet')
+  await p.locator('#mcpAdd').selectOption('playwright')
+  await sent('mcpAdd', b => b.kind === 'mcpAdd' && b.name === 'playwright')
+  await p.locator('[data-p=drop][data-mcp=Unity]').click()
+  await sent('mcpDrop', b => b.kind === 'mcpDrop' && b.name === 'Unity')
+  await p.locator('[data-p=check]').click()
+  await sent('mcpCheck', b => b.kind === 'mcpCheck')
+  await p.locator('[data-p=undo]').click()
+  await sent('presetUndo', b => b.kind === 'presetUndo')
+  await p.locator('[data-p=open]').click()
+  check(await p.locator('.pick[aria-pressed=true]').getAttribute('data-preset') === 'game-dev', 'the chooser opens on the preset in use')
+  const det = () => p.locator('.pset').textContent()
+  let d = await det()
+  check(d.includes('Thorough (now Standard)') && d.includes('resets the built-ins') && d.includes(title('fails-without-change')) && d.includes(PLAYTEST.text), 'details: the weight, what turns on, what it adds')
+  check(!d.includes("didn't save this preset"), 'no warning for a preset Sentinel saved')
+  await p.locator('[data-swap=Unity]').selectOption({ label: 'Use Notion instead' })
+  await p.locator('[data-preset=shared]').click()
+  await p.locator('[data-preset=game-dev]').click()
+  await p.locator('[data-p=use]').click()
+  await sent('presetUse after a change of preset', b => b.kind === 'presetUse' && b.name === 'game-dev' && !('swap' in b))
+  await p.locator('[data-p=open]').click()
+  await p.locator('[data-swap=Unity]').selectOption({ label: 'Leave it out' })
+  await p.locator('[data-p=use]').click()
+  await sent('presetUse with a swap', b => b.kind === 'presetUse' && b.name === 'game-dev' && same(b.swap, { Unity: null }))
+  check(await p.locator('.pline').isVisible(), 'Use closes the chooser')
+  write({ ...VARIANTS.presets, flowSaid: { ok: true, text: 'Using game-dev. Added: playtest.', at: Date.now() + 60_000 } })
+  await p.waitForFunction(() => document.getElementById('notice').textContent.includes('Added: playtest')).catch(() => fails.push('the reply to Use shows'))
+  write(VARIANTS.presets)
+  await p.locator('[data-p=open]').click()
+  await p.locator('[data-preset=shared]').click()
+  d = await det()
+  check(d.includes("didn't save this preset") && d.includes('npm run build && rm -rf dist') && d.includes('has its own of that name') && d.includes(title('fast-checks')), 'untrusted details: the warning, the checks, what the project keeps, what turns off')
+  check(await p.locator('[data-preset=shared] .tag.off').textContent() === 'Not trusted', 'an untrusted preset is marked in the list')
+  const [dl] = await Promise.all([p.waitForEvent('download'), p.locator('[data-p=export]').click()])
+  check(dl.suggestedFilename() === 'shared.json' && same(JSON.parse(readFileSync(await dl.path(), 'utf8')), PRESETS[2].raw), 'Export downloads the preset file')
+  await p.locator('[data-p=del]').click()
+  check(await p.locator('[data-p=delyes]').isVisible(), 'Delete asks first')
+  await p.locator('[data-p=delyes]').click()
+  await sent('presetDelete', b => b.kind === 'presetDelete' && b.name === 'shared')
+  await p.locator('[data-p=saving]').click()
+  await p.locator('#pname').fill('undo')
+  check((await p.locator('#pslug').textContent()).includes("can't be names"), 'a reserved name is refused')
+  await p.locator('[data-p=save]').click()
+  await p.locator('#pname').fill('Game Dev 2')
+  check((await p.locator('#pslug').textContent()).includes('~/.sentinel/presets/game-dev-2.json'), 'the name as it saves')
+  write({ ...VARIANTS.presets, library: { ...VARIANTS.presets.library, presets: PRESETS.slice(1) } })
+  await p.locator('[data-preset=backend]').waitFor({ state: 'detached' })
+  check(await p.locator('#pname').evaluate(i => i.value === 'Game Dev 2' && document.activeElement === i && document.getElementById('pslug').textContent.includes('game-dev-2.json')), 'a snapshot that redraws the box keeps what you typed')
+  write(VARIANTS.presets)
+  await p.locator('#pname').press('Enter')
+  await sent('presetSave', b => b.kind === 'presetSave' && b.name === 'game-dev-2')
+  const team = JSON.stringify({ weight: 'light' })
+  await p.locator('#pfile').setInputFiles({ name: 'team.json', mimeType: 'application/json', buffer: Buffer.from(team) })
+  await sent('presetImport', b => b.kind === 'presetImport' && b.name === 'team.json' && b.content === team)
+  await p.locator('#pfile').setInputFiles({ name: 'big.json', mimeType: 'application/json', buffer: Buffer.from(`{"x":"${'a'.repeat(70_000)}"}`) })
+  await p.waitForFunction(() => document.getElementById('fsaid').textContent.includes('too big')).catch(() => fails.push('a file too big for the page server is refused'))
+  await p.context().close()
+  p = await open('noPresets', '#library')
+  check((await p.locator('.pline').textContent()).includes('No MCPs'), 'no needed MCPs')
+  await p.locator('[data-p=open]').click()
+  check((await p.locator('.plist').textContent()).includes('No presets yet') && await p.locator('#pname').isVisible(), 'no presets: the list says so and offers Save')
+  await p.context().close()
+  p = await open('mcpDraft', '')
+  check((await p.locator('#stub .mcpw').textContent()) === "Unity isn't connected, and amp needs you to sign in. Connect them with /mcp, then lock.", 'a draft names a needed MCP that is not ready above Lock')
+  await p.context().close()
+  p = await open('draft', '')
+  check(await p.locator('#stub .mcpw').count() === 0, 'no warning on a draft when every needed MCP is ready')
+  await p.context().close()
+
+  await layout('presets', '#library', 'presets-line')
+  await layout('presets', '#library', 'presets-open', async p => { await p.locator('[data-p=open]').click() })
+  await layout('presets', '#library', 'presets-untrusted', async p => { await p.locator('[data-p=open]').click(); await p.locator('[data-preset=shared]').click() })
+  await layout('noPresets', '#library', 'presets-empty', async p => { await p.locator('[data-p=open]').click() })
+  await layout('mcpDraft', '', 'mcp-draft')
   await layout('settings', '', 'settings-draft')
   await layout('settings', '#task-export', 'settings-task')
   await layout('library', '#library', 'library')
