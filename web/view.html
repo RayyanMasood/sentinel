@@ -1997,6 +1997,9 @@ function pass() {
   const mw = bad.length ? `${mcpWords(bad)}. Connect ${bad.length > 1 ? 'them' : 'it'} with /mcp, then lock.` : ''
   // A preset the project names that this computer lacks: the plan locks on the other two places, which the card says.
   const gone = vm.library?.using?.missing ? missingText() : ''
+  // A preset Claude picked for this draft: its reason or the user's words, and the one it replaced.
+  const pk = kind === 'draft' && vm.draftLibrary?.preset
+  const pick = pk ? `${pk.name === 'none' ? 'No preset' : `Preset: ${pk.name}`}, ${pk.quote ? `as you asked: “${pk.quote}”` : `Claude's pick: ${(pk.why ?? '').replace(/\.$/, '')}`}. Was: ${pk.was ?? 'none'}.` : ''
   // Opened as a file, or after the session closed, the page shows what needs you and the answers go in the chat.
   if (!online() && s.acts) {
     const asks = s.acts.some(x => x[3] !== 'pause' && x[3] !== 'openflows')
@@ -2011,7 +2014,7 @@ function pass() {
   put($('slimS'), say)
   $('count').textContent = $('slimC').textContent = count
   put($('fields'), fields(kind))
-  put($('stub'), `<span class="stub-k">${s.k}</span><h2>${s.h}</h2>${s.p ? `<p>${s.p}</p>` : ''}`
+  put($('stub'), `<span class="stub-k">${s.k}</span><h2>${s.h}</h2>${s.p ? `<p>${s.p}</p>` : ''}${pick ? `<p class="ppick">${esc(pick)}</p>` : ''}`
     + (mw && s.acts?.some(x => x[3] === 'lock') ? `<p class="mcpw">${icon('warn')}<span>${esc(mw)}</span></p>` : '')
     + (gone && s.acts?.some(x => x[3] === 'lock') ? `<p class="mcpw">${icon('warn')}<span>${esc(gone)}</span></p>` : '')
     + (s.acts?.length ? `<div class="acts">${s.acts.map(([l, ic, c, act, off]) => `<button type="button" class="btn ${c}" data-act="${act}"${off ? ' disabled' : ''}>${ic ? icon(ic) : ''}${l}</button>`).join('')}</div>` : '')

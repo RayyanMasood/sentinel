@@ -62,7 +62,10 @@ export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: 
 // One row of the draft card's settings: what differs from the plan, for the states it covers. owed: it waits for the user.
 // kept: they kept a looser one. id: what an answer names.
 export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true; looser?: true }
-export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[]; mcps?: string[] }
+// preset: the preset Claude picked for this plan, the one in use before (none when missing), and Claude's reason or the
+// user's words. Sentinel sets it; the draft card shows it.
+export type PresetPick = { name: string; was?: string; why?: string; quote?: string }
+export type PlanLibrary = { weight: Weight; on: string[]; told: InstructionDef[]; states?: { hand: Record<string, boolean>; weights: Record<string, Weight[]>; spare: InstructionDef[] }; settings?: PlanSetting[]; mcps?: string[]; preset?: PresetPick }
 // The system map, saved in .sentinel/system.json (committed). A part is flat with a parent id, so one part is one line
 // and two people editing different parts merge cleanly.
 // drawnAt: the commit the part was last drawn at. An outside part has evidence in place of files.
@@ -319,6 +322,11 @@ export type PlanInput = {
   // define, revise, with the Library's state-settings switch on: the plan's weight and instructions on or off. Sentinel
   // turns it into library.settings; with the switch off it is dropped.
   settings?: unknown
+  // library: a Library command as typed after /sentinel, and the words in the user's last message that ask for it.
+  command?: string
+  quote?: string
+  // define: the preset Claude picks for the plan, or none, with reason (or quote, when the pick loosens the rules).
+  preset?: string
   // flow: the flow the model drafts for the user to save.
   name?: string
   description?: string

@@ -3,7 +3,7 @@
 import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
 import { usageView } from './usage.ts'
-import { checkQuote, checkSetting, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
+import { checkQuote, checkSetting, MIN_WORDS, namesIn, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
 
@@ -1741,6 +1741,89 @@ function notTyped(typed: readonly string[], quote: string, name: string, short: 
   if (verdicts.includes('unnamed')) return `"${shown(quote)}" doesn't name ${name}, so it doesn't show the user asked for it. Quote words that name it, or send your own reason instead: it then waits for them.`
   if (verdicts.includes('short')) return `"${shown(quote)}" is too short to count: quote at least ${MIN_WORDS} words${short ? `, or ${name} and one more word` : ''}, or a whole message.`
   return `"${shown(quote)}" isn't in what the user typed, word for word. Copy their words, or send your own reason instead: a stricter setting then applies and a looser one waits for them.`
+}
+
+// ---- the Library at the user's word: the plan tool's library action ----
+
+// What a Library command Claude runs for the user changes. names: what their words have to name, one of them at least.
+// also: a word they have to say as well, as a weight's name alone is often an ordinary word. looser: it can turn a rule
+// off or lighten one, so it takes more of their words. place: where it writes, when that isn't this project. read: it
+// only lists, so it needs no words.
+export type LibraryAsk = { read?: true; names: string[]; also?: string[]; looser: boolean; place?: 'preset' | 'everywhere' }
+
+export const NOT_LIBRARY = "library takes the Library's own commands, as typed after /sentinel: on, off, weight, preset, mcp and flow discard. The rest are the user's to type."
+const SHELL_ONLY = (words: string) => `Only the user trusts a file or saves a flow, since both let shell commands run. Ask them to type /sentinel ${words}, or to use the Library page.`
+
+// ctx: the weight in force now, the preset in use, and the flow or instruction Claude drafted. A string says why Claude
+// can't run it.
+export function libraryAsk(words: string, ctx: { weight: Weight; preset?: string; draft?: { name: string; kind: string } }): LibraryAsk | string {
+  const w = words.trim().split(/\s+/).filter(Boolean)
+  const [verb = '', ...rest] = w
+  const v = verb.toLowerCase()
+  const place = (xs: string[]) => {
+    const last = xs.at(-1)?.toLowerCase()
+    return xs.length > 1 && (last === 'preset' || last === 'everywhere') ? { name: xs.slice(0, -1).join(' '), place: last as 'preset' | 'everywhere' } : { name: xs.join(' ') }
+  }
+  if (!rest.length && ['library', 'flows', 'preset', 'mcp'].includes(v)) return { read: true, names: [], looser: false }
+  if (v === 'trust' || (v === 'flow' && /^(trust|save)$/i.test(rest[0] ?? ''))) return SHELL_ONLY(words.trim())
+  if (v === 'flow' && rest.length === 1 && rest[0]!.toLowerCase() === 'discard') return { names: [...(ctx.draft ? [ctx.draft.name, ctx.draft.kind] : []), 'flow', 'instruction'], looser: false }
+  if ((v === 'on' || v === 'off') && rest.length) {
+    const p = place(rest)
+    if (p.name.toLowerCase() === STATE_SETTINGS) return 'Only the user turns state-settings on or off. Ask them to type the command.'
+    return { names: [p.name], looser: v === 'off', ...(p.place ? { place: p.place } : {}) }
+  }
+  if (v === 'weight' && rest.length) {
+    const p = place(rest)
+    const to = p.name.toLowerCase()
+    if (!isWeight(to)) return 'Use weight light, standard or thorough, with preset or everywhere after it for the preset in use or every project.'
+    // ctx.weight is this project's: another place's weight can be heavier, so a weight there counts as looser.
+    return { names: [to], also: ['weight'], looser: !!p.place || WEIGHT_RANK[to] < WEIGHT_RANK[ctx.weight], ...(p.place ? { place: p.place } : {}) }
+  }
+  if (v === 'preset' && rest.length) {
+    const [sub = '', ...more] = rest
+    const s = sub.toLowerCase()
+    if (s === 'delete') return `A delete can't be undone, so the user does it. Ask them to type /sentinel ${words.trim()}, or to use the Library page.`
+    // Moving keeps every setting here as it is. Another preset, a new empty one or none can turn rules off.
+    if ((s === 'new' || s === 'move') && more.length) return { names: [more.join(' ')], looser: s === 'new' }
+    if (s === 'none' && !more.length) return { names: [...(ctx.preset ? [ctx.preset] : []), 'preset'], looser: true }
+    return { names: [rest.join(' ')], looser: true }
+  }
+  if (v === 'mcp' && (rest[0]?.toLowerCase() === 'add' || rest[0]?.toLowerCase() === 'drop') && rest.length > 1) {
+    const p = place(rest.slice(1))
+    return { names: [p.name], looser: rest[0]!.toLowerCase() === 'drop', ...(p.place ? { place: p.place } : {}) }
+  }
+  return NOT_LIBRARY
+}
+
+// What pointing the project at another preset loosens: the rules it turns off, and the weight when it gets lighter. Empty
+// when it only adds rules or keeps them as they are.
+export function pickLoosens(before: { weight: Weight; on: readonly string[] }, after: { weight: Weight; on: readonly string[] }): string[] {
+  const off = before.on.filter(n => !after.on.includes(n))
+  const list = (xs: string[]) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}` : xs[0]!)
+  return [
+    ...(off.length ? [`it turns off ${list(off)}`] : []),
+    ...(WEIGHT_RANK[after.weight] < WEIGHT_RANK[before.weight] ? [`the weight goes from ${before.weight} to ${after.weight}`] : []),
+  ]
+}
+
+const EVERY_PROJECT = ['every project', 'everywhere', 'all projects', 'all my projects', 'all of my projects', 'each project']
+
+// Why the user's words don't ask for this change, or nothing when they do. Only their last typed message counts, as the
+// change is made now. The words name what changes, and the place when it isn't this project. A change that loosens
+// takes five of their words or the whole message; one that doesn't takes the name and one more word.
+export function notAsked(last: string | undefined, quote: string | undefined, ask: LibraryAsk, preset?: string): string | undefined {
+  const q = quote?.trim()
+  if (!q) return 'library needs "quote": the words in the user\'s last message that ask for this change, copied exactly.'
+  if (last === undefined) return "The user hasn't typed anything in this session, so there are no words of theirs to quote. Ask them first."
+  const v = checkQuote(last, q)
+  if (v === 'missing' || v === 'empty' || v === 'excluded') return `"${shown(q)}" isn't in the user's last message, word for word. Only their last message counts, so ask them again if they said it before that.`
+  const name = ask.names.find(n => namesIn(q, n))
+  if (!name) return `"${shown(q)}" doesn't name ${ask.names[0]}, so it doesn't show they asked for this. Quote their words that name it.`
+  if (checkSetting(last, q, name, !ask.looser) !== 'ok') return `"${shown(q)}" is too short to count: quote at least ${MIN_WORDS} of their words${ask.looser ? '' : `, or ${name} and one more`}, or their whole message.`
+  if (ask.also && !ask.also.some(a => namesIn(q, a))) return `"${shown(q)}" doesn't say ${ask.also.map(a => `"${a}"`).join(' or ')}, so it doesn't show they asked for this. Quote their words that do.`
+  if (ask.place === 'everywhere' && !EVERY_PROJECT.some(p => namesIn(q, p))) return `"${shown(q)}" doesn't say every project. A change for every project needs their words to say so: "every project", "everywhere" or "all projects".`
+  if (ask.place === 'preset' && !['preset', ...(preset ? [preset] : [])].some(p => namesIn(q, p))) return `"${shown(q)}" doesn't name the preset. A change in the preset${preset ? ` ${preset}` : ''} needs their words to name it: "preset"${preset ? ` or "${preset}"` : ''}.`
+  return undefined
 }
 
 // With the switch off, what Claude sent for it goes. had: there was something to drop.

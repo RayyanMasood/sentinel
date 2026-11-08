@@ -3774,7 +3774,9 @@ test('library: the system prompt carries the draft and always instructions', asy
   const eng = engine(on)
   const sentinel = command(mock.clock(on), $)
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }] }))
-  const sections = async () => (await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })).sections
+  // The line naming each item and its switch while no plan runs is tested in lib-claude; this test is about the instructions.
+  const bare = (s: any) => (s ? { ...s, text: s.text.replace(/\nThe Library's items here, for "library" on or off: [^\n]*/, '') } : s)
+  const sections = async () => (await $.prompt.compose({ model: 'm', promptModel: 'm', surfaces: [], tools: [], outputStyle: null, traits: [] })).sections.map(bare)
   const section = async () => (await sections()).find((s: any) => s.id === 'sentinel:library')
   eng.files[`${ROOT}/.sentinel/instructions/prose.json`] = JSON.stringify({ at: 'always', text: 'Plain prose.' })
   await sentinel('trust prose')

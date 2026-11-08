@@ -253,6 +253,9 @@ VARIANTS.noPresets = (() => { const v = page(emptyRun()); return { ...v, library
 VARIANTS.presetMissing = (() => { const v = page(emptyRun(), library({ preset: 'game-dev' })); return { ...v, library: { ...v.library, using: { name: 'game-dev', missing: true }, presets: PRESETS.filter(p => p.name !== 'game-dev'), mcps: [], servers: SERVERS } } })()
 VARIANTS.mcpDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, mcps: [UNITY, { name: 'amp', state: 'sign-in', server: 'amp' }] } }
 VARIANTS.missingDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, using: { name: 'game-dev', missing: true } } }
+// Drafts on a preset Claude picked: on its own reason, or on the user's words dropping the one in use.
+VARIANTS.pickDraft = { ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'backend', why: 'the plan is <b>API</b> work.' } } }
+VARIANTS.quoteDraft = { ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'none', was: 'backend', quote: 'stop using the <i>backend</i> preset' } } }
 
 // ---- a system map ----
 // How the System page can fail: the tab shows with no map, or not with one, or stays marked when another page is open; a
@@ -1602,8 +1605,8 @@ async function hubPage() {
   }
 }
 
-// ONLY=presets, ONLY=points, ONLY=looks, ONLY=bars or ONLY=changed runs that block alone, for trying a break on it in seconds.
-const only = process.env.ONLY, quick = ['presets', 'points', 'looks', 'bars', 'changed'].includes(only)
+// ONLY=presets, ONLY=points, ONLY=looks, ONLY=bars, ONLY=changed or ONLY=pick runs that block alone, for trying a break on it in seconds.
+const only = process.env.ONLY, quick = ['presets', 'points', 'looks', 'bars', 'changed', 'pick'].includes(only)
 try {
   if (!quick) {
   await hubPage()
@@ -2136,6 +2139,28 @@ try {
   await p.context().close()
   }
 
+  // The preset Claude picked, on the draft card. How it can fail:
+  //  1. The card doesn't say Claude picked the preset, or leaves out Claude's reason, the user's words or the preset it replaced.
+  //  2. Claude's reason or the user's words run as markup.
+  //  3. Picking no preset reads as a preset named "none".
+  //  4. A draft with no pick shows the line.
+  pick: {
+  if (quick && only !== 'pick') break pick
+  const line = async v => {
+    p = await open(v, '')
+    const l = p.locator('#stub .ppick')
+    const out = (await l.count()) ? { text: await l.innerText(), markup: await l.locator('b, i').count() } : null
+    await p.context().close()
+    return out
+  }
+  const mine = await line('pickDraft')
+  check(mine?.text === "Preset: backend, Claude's pick: the plan is <b>API</b> work. Was: none." && mine.markup === 0, `pick: Claude's pick shows with its reason, as text (${JSON.stringify(mine)})`)
+  const asked = await line('quoteDraft')
+  check(asked?.text === 'No preset, as you asked: “stop using the <i>backend</i> preset”. Was: backend.' && asked.markup === 0, `pick: a pick on the user's words quotes them, and no preset says so (${JSON.stringify(asked)})`)
+  check((await line('draft')) === null, 'pick: a draft with no pick has no line')
+  if (only === 'pick') break others
+  }
+
   // What a step changed, on its page. How it can fail:
   //  1. A step that edited files doesn't list them, lists one twice, or lists a file whose edit was refused.
   //  2. A file name runs as markup.
@@ -2417,6 +2442,7 @@ try {
   await layout('presetMissing', '#library', 'presets-missing')
   await layout('noPresets', '#library', 'presets-empty', async p => { await p.locator('[data-p=open]').click() })
   await layout('mcpDraft', '', 'mcp-draft')
+  await layout('pickDraft', '', 'pick-draft')
   await layout('settings', '', 'settings-draft')
   await layout('settings', '#task-export', 'settings-task')
   await layout('library', '#library', 'library')

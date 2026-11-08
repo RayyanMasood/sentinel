@@ -87,12 +87,17 @@ export function checkQuote(doc: string, quote: string): Verdict {
 // ponytail: compares words, not meaning, so "don't go light on this" counts; the draft shows it with a button to undo it.
 export function checkSetting(doc: string, quote: string, name: string, short: boolean): Verdict | 'unnamed' {
   const v = checkQuote(doc, quote)
-  const words = (t: string) => squash(t).split(/[ -]/).map(bare).filter(Boolean)
-  const said = words(quote)
-  const want = words(name)
-  const named = said.some((_, k) => want.every((w, j) => said[k + j] === w))
-  if (v === 'short' && short) return named && said.length > want.length ? 'ok' : 'short'
+  const named = namesIn(quote, name)
+  if (v === 'short' && short) return named && wordsOf(quote).length > wordsOf(name).length ? 'ok' : 'short'
   return v === 'ok' && !short && !named ? 'unnamed' : v
+}
+
+const wordsOf = (t: string) => squash(t).split(/[ -]/).map(bare).filter(Boolean)
+// The quote has the name's words together and in order, whatever the case, dashes or marks around them.
+export function namesIn(quote: string, name: string): boolean {
+  const said = wordsOf(quote)
+  const want = wordsOf(name)
+  return want.length > 0 && said.some((_, k) => want.every((w, j) => said[k + j] === w))
 }
 
 export const sectionOf = (doc: string, quote: string): string | undefined => {

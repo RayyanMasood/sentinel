@@ -2,7 +2,7 @@
 //   node --test tests/quote.test.mjs
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { checkQuote, nearest, sectionOf, sectionsOf, spanOf, squash, unquoted } from '../hooks/quote.ts'
+import { checkQuote, namesIn, nearest, sectionOf, sectionsOf, spanOf, squash, unquoted } from '../hooks/quote.ts'
 
 const PLAN = `# Studio bookings
 
@@ -180,4 +180,13 @@ test('words that are not there, or nothing at all, mark nothing', () => {
   assert.equal(spanOf('Members pay by card.', '   '), undefined)
   assert.equal(spanOf('Members pay by **card**', 'Members pay by card undefined'), undefined)
   assert.equal(spanOf('Members pay by card\nand more\nand more\nand more', 'Members pay by card and more and more and more and a lot more'), undefined)
+})
+
+test('a name counts only with its words together and in order, and an empty name names nothing', () => {
+  assert.equal(namesIn('Turn the Game-Dev preset on', 'game-dev'), true)
+  assert.equal(namesIn('turn the overseer off', 'overseer'), true)
+  assert.equal(namesIn('use the game preset for dev work', 'game-dev'), false)
+  assert.equal(namesIn('dev game', 'game-dev'), false)
+  assert.equal(namesIn('turn it off', ''), false)
+  assert.equal(namesIn('turn the overseers off', 'overseer'), false)
 })
