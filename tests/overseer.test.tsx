@@ -438,6 +438,16 @@ inRun('an answer about a stuck mark that has since ended tells Claude nothing', 
   await until(clock, () => logOf(eng).some(l => l.startsWith('service · overseer: wrong')))
 })
 
+// 17: a live look's answer was kept cut at 140 characters, mid-word, and the step's page showed it so.
+inRun("a look keeps the overseer's whole answer, while the log keeps a short line", async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  const answer = 'It has read src/refund.js eight times and never edited it. `git diff` is empty, and `npm test` has run only once. The bug is on one line. src/refund.js rounds to tenths. Round to cents instead, then run `npm test`.'
+  await fromAgent($, eng.agents()[0]!.id, `WRONG\n${answer}`)
+  const r = await runNow(eng, clock)
+  expect(r.looks[0].line).toBe(answer)
+  expect(r.log.find((l: any) => l.text.startsWith('service · overseer: wrong')).text.length).toBeLessThan(200)
+})
+
 // 17
 inRun('a stuck look is kept with its mark and answer, and how long the state took to move on after it', async ({ $, eng, clock }) => {
   await stuckTwice($, eng)

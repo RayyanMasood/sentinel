@@ -891,13 +891,15 @@ async function overseerAnswered($: $, id: string, answer: string) {
   const word = trap !== undefined && said.word === 'faster' ? 'wrong' : said.word
   const rest = said.rest
   await update($, overseers, m => ({ ...m, [id]: { state, word, ...(trap !== undefined ? { trap } : {}) } }))
-  const line = rest.replace(/\s+/g, ' ').slice(0, 140)
+  // The log keeps a short line; the look keeps the whole answer, which the overseer is told to keep to five lines.
+  const whole = rest.replace(/\s+/g, ' ').trim().slice(0, 1500)
+  const line = whole.slice(0, 140)
   const at = Date.now()
   await change($, r => {
     const lift = word === 'fine' && trap !== undefined ? r.traps.find(x => x.step === trap && x.end === undefined) : undefined
     return {
       ...r,
-      looks: [...(r.looks ?? []), { state, why: trap === undefined ? 'time' : 'stuck', ...(trap !== undefined ? { trap } : {}), at, word, ...(line ? { line } : {}) }],
+      looks: [...(r.looks ?? []), { state, why: trap === undefined ? 'time' : 'stuck', ...(trap !== undefined ? { trap } : {}), at, word, ...(whole ? { line: whole } : {}) }],
       traps: lift ? r.traps.map(x => (x === lift ? { ...x, end: r.step, muted: true } : x)) : r.traps,
       log: [...r.log, { t: now(), icon: '!', tone: word === 'fine' || word === 'silent' ? 'dim' : 'warn', text: `${state} · overseer: ${word}${line ? ` · ${line}` : ''}` },
         ...(lift ? [{ t: now(), icon: '✓', tone: 'ok' as const, text: 'Released · the overseer says it is moving' }] : [])],
