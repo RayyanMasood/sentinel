@@ -145,6 +145,22 @@ const midRun = (() => {
   return act(kept, { action: 'revise', order: ['pay', 'refund', 'wait', 'r1', 'pkg'], states: [{ id: 'pkg', label: 'Add a package', added: 'It needs a new package.', files: ['package.json'] }] }, '09:30').run
 })()
 
+// What each step changed: one step edited two files (one named like markup, and one twice) and had an edit refused, one
+// is on and has changed nothing yet, one finished having changed nothing, and one never started.
+const MARKUP_FILE = 'src/<b>rounding</b>.ts'
+const editedRun = (() => {
+  let r = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Refunds', states: [{ id: 'explore', label: 'Read the code' }, { id: 'service', label: 'RefundService', check: 'npm test -- refund', files: ['src/**'] }, { id: 'verify', label: 'Full suite', check: 'npm test' }, { id: 'docs', label: 'Docs', files: ['README.md'] }] }, '09:00', {}, now).run
+  const go = o => { r = observe(r, o, '09:05').run }
+  const move = input => { const a = act(r, input, '09:06', {}, now); if (!a.ok) throw new Error(a.text); r = a.run }
+  go({ kind: 'look', label: 'Read src/refund.ts', fp: 'a' })
+  move({ action: 'advance', to: 'service', evidence: 'found it' })
+  for (const [file, ver] of [['src/refund.ts', 'v1'], [MARKUP_FILE, 'v2'], ['src/refund.ts', 'v3']]) go({ kind: 'edit', label: `Edit ${file}`, file, ver })
+  go({ kind: 'edit', label: 'Edit package.json', file: 'package.json', denied: true })
+  go({ kind: 'check', label: 'npm test -- refund', pass: true, sig: '', sigText: '', fails: 0 })
+  move({ action: 'advance', to: 'verify', outcome: 'Wrote RefundService.' })
+  return r
+})()
+
 // The overseer's looks: a timed check run that fails, then the same file read again and again until the detector marks
 // the state stuck. The overseer looked once as the state ran long and once at the stuck mark.
 const LOOK_LINE = 'The rounding is in <b>money.ts</b>, see `round()`.'
@@ -168,6 +184,7 @@ const lookedDone = { ...looked, active: 'done', traps: [
 ], looks: [...looked.looks, { state: 'service', why: 'stuck', trap: T0.step + 20, at: now - 30_000, word: 'fine', line: 'Each read compares a new fixture.' }] }
 
 const VARIANTS = {
+  editedRun: page(editedRun),
   looksRun: page(looked),
   looksDone: page(lookedDone),
   proofDraft: page(proofDraft, { draftKey: 'p1' }),
@@ -1585,8 +1602,8 @@ async function hubPage() {
   }
 }
 
-// ONLY=presets, ONLY=points or ONLY=looks runs that block alone, for trying a break on it in seconds.
-const only = process.env.ONLY, quick = only === 'presets' || only === 'points' || only === 'looks'
+// ONLY=presets, ONLY=points, ONLY=looks, ONLY=bars or ONLY=changed runs that block alone, for trying a break on it in seconds.
+const only = process.env.ONLY, quick = ['presets', 'points', 'looks', 'bars', 'changed'].includes(only)
 try {
   if (!quick) {
   await hubPage()
@@ -2119,6 +2136,79 @@ try {
   await p.context().close()
   }
 
+  // What a step changed, on its page. How it can fail:
+  //  1. A step that edited files doesn't list them, lists one twice, or lists a file whose edit was refused.
+  //  2. A file name runs as markup.
+  //  3. A step that is on, or finished, with no edits says nothing, or claims a change.
+  //  4. A step that never started shows the list.
+  changed: {
+  if (only === 'presets' || only === 'points' || only === 'looks' || only === 'bars') break changed
+  const listed = async id => {
+    p = await open('editedRun', `#task-${id}`)
+    const head = p.locator('.tp-side h3', { hasText: /^Changed$/ })
+    const out = (await head.count()) ? { items: await head.locator('xpath=following-sibling::*[1]').locator('li').allInnerTexts(), text: await head.locator('xpath=following-sibling::*[1]').innerText(), markup: await p.locator('.tp-side .files li b').count() } : null
+    await p.context().close()
+    return out
+  }
+  const service = await listed('service')
+  check(same(service?.items, ['src/refund.ts', MARKUP_FILE]) && service.markup === 0, `changed: the step lists the files it changed, once each, refused ones left out, as text (${JSON.stringify(service)})`)
+  check((await listed('verify'))?.text === 'Nothing yet.', 'changed: a step that is on and has changed nothing says so')
+  check((await listed('explore'))?.text === 'Nothing.', 'changed: a finished step that changed nothing says so')
+  check((await listed('docs')) === null, 'changed: a step that never started has no Changed list')
+  if (only === 'changed') break others
+  }
+
+  // The slim bar, the figures under the words and the Map's arrowheads. How it can fail:
+  //  1. Scrolled down, the slim bar isn't the dark header's colour, so the hub's project tab above it no longer joins the page.
+  //  2. On that dark bar, the slim bar's word or text keep the light theme's colours and can't be read.
+  //  3. A figure moves as Elapsed or Agent work ticks over, as from "59 s" to "1 min" to "1 min 1 s".
+  //  4. A Map line has a head of another colour, as when pointing at a card lights its lines.
+  bars: {
+  if (only === 'presets' || only === 'points' || only === 'looks' || only === 'changed') break bars
+  for (const dark of [false, true]) {
+    const at = dark ? ' dark' : ''
+    p = await open('graph', '', { dark, height: 500 })
+    await p.mouse.move(700, 300)
+    await p.mouse.wheel(0, 2000)
+    await p.locator('#slim.on').waitFor()
+    const bar = await p.evaluate(() => {
+      const css = el => getComputedStyle(el)
+      const lum = c => { const [r, g, b] = c.match(/[\d.]+/g).slice(0, 3).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4 }); return .2126 * r + .7152 * g + .0722 * b }
+      const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + .05) / (y + .05) }
+      const bg = css(document.getElementById('slim')).backgroundColor
+      return { bg, top: css(document.querySelector('header.shell')).backgroundColor, word: ratio(css(document.getElementById('slimW')).color, bg), say: ratio(css(document.getElementById('slimS')).color, bg) }
+    })
+    check(bar.bg === bar.top, `bars${at}: the slim bar has the dark header's colour (${bar.bg}, the header ${bar.top})`)
+    check(bar.word >= 4.5 && bar.say >= 4.5, `bars${at}: the slim bar's word and text can be read on it (contrast ${bar.word.toFixed(1)} and ${bar.say.toFixed(1)})`)
+    const edges = await p.evaluate(() => {
+      const ticks = [...document.querySelectorAll('#fields [data-wall], #fields [data-run]')]
+      return ticks.length < 2 ? [] : ['59 s', '1 min', '1 min 1 s', '9 min 59 s', '10 min', '1 h', '1 h 59 min'].map(t => {
+        ticks.forEach(e => { e.textContent = t })
+        return [...document.querySelectorAll('#fields > .fd')].map(f => Math.round(f.getBoundingClientRect().right)).join()
+      })
+    })
+    check(edges.length && new Set(edges).size === 1, `bars${at}: the figures stay put as Elapsed and Agent work tick over (${[...new Set(edges)].join(' / ')})`)
+    await p.evaluate(() => scrollTo(0, 0))
+    await p.locator('#viewSeg [data-v=map]').click()
+    const odd = () => p.evaluate(() => [...document.querySelectorAll('#v-map path.ar, #v-map path.lp')].flatMap(l => {
+      const id = getComputedStyle(l).markerEnd.match(/#([\w-]+)/)?.[1], head = id && document.querySelector(`#${id} path`)
+      const line = getComputedStyle(l).stroke, fill = head ? getComputedStyle(head).fill : 'no head'
+      return line === fill ? [] : [`${l.getAttribute('class')}: line ${line}, head ${fill}`]
+    }))
+    const lines = await p.locator('#v-map path.ar').count(), loops = await p.locator('#v-map path.lp').count()
+    check(lines > 2 && loops === 1, `bars${at}: the Map has lines and a way back to look at (${lines}, ${loops})`)
+    check((await odd()).length === 0, `bars${at}: every Map line's head has its colour (${(await odd()).join(' | ')})`)
+    await p.locator('#v-map .mcard[data-u]').nth(1).hover()
+    await p.waitForTimeout(400)
+    check(await p.locator('#v-map .mapc.focus path.ar.on').count() > 0 && (await odd()).length === 0, `bars${at}: pointing at a card, its lines' heads take their colour (${(await odd()).join(' | ')})`)
+    await p.locator('#v-map path.lp').dispatchEvent('pointerover')
+    await p.waitForTimeout(400)
+    check(await p.locator('#v-map path.lp.on').count() === 1 && (await odd()).length === 0, `bars${at}: pointing at the way back, its head takes its colour (${(await odd()).join(' | ')})`)
+    await p.context().close()
+  }
+  if (only === 'bars') break others
+  }
+
   // The overseer's looks on the step's page, and check run times. How it can fail:
   //  1. The step's page leaves out a look, or doesn't say why it started (ran long or stuck) or what it said.
   //  2. The overseer's words run as markup.
@@ -2346,6 +2436,8 @@ try {
   await layout('usageRun', '#task-pay', 'usage-task')
   // The overseer's looks on the step's page, and the finished run's Stuck row.
   await layout('looksRun', '#task-service', 'looks-task')
+  // What a step changed, beside what it may change.
+  await layout('editedRun', '#task-service', 'changed-task')
   await layout('looksDone', '', 'looks-finish')
   }
   }

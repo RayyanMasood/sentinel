@@ -79,6 +79,16 @@ function closeVisit(tasks: Record<string, Task> | undefined, id: string, now: nu
   const visits = own.visits.map((v, k) => (k === own.visits.length - 1 && v.to === undefined ? { ...v, to: now } : v))
   return { ...tasks, [id]: { ...own, visits, ...(outcome ? { outcome } : {}) } }
 }
+// Opens a visit on a task. A task sent back to starts without the outcome of its first pass, and keeps the files it changed.
+function openVisit(tasks: Record<string, Task> | undefined, id: string, visit: Task['visits'][number]): Record<string, Task> {
+  const own = taskIn(tasks, id)
+  return { ...tasks, [id]: { visits: [...(own?.visits ?? []), visit], ...(own?.edited ? { edited: own.edited } : {}) } }
+}
+// Adds the files a task changed, each once.
+function withEdited(tasks: Record<string, Task> | undefined, id: string, files: string[]): Record<string, Task> {
+  const own = taskIn(tasks, id) ?? { visits: [] }
+  return files.length ? { ...tasks, [id]: { ...own, edited: [...new Set([...(own.edited ?? []), ...files])] } } : { ...tasks }
+}
 
 export const emptyRun = (): Run => ({
   signedOff: false, plan: null, active: null, enteredAt: 0, step: 0, calls: [], traps: [],
@@ -253,9 +263,9 @@ export const memberOff = (r: Run, id: string, why: string, t: string, now: numbe
   ({ ...offMember(r, id), tasks: closeVisit(r.tasks, id, now), log: [...r.log, { t, icon: '⚠', tone: 'err', text: `${id} · member taken off · ${why}` }] })
 
 // A member's work passed its check and is applied to the project: its state is done.
-export function memberIn(r: Run, id: string, outcome: string | undefined, t: string, now: number): Run {
+export function memberIn(r: Run, id: string, outcome: string | undefined, t: string, now: number, files: string[] = []): Run {
   if (!r.running?.[id]) return r
-  return { ...offMember(r, id), done: [...doneOf(r), id], tasks: closeVisit(r.tasks, id, now, clip(outcome)), log: [...r.log, { t, icon: '⇇', tone: 'ok', text: `${id} · member work applied` }] }
+  return { ...offMember(r, id), done: [...doneOf(r), id], tasks: withEdited(closeVisit(r.tasks, id, now, clip(outcome)), id, files), log: [...r.log, { t, icon: '⇇', tone: 'ok', text: `${id} · member work applied` }] }
 }
 
 const offMember = (r: Run, id: string): Run => ({ ...r, running: Object.fromEntries(members(r).filter(([k]) => k !== id)) })
@@ -264,7 +274,7 @@ export function startMember(r: Run, id: string, m: Omit<Member, 'since'>, t: str
   return {
     ...r,
     running: { ...r.running, [id]: { ...m, since: now } },
-    tasks: { ...r.tasks, [id]: { visits: [...(taskIn(r.tasks, id)?.visits ?? []), { from: now, by: 'member' }] } },
+    tasks: openVisit(r.tasks, id, { from: now, by: 'member' }),
     log: [...r.log, { t, icon: '⇉', tone: 'acc', text: `${id} · member started${m.how ? ` · ${m.how}` : ''}` }],
   }
 }
@@ -712,7 +722,7 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
   }
 
   const calls = [...r.calls.filter(x => x.step <= r.enteredAt), ...all].slice(-MAX_CALLS)
-  const run: Run = { ...r, step, calls, traps, audit, log: log.slice(-60), ...(lastFail ? { lastFail } : {}) }
+  const run: Run = { ...r, step, calls, traps, audit, log: log.slice(-60), ...(lastFail ? { lastFail } : {}), ...(o.kind === 'edit' && !o.denied ? { tasks: withEdited(r.tasks, state, [o.file]) } : {}) }
   if (trapped) note = noteText(run, trapped, c.H)
   return { run, note, trapped }
 }
@@ -2146,8 +2156,8 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
   // Close the visit that ends here, and those of members let go; keep what was done here, open the next visit.
   let tasks = closeVisit(r.tasks, st.id, now, back ? undefined : outcome)
   for (const id of Object.keys(r.running ?? {}).filter(id => !running?.[id])) tasks = closeVisit(tasks, id, now)
-  // Entering a task opens a visit. A task sent back to starts without the outcome of its first pass.
-  if (to !== 'done') tasks[to] = { visits: [...(taskIn(tasks, to)?.visits ?? []), { from: now }] }
+  // Entering a task opens a visit.
+  if (to !== 'done') tasks = openVisit(tasks, to, { from: now })
   const run: Run = {
     ...r, active: to, done, ...(running ? { running } : {}), enteredAt: r.step, loops, lastLoop: isLoop ? key : undefined,
     traps: r.traps.map(x => (x.end === undefined ? { ...x, end: r.step } : x)),
@@ -2166,8 +2176,7 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
 function reopen(r: Run, st: StateDef, failed: StateDef[], proofs: Proofs, outcome: string | undefined, t: string, now: number): Acted {
   const ids = failed.map(s => s.id)
   const first = ids[0]!
-  const tasks = closeVisit(r.tasks, st.id, now, outcome)
-  tasks[first] = { visits: [...(taskIn(tasks, first)?.visits ?? []), { from: now }] }
+  const tasks = openVisit(closeVisit(r.tasks, st.id, now, outcome), first, { from: now })
   const checks = [...new Set(failed.map(s => s.check!))]
   const why = checks.map(c => `\`${c}\` (${failed.filter(s => s.check === c).map(s => s.id).join(', ')}): ${proofs[c]!.sigText}`)
   // Their checks just failed twice, so the start check would only fail a third time.
@@ -2377,7 +2386,7 @@ export type VM = {
   // needs: every state it needs, the one before it when it lists none. waits: those not done yet.
   // skipped: why the user skipped it; it still shows as done.
   // weightNow: what the state runs at, with the Library's per-state settings on. noRerun: a member running it misses Sentinel's rerun.
-  states: (StateDef & { weightNow?: Weight; skips?: { name: string; why: string }[]; noRerun?: true; asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; needs: string[]; waits: string[]; skipped?: string })[]
+  states: (StateDef & { weightNow?: Weight; skips?: { name: string; why: string }[]; noRerun?: true; asks?: AskFact[]; status: Status; from?: number; to?: number; since?: number; ms?: number; visits?: number; spans?: Span[]; outcome?: string; edited?: string[]; needs: string[]; waits: string[]; skipped?: string })[]
   // Some state lists its needs, so the views show what each one needs.
   deps: boolean
   loops: { from: string; to: string; count: number; hot: boolean }[]
@@ -2666,6 +2675,12 @@ export function overseerSays(answer: string): { word: OverseerWord; rest: string
   return m ? { word: m[1]!.toLowerCase() as OverseerWord, rest: text.slice(m[0].length) } : { word: 'unclear', rest: text }
 }
 
+// The files a task changed. A run kept from before tasks recorded them has what its ledger still holds.
+function editedOf(r: Run, id: string) {
+  const files = taskIn(r.tasks, id)?.edited ?? [...new Set(r.calls.flatMap(c => (c.state === id && c.kind === 'edit' && !c.denied && c.file ? [c.file] : [])))]
+  return files.length ? { edited: files } : {}
+}
+
 // What the views need for a task's clock and outcome.
 function timeOf(k?: Task) {
   const last = k?.visits.at(-1)
@@ -2790,6 +2805,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
         ...(facts?.asks.get(s.id) ? { asks: facts.asks.get(s.id) } : {}),
         // A draft has no clock until the user locks it.
         ...(phase === 'draft' ? {} : timeOf(taskIn(r.tasks, s.id))),
+        ...(phase === 'draft' ? {} : editedOf(r, s.id)),
         status: (phase === 'complete' || done.has(s.id) ? 'done' : i === pos ? (red ? 'trap' : 'active') : r.running?.[s.id] ? 'running' : 'todo') as Status,
         needs: s.id === 'done' ? [] : needsOf(plan.states, s.id),
         waits: phase === 'complete' || done.has(s.id) || s.id === 'done' ? [] : needsOf(plan.states, s.id).filter(n => !done.has(n)),

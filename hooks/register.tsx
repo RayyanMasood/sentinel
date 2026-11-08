@@ -2244,7 +2244,7 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     await change($, x => {
       late = x.running?.[id]?.agent !== m.agent
       // Either way the member's work is in the project now.
-      return (landed = touched(late ? x : memberIn(x, id, answer, now(), Date.now())))
+      return (landed = touched(late ? x : memberIn(x, id, answer, now(), Date.now(), files)))
     })
     left = left.filter(f => !files.includes(f))
     // Its work is in the project now, so the state's parts are proved as they stand.

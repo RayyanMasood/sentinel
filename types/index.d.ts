@@ -305,7 +305,9 @@ export type Trip = { from: string; to: string; at: number; t: string; reason: st
 // The times a state was active (ms since the epoch; a visit with no `to` is still running), and what was done there.
 // cont: a stretch that carries on a visit after a pause or a closed session. It is not a new visit.
 // by: 'member' on a visit a member agent worked, in its own worktree; the main conversation's visits have none.
-export type Task = { visits: { from: number; to?: number; cont?: boolean; by?: 'member' }[]; outcome?: string }
+// edited: the files its edits changed, and a member's files once applied, each once in the order first changed. Kept here
+// since the ledger keeps only its last calls.
+export type Task = { visits: { from: number; to?: number; cont?: boolean; by?: 'member' }[]; outcome?: string; edited?: string[] }
 
 // What the model sends to the plan tool.
 export type PlanInput = {

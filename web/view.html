@@ -58,11 +58,13 @@
   --glow-a: .24;
   --tick: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5 10-10.5'/%3E%3C/svg%3E");
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"] { --shell: #070a0d; --shell-2: #121820; --shell-ink: #e9edf1; --shell-ink-2: #909ba7; --shell-hair: #1d252d; }
+/* The slim bar has the dark header's colour in both themes, so the hub's project tab above it still joins the page, and
+   what sits on it takes the dark theme's colours. */
+:root[data-theme="dark"], .slim {
   color-scheme: dark;
   --ground: #0b1016; --panel: #131b23; --sunk: #0f161d; --hair: #202a35; --hair-2: #2e3a47;
   --ink: #e9edf1; --ink-2: #bac3cc; --ink-3: #909ba7; --ink-4: #5d6873;
-  --shell: #070a0d; --shell-2: #121820; --shell-ink: #e9edf1; --shell-ink-2: #909ba7; --shell-hair: #1d252d;
   --blue: #66c0f4; --blue-soft: #11293f;
   --amber: #f4b223; --amber-soft: #2f240b;
   --red: #ff7a6e; --red-soft: #3a1714;
@@ -76,16 +78,17 @@
   --sh-lift: 0 1px 2px rgb(0 0 0 / .45); --sh-slant: 0 6px 9px -4px rgb(0 0 0 / .6), 0 1px 2px rgb(0 0 0 / .35); --glow-a: .17;
 }
 
-/* What each run state colours. --tone is for text, --tone-fill for marks and the stub, --glow-rgb for the light at the top of the page. */
-body { --tone: var(--blue); --tone-fill: var(--blue-fill); --tone-soft: var(--blue-soft); --tone-on: #10161d; --glow-rgb: 26 159 255;
+/* What each run state colours. --tone is for text, --tone-fill for marks and the stub, --glow-rgb for the light at the top of the page.
+   The slim bar works them out again from its own colours. */
+body, .slim { --tone: var(--blue); --tone-fill: var(--blue-fill); --tone-soft: var(--blue-soft); --tone-on: #10161d; --glow-rgb: 26 159 255;
   --stub-bg: var(--sunk); --stub-ink: var(--ink); --stub-ink-2: var(--ink-2); --stub-line: var(--hair-2); }
-body[data-state="question"], body[data-state="needs"], body[data-state="draft"] { --tone: var(--ink); --tone-fill: var(--amber-fill); --tone-soft: var(--amber-soft); --tone-on: #10161d; --glow-rgb: 244 178 35;
+body:is([data-state="question"], [data-state="needs"], [data-state="draft"]), body:is([data-state="question"], [data-state="needs"], [data-state="draft"]) .slim { --tone: var(--ink); --tone-fill: var(--amber-fill); --tone-soft: var(--amber-soft); --tone-on: #10161d; --glow-rgb: 244 178 35;
   --stub-bg: var(--amber-fill); --stub-ink: #10161d; --stub-ink-2: #3d2e05; --stub-line: rgb(16 22 29 / .35); }
-body[data-state="stuck"] { --tone: var(--red); --tone-fill: var(--red-fill); --tone-soft: var(--red-soft); --tone-on: #fff; --glow-rgb: 196 43 31;
+body[data-state="stuck"], body[data-state="stuck"] .slim { --tone: var(--red); --tone-fill: var(--red-fill); --tone-soft: var(--red-soft); --tone-on: #fff; --glow-rgb: 196 43 31;
   --stub-bg: var(--red-fill); --stub-ink: #fff; --stub-ink-2: rgb(255 255 255 / .9); --stub-line: rgb(255 255 255 / .5); }
-body[data-state="paused"] { --tone: var(--ink-3); --tone-fill: var(--ink-3); --tone-soft: var(--sunk); --tone-on: var(--panel); --glow-a: 0;
+body[data-state="paused"], body[data-state="paused"] .slim { --tone: var(--ink-3); --tone-fill: var(--ink-3); --tone-soft: var(--sunk); --tone-on: var(--panel); --glow-a: 0;
   --stub-bg: var(--grey-fill); --stub-ink: var(--ink); --stub-ink-2: var(--ink-2); --stub-line: var(--hair-2); }
-body[data-state="done"] { --tone: var(--green); --tone-fill: var(--green-fill); --tone-soft: var(--green-soft); --tone-on: #fff; --glow-rgb: 13 122 74;
+body[data-state="done"], body[data-state="done"] .slim { --tone: var(--green); --tone-fill: var(--green-fill); --tone-soft: var(--green-soft); --tone-on: #fff; --glow-rgb: 13 122 74;
   --stub-bg: var(--green-fill); --stub-ink: #fff; --stub-ink-2: rgb(255 255 255 / .9); --stub-line: rgb(255 255 255 / .5); }
 
 /* ============================================================
@@ -242,7 +245,7 @@ select.field { background-color: color-mix(in srgb, var(--ink) 12%, var(--panel)
 .ibtn:hover { background: var(--shell-2); }
 
 /* The slim bar: takes over once the pass scrolls out of view. Docked to the top edge, so it has no corners. */
-.slim { position: fixed; z-index: 5; top: 0; left: 0; right: 0; transform: translateY(-100%); visibility: hidden; transition: transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s .22s; background: var(--panel); border-bottom: 1px solid var(--hair); box-shadow: var(--shadow-float); }
+.slim { position: fixed; z-index: 5; top: 0; left: 0; right: 0; transform: translateY(-100%); visibility: hidden; transition: transform .22s cubic-bezier(.2, .8, .2, 1), visibility 0s .22s; background: var(--shell); border-bottom: 1px solid var(--shell-hair); color: var(--ink); box-shadow: var(--shadow-float); }
 .slim.on { transform: none; visibility: visible; transition-delay: 0s; }
 .slim-in { display: flex; align-items: center; gap: var(--s4); max-width: 1440px; height: 52px; margin: 0 auto; padding: 0 var(--s6); }
 .slim-w { font-size: 16px; line-height: 1; letter-spacing: .03em; color: var(--tone); white-space: nowrap; }
@@ -267,6 +270,9 @@ select.field { background-color: color-mix(in srgb, var(--ink) 12%, var(--panel)
 .fd { display: flex; flex-direction: column; gap: 2px; }
 .fd b { font: 600 19px/26px var(--f-disp); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .fd b code { font-size: 15px; font-weight: 500; color: var(--tone); }
+/* A ticking time keeps the width of its longest usual reading, so the figures after it don't move each second. */
+.fields :is([data-wall], [data-run]) { display: inline-block; vertical-align: top; }
+.fields :is([data-wall], [data-run])::after { content: "9 min 59 s\A 1 h 59 min"; display: block; height: 0; overflow: hidden; visibility: hidden; white-space: pre; }
 .meter { position: relative; display: inline-block; width: 64px; height: 6px; margin-right: 8px; background: color-mix(in srgb, var(--ink) 12%, transparent); box-shadow: var(--sh-well); vertical-align: 3px; }
 .meter i { display: block; height: 100%; background: var(--ink); box-shadow: inset 0 1px 0 var(--hl); }
 .meter::after { content: ""; position: absolute; left: 25%; top: -3px; bottom: -3px; width: 1.5px; background: var(--red); }
@@ -492,7 +498,7 @@ body[data-state="working"] .stub h2 { font-size: 21px; }
 .mapc .lp { fill: none; stroke: var(--ink-4); stroke-width: 1.25; stroke-dasharray: 4 3; pointer-events: stroke; }
 .mapc .lp.used { stroke: var(--ink-2); stroke-width: 1.5; }
 .mapc .lpt { fill: var(--ink-2); font: 600 11.5px var(--f-disp); }
-.mk { fill: var(--hair-2); } .mk.done { fill: var(--ink-3); } .mk.lp { fill: var(--ink-4); } .mk.used { fill: var(--ink-2); }
+.mk { fill: var(--hair-2); } .mk.done { fill: var(--ink-3); } .mk.lp { fill: var(--ink-4); } .mk.used { fill: var(--ink-2); } .mk.on { fill: var(--ink-2); } .mk.lpon { fill: var(--ink); }
 .mgl { position: absolute; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px 0 4px; border: 0; border-radius: var(--r1); background: none;
   font: 600 13px/1 var(--f-text); color: var(--ink); white-space: nowrap; }
 button.mgl:hover { background: var(--hair); }
@@ -543,8 +549,9 @@ button.mcard:not(.now):hover { border-color: var(--ink-4); }
 /* Point at a card: its lines stand out, and side by side so do the cards they reach. */
 .mapc .ar, .mapc .lp, .mapc .lpt, div.mcard { transition: opacity .15s, stroke .15s; }
 .mapc.focus .ar:not(.on), .mapc.focus .lp:not(.on), .mapc.focus .lpt { opacity: .2; }
-.mapc.focus .ar.on { stroke: var(--ink-2); }
-.mapc.focus .lp.on { stroke: var(--ink); stroke-width: 2; }
+/* A marker sits in the page's one <defs>, so it can't take its line's colour; a lit line swaps to a head of its own. */
+.mapc.focus .ar.on { stroke: var(--ink-2); marker-end: url(#mk-on); }
+.mapc.focus .lp.on { stroke: var(--ink); stroke-width: 2; marker-end: url(#mk-lp-on); }
 .mapc.graph.focus .mcard:not(.on) { opacity: .45; }
 .mcard.fold .chev { transform: rotate(-90deg); }
 .mgl .chev { width: 13px; height: 13px; }
@@ -1441,6 +1448,8 @@ button.key-i:hover { color: var(--ink); }
     <marker id="mk-done" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk done" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-lp-idle" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="mk lp" d="M0,1L9,5L0,9z"/></marker>
     <marker id="mk-lp-used" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="mk used" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="mk-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path class="mk on" d="M0,1L9,5L0,9z"/></marker>
+    <marker id="mk-lp-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto"><path class="mk lpon" d="M0,1L9,5L0,9z"/></marker>
     <marker id="sy-ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mka" d="M0,1L9,5L0,9z"/></marker>
     <marker id="sy-mt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mkt" d="M0,1L9,5L0,9z"/></marker>
     <marker id="sy-mb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="sy-mkb" d="M0,1L9,5L0,9z"/></marker>
@@ -3679,6 +3688,7 @@ function taskPage(s, i, T) {
         <aside class="tp-side">
           <h3>Done when</h3>${done}${s.wait === 'after' ? `<p>${s.check ? 'Then you review it' : 'You approve it'}, here or in the chat.</p>` : ''}${s.wait && s.wait !== 'after' ? '<p class="fine">It waits for your OK before it starts.</p>' : ''}
           <h3>May change</h3>${files.length ? `<ul class="files">${files.map(x => `<li>${code(x)}</li>`).join('')}</ul>` : `<p>Nothing. It only ${s.wait ? 'waits' : 'reads'}.</p>`}
+          ${s.from !== undefined ? `<h3>Changed</h3>${s.edited?.length ? `<ul class="files">${s.edited.map(x => `<li>${code(x)}</li>`).join('')}</ul>` : `<p class="quiet">${s.status === 'done' ? 'Nothing.' : 'Nothing yet.'}</p>`}<p class="fine">Files written by shell commands don't show here.</p>` : ''}
           ${s.flow ? `<h3>Added by</h3><p>Your <b>${esc(s.flow.name)}</b> flow.${s.flow.why ? ` ${ticks(s.flow.why)}.` : ''}</p>` : ''}
           ${act && act.id !== s.id ? `<h3>${hereWord()}</h3><p><button type="button" class="lnk" data-task="${esc(act.id)}">${code(act.id)}${icon('arrow')}</button></p>` : ''}
         </aside>

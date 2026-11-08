@@ -845,6 +845,40 @@ const go = (r: Run, input: PlanInput, now: number): Run => {
 }
 const read = (r: Run) => observe(r, { kind: 'look', label: 'Read x', fp: `x${r.step}` }, '09:00').run
 const pass = (r: Run, check: string) => observe(r, { kind: 'check', label: check, pass: true, sig: '', sigText: '', fails: 0 }, '09:00').run
+const edited = (r: Run, file: string, denied?: true) => observe(r, { kind: 'edit', label: `Edit ${file}`, file, ver: `v${r.step}`, ...(denied && { denied }) }, '09:00').run
+
+// The files each step changed, for its page. How it can fail:
+//  1. A step keeps no record of the files its edits changed, or lists one twice.
+//  2. A refused edit counts as a change.
+//  3. A long plan's early step loses its files once the ledger keeps only its last calls.
+//  4. Going back to a step forgets the files changed in its first visit.
+//  5. A member's files don't show once Sentinel applies its work, or a member picking a step up forgets what was changed there before.
+//  6. A run kept from before steps recorded their files shows none, though its ledger still holds the edits.
+test("each step keeps the files its edits changed, past the ledger's last calls and through a way back", () => {
+  let r = go(read(go(signed(), PLAN, T0)), { action: 'advance', to: 'service', evidence: 'found it' }, min(1))
+  r = edited(edited(edited(edited(r, 'src/refund.ts'), 'src/refund.test.ts'), 'src/refund.ts'), 'src/payments.ts', true)
+  for (let i = 0; i < 410; i++) r = read(r)
+  expect(r.calls.some(c => c.kind === 'edit')).toBe(false)
+  r = go(pass(r, 'npm test -- refund'), { action: 'advance', to: 'verify', outcome: 'Wrote RefundService.' }, min(3))
+  r = go(pass(r, 'npm test'), { action: 'advance', to: 'service', evidence: 'suite fails in refund' }, min(5))
+  r = edited(r, 'src/refund-rounding.ts')
+  const at = (run: Run, id: string) => summarize(run).states.find(s => s.id === id)!
+  expect(at(r, 'service').edited).toEqual(['src/refund.ts', 'src/refund.test.ts', 'src/refund-rounding.ts'])
+  expect(at(r, 'explore').edited).toBeUndefined()
+  expect(at(r, 'verify').edited).toBeUndefined()
+  // A run kept from before: its steps have no files, so the page takes what the ledger still holds.
+  const old: Run = { ...r, tasks: Object.fromEntries(Object.entries(r.tasks!).map(([k, t]) => [k, { visits: t.visits }])) }
+  expect(at(old, 'service').edited).toEqual(['src/refund-rounding.ts'])
+})
+
+test("a member's applied files show on its step, after what was changed there before", () => {
+  let r = go(read(go(signed(), GRAPH, T0)), { action: 'advance', to: 'api', evidence: 'found it' }, min(1))
+  r = { ...r, tasks: { ...r.tasks, ui: { visits: [{ from: T0, to: min(1) }], edited: ['ui/old.tsx'] } } }
+  r = startMember(r, 'ui', { agent: 'm-1', name: 'sentinel-ui-x' }, '09:01', min(1))
+  expect(r.tasks!.ui!.edited).toEqual(['ui/old.tsx'])
+  r = memberIn(r, 'ui', 'Added the box.', '09:03', min(3), ['ui/box.tsx', 'ui/old.tsx'])
+  expect(summarize(r).states.find(s => s.id === 'ui')!.edited).toEqual(['ui/old.tsx', 'ui/box.tsx'])
+})
 
 test('each task keeps the time of every visit; going back reopens a task and keeps the reason', () => {
   let r = go(signed(), PLAN, T0)
@@ -1489,7 +1523,7 @@ test('a passing member hands back a staged diff that is applied to the project',
   expect(run.running).toEqual({})
   expect(run.active).toBe('api')
   // The run keeps who did it, so the views can say so after the member is gone.
-  expect(summarize(run).states.find(s => s.id === 'ui')).toMatchObject({ status: 'done', outcome: 'Added the search box.', spans: [{ by: 'member' }] })
+  expect(summarize(run).states.find(s => s.id === 'ui')).toMatchObject({ status: 'done', outcome: 'Added the search box.', spans: [{ by: 'member' }], edited: ['ui/box.tsx'] })
   expect(summarize(run).states.find(s => s.id === 'api')!.spans!.some(p => p.by)).toBe(false)
   expect(eng.submitted.at(-1)).toMatch(/ui is in: its member passed `npm test -- ui` in its worktree\. Sentinel applied its changes to the project: ui\/box\.tsx\./)
   // A late answer from the same agent changes nothing.
