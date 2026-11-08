@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { act, emptyRun, libraryOn, lockDraft, summarize } from '../hooks/core.ts'
+import { act, emptyRun, libraryOn, lockDraft, observe, summarize } from '../hooks/core.ts'
 import { BUILTIN_FLOWS, BUILTINS } from '../hooks/builtins.ts'
 import { parseSystem } from '../hooks/system.ts'
 
@@ -145,7 +145,31 @@ const midRun = (() => {
   return act(kept, { action: 'revise', order: ['pay', 'refund', 'wait', 'r1', 'pkg'], states: [{ id: 'pkg', label: 'Add a package', added: 'It needs a new package.', files: ['package.json'] }] }, '09:30').run
 })()
 
+// The overseer's looks: a timed check run that fails, then the same file read again and again until the detector marks
+// the state stuck. The overseer looked once as the state ran long and once at the stuck mark.
+const LOOK_LINE = 'The rounding is in <b>money.ts</b>, see `round()`.'
+const looked = (() => {
+  let r = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Refunds', states: [{ id: 'service', label: 'RefundService', check: 'npm test -- refund', files: ['src/**'] }, { id: 'verify', label: 'Full suite', check: 'npm test' }] }, '09:00', {}, now).run
+  const go = o => { r = observe(r, o, '09:05').run }
+  go({ kind: 'check', label: 'npm test -- refund', pass: false, sig: 'A', sigText: 'expected 49.99, received 50.00', fails: 1, ms: 42_000 })
+  for (let i = 0; i < 9; i++) go({ kind: 'look', label: 'Read src/refund.ts', fp: 'same' })
+  if (!r.traps[0]) throw new Error('no stuck mark')
+  return { ...r, looks: [
+    { state: 'service', why: 'time', at: now - 600_000, word: 'faster', line: 'Run one test file instead of the suite.' },
+    { state: 'service', why: 'stuck', trap: r.traps[0].step, at: now - 60_000, word: 'wrong', line: LOOK_LINE },
+  ] }
+})()
+const T0 = looked.traps[0]
+// Finished: the overseer agreed with the first stuck mark, said the second was moving, and never saw the third.
+const lookedDone = { ...looked, active: 'done', traps: [
+  { ...T0, end: T0.step + 9 },
+  { state: 'service', pattern: 'static', step: T0.step + 20, end: T0.step + 30, notes: 2, lastNote: T0.step + 28, muted: true },
+  { state: 'verify', pattern: 'cycle', step: T0.step + 40, end: T0.step + 48, notes: 1, lastNote: T0.step + 40 },
+], looks: [...looked.looks, { state: 'service', why: 'stuck', trap: T0.step + 20, at: now - 30_000, word: 'fine', line: 'Each read compares a new fixture.' }] }
+
 const VARIANTS = {
+  looksRun: page(looked),
+  looksDone: page(lookedDone),
   proofDraft: page(proofDraft, { draftKey: 'p1' }),
   proofOneLeft: page(answered(proofDraft, 'r1'), { draftKey: 'p2' }),
   proofAnswered: page(answered(answered(proofDraft, 'r1'), 'r2'), { draftKey: 'p3' }),
@@ -1561,8 +1585,8 @@ async function hubPage() {
   }
 }
 
-// ONLY=presets or ONLY=points runs that block alone, for trying a break on it in seconds.
-const only = process.env.ONLY, quick = only === 'presets' || only === 'points'
+// ONLY=presets, ONLY=points or ONLY=looks runs that block alone, for trying a break on it in seconds.
+const only = process.env.ONLY, quick = only === 'presets' || only === 'points' || only === 'looks'
 try {
   if (!quick) {
   await hubPage()
@@ -2095,6 +2119,37 @@ try {
   await p.context().close()
   }
 
+  // The overseer's looks on the step's page, and check run times. How it can fail:
+  //  1. The step's page leaves out a look, or doesn't say why it started (ran long or stuck) or what it said.
+  //  2. The overseer's words run as markup.
+  //  3. A step the overseer never looked at shows a look, or says nothing happened when one did.
+  //  4. Every call shows no time for a timed check run, or a time on a call that has none.
+  //  5. The finished run's Stuck row doesn't say whether the overseer agreed, or says so for a mark it never saw.
+  looks: {
+  if (only === 'presets' || only === 'points') break looks
+  p = await open('looksRun', '#task-service')
+  const items = await p.locator('.tlist li').allInnerTexts()
+  const ran = items.find(t => t.includes('ran long')), stuck = items.find(t => t.includes('stuck mark'))
+  check(!!ran && ran.includes('Overseer') && ran.includes('Could go faster') && ran.includes('Run one test file instead of the suite.'), `looks: the time look shows with what it said (${items.join(' | ')})`)
+  check(!!stuck && stuck.includes('Really stuck') && stuck.includes('The rounding is in <b>money.ts</b>, see round().'), `looks: the stuck look shows with what it said (${stuck})`)
+  check(await p.locator('.tlist li b:not([class])').count() === 0 && await p.locator('.tlist li code', { hasText: 'round()' }).count() === 1, "looks: the overseer's words run no markup, and code in backticks shows as code")
+  await p.context().close()
+  p = await open('looksRun', '#task-verify')
+  check(await p.locator('.tlist li').count() === 0 && (await p.locator('.tp-main').innerText()).includes('Nothing was decided, asked or refused here.'), 'looks: a step with no look shows none')
+  await p.context().close()
+  p = await open('looksRun', '')
+  const rows = await p.locator('#ledger tr:has(td)').allTextContents()
+  const times = await p.locator('#ledger tr:has(td) small').allTextContents()
+  check(rows[0]?.includes('42 s') && same(times, ['42 s']), `looks: Every call shows the timed check run's time and no other (${times.join(' | ')})`)
+  await p.context().close()
+  p = await open('looksDone', '')
+  const stuckRow = await p.locator('.dl dt', { hasText: 'Stuck' }).locator('xpath=following-sibling::dd[1]').innerText()
+  const lines = stuckRow.split('\n')
+  check(lines.length === 3 && lines[0].includes('the overseer agreed') && lines[1].includes('the overseer said it was moving') && !lines[2].includes('overseer'), `looks: the Stuck row says whether the overseer agreed (${lines.join(' | ')})`)
+  await p.context().close()
+  if (only === 'looks') break others
+  }
+
   // What you asked for, on a draft. How it can fail:
   //  1. A draft with points shows no block, or a row misses the user's words or the steps that deliver them.
   //  2. A point left out isn't amber or misses Claude's reason, or one the plan delivers shows amber.
@@ -2289,6 +2344,9 @@ try {
   await layout('closedDone', '', 'closed-finish')
   await layout('usageRun', '', 'usage')
   await layout('usageRun', '#task-pay', 'usage-task')
+  // The overseer's looks on the step's page, and the finished run's Stuck row.
+  await layout('looksRun', '#task-service', 'looks-task')
+  await layout('looksDone', '', 'looks-finish')
   }
   }
 } catch (e) {

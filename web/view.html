@@ -748,7 +748,7 @@ code.blk { display: block; margin-top: 6px; padding: 8px 10px; border-radius: va
 .tlist b { color: var(--ink); font-weight: 600; }
 .tlist .quiet { font: 500 13px/1 var(--f-disp); }
 .tlist .ans { display: block; margin-top: 2px; color: var(--ink); }
-.tlist b.k-refused { color: var(--red); } .tlist b.k-asked { color: var(--amber); }
+.tlist b.k-refused { color: var(--red); } .tlist b.k-asked { color: var(--amber); } .tlist b.k-look { color: var(--blue); }
 .skip { display: grid; gap: 6px; max-width: 520px; margin-top: var(--s3); padding: var(--s3) var(--s4); border: 1px solid var(--hair); border-radius: var(--r2); }
 .skip .row { display: flex; gap: var(--s2); }
 .skip .field { flex: 1; }
@@ -1659,6 +1659,11 @@ button.key-i:hover { color: var(--ink); }
 const THETA = 0.25, K = 8
 const PATTERN = { cycle: 'going in circles', drift: 'reading without changing anything', static: 'making no progress', hung: 'held up by a stuck check' }
 const KIND = { refused: ['Refused', 'err'], blocked: ['Held question', 'warn'], decided: ['Decided', 'ink2'], amended: ['Changed scope', 'warn'], auto: ['Kept going', 'ink3'], asked: ['Asked you', 'ask'], escalated: ['Flagged', 'warn'] }
+// What the overseer said, by why it looked (a state running long, or a stuck mark) and the first word of its answer.
+const LOOK_SAID = { time: { fine: 'Fine', faster: 'Could go faster', wrong: 'Something is wrong' }, stuck: { fine: 'Moving, so the stuck mark was lifted', wrong: 'Really stuck' } }
+const lookSaid = l => LOOK_SAID[l.why]?.[l.word] ?? (l.word === 'silent' ? 'Said nothing' : 'No clear answer')
+// A check run's time, as the Every call table shows it.
+const runTime = ms => ms < 1000 ? 'under 1 s' : fmtDur(ms)
 const $ = id => document.getElementById(id)
 const esc = t => String(t ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
 const code = t => `<code>${esc(t)}</code>`
@@ -3215,7 +3220,10 @@ function nowSec() {
       + (vm.startedAt && vm.endedAt ? dt('Took', `${fmtDur(tookMs())}, ${hm(vm.startedAt)} to ${hm(vm.endedAt)}${awayMs() >= 60000 ? `, not counting ${fmtDur(awayMs())} waiting on you or paused` : ''}`) : '')
       + (lg && taskMs(lg) ? dt('Longest', `${code(lg.id)}, ${fmtDur(taskMs(lg))}`) : '')
       + dt('Came back', used.length ? used.map(l => `${code(l.to)} from ${code(l.from)} ×${l.count}`).join('<br>') : 'Never')
-      + dt('Stuck', vm.traps.length ? vm.traps.map(t => `${code(t.state)}, calls ${t.step} to ${t.end ?? '?'}`).join('<br>') : 'Never')
+      + dt('Stuck', vm.traps.length ? vm.traps.map(t => {
+        const l = (vm.looks ?? []).find(x => x.trap === t.step)
+        return `${code(t.state)}, calls ${t.step} to ${t.end ?? '?'}${!l ? '' : l.word === 'wrong' ? ', and the overseer agreed' : l.word === 'fine' ? ', and the overseer said it was moving and lifted it' : ', and the overseer gave no clear answer'}`
+      }).join('<br>') : 'Never')
       + dt('Asked you', c.asked + c.escalated ? plural(c.asked + c.escalated, 'time') : 'Never')
       + dt('Decided', `${c.decided} without asking you`)
       + dt('Refused', plural(c.refused, 'action') + (c.blocked ? `, held ${plural(c.blocked, 'question')}` : ''))
@@ -3426,7 +3434,7 @@ function ledger() {
   $('ledgerTitle').textContent = vm.phase === 'live' ? `Every call in ${L.state}` : 'The last calls'
   $('ledgerCount').textContent = `${plural(L.rows.length, 'call')}, with how health was worked out`
   const head = `<tr><th>Call</th><th>What</th>${L.files.map(f => `<th title="${esc(f)}">${esc(base(f))}</th>`).join('')}<th>Check</th><th>Progress</th><th>Health</th></tr>`
-  const body = L.rows.map(r => `<tr class="${r.inWindow ? 'win' : ''}"><td class="dim">${r.step}</td><td class="${r.denied ? 'err' : ''}">${esc(trunc(r.label, 60))}${r.denied ? ' (refused)' : ''}</td>${r.vers.map(v => `<td class="${v === '·' ? 'dim' : ''}">${esc(v)}</td>`).join('')}<td class="${r.chkTone}">${esc(r.chk)}</td><td class="${r.uTone}">${esc(r.u)}</td><td class="${hTone(r.H)}">${r.H.toFixed(2)}</td></tr>`).join('')
+  const body = L.rows.map(r => `<tr class="${r.inWindow ? 'win' : ''}"><td class="dim">${r.step}</td><td class="${r.denied ? 'err' : ''}">${esc(trunc(r.label, 60))}${r.denied ? ' (refused)' : ''}</td>${r.vers.map(v => `<td class="${v === '·' ? 'dim' : ''}">${esc(v)}</td>`).join('')}<td class="${r.chkTone}">${esc(r.chk)}${r.ms != null ? ` · <small title="How long the check run took">${runTime(r.ms)}</small>` : ''}</td><td class="${r.uTone}">${esc(r.u)}</td><td class="${hTone(r.H)}">${r.H.toFixed(2)}</td></tr>`).join('')
   put($('ledger'), head + (body || `<tr><td colspan="${5 + L.files.length}" class="dim">No calls in this state yet.</td></tr>`))
   const h = vm.health
   put($('math'), !h ? '' : [
@@ -3639,6 +3647,9 @@ function taskPage(s, i, T) {
     + (into.length ? `<p>The plan allows a way back here from ${and(into.map(l => code(l.from) + used(l)))}.</p>` : '')
     + (outof.length ? `<p>From here the plan allows a way back to ${and(outof.map(l => code(l.to) + used(l)))}.</p>` : '')
   const along = [...vm.audit, ...vm.asked].filter(a => a.state === s.id).sort((a, b) => a.step - b.step)
+  // The overseer's looks at this state, after what was decided and asked.
+  const looks = (vm.looks ?? []).filter(l => l.state === s.id)
+  const look = l => `<li><time>${esc(hm(l.at))}</time><span><b class="k-look">Overseer</b> <span class="quiet">${l.why === 'stuck' ? 'looked at a stuck mark' : 'looked as it ran long'}</span><br>${esc(lookSaid(l))}${l.line ? `: ${ticks(l.line)}` : '.'}</span></li>`
   const tried = (vm.proof?.refused ?? []).filter(x => x.state === s.id)
   // Only you skip a state: Claude leaves it, and its check no longer runs before the plan completes.
   const skip = vm.phase === 'live' && online() && !s.skipped && s.status !== 'running'
@@ -3662,7 +3673,7 @@ function taskPage(s, i, T) {
           ${s.outcome ? `<h3>What was done</h3><p>${ticks(s.outcome)}</p>` : s.status === 'done' ? `<h3>What was done</h3>${s.evidence ? `<p>Already done when the plan was locked. Evidence: ${ticks(s.evidence)}</p>` : '<p class="quiet">No summary was written when this state finished.</p>'}` : ''}
           <h3>Where it stands</h3><p>${stand}</p>${skip}
           ${vm.deps && s.needs?.length ? `<h3>What it needs</h3><p>${and(s.needs.map(code))}. ${s.waits?.length ? `Still waiting for ${and(s.waits.map(code))}.` : s.needs.length === 1 ? 'It is done.' : 'All of them are done.'}</p>` : ''}
-          <h3>Along the way</h3>${along.length || tried.length ? `<ul class="tlist">${tried.map(x => `<li><time>${esc(x.t)}</time><span><b class="k-refused">Refused</b><br>${x.quote ? `“${esc(x.quote)}” ` : ''}${esc(x.says)}.</span></li>`).join('')}${along.map(a => `<li><time>${esc(a.t ?? '')}</time><span><b class="k-${esc(a.kind)}">${esc((KIND[a.kind] ?? [cap(a.kind)])[0])}</b> <span class="quiet">at call ${a.step}</span><br>${ticks(a.text)}</span></li>`).join('')}</ul>` : '<p class="quiet">Nothing was decided, asked or refused here.</p>'}
+          <h3>Along the way</h3>${along.length || tried.length || looks.length ? `<ul class="tlist">${tried.map(x => `<li><time>${esc(x.t)}</time><span><b class="k-refused">Refused</b><br>${x.quote ? `“${esc(x.quote)}” ` : ''}${esc(x.says)}.</span></li>`).join('')}${along.map(a => `<li><time>${esc(a.t ?? '')}</time><span><b class="k-${esc(a.kind)}">${esc((KIND[a.kind] ?? [cap(a.kind)])[0])}</b> <span class="quiet">at call ${a.step}</span><br>${ticks(a.text)}</span></li>`).join('')}${looks.map(look).join('')}</ul>` : '<p class="quiet">Nothing was decided, asked or refused here.</p>'}
           <h3>Ways back</h3>${ways}
         </div>
         <aside class="tp-side">

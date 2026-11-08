@@ -12,6 +12,15 @@
 //  7. An answer about a state that has since finished misdirects the main chat.
 //  8. Its calls land in the ledger and the health window, which measure the main run.
 //  9. Dropping hand-backs reaches other agents' reports or what the user typed.
+// A stuck look: the detector's second note on one stuck mark starts a look that asks only whether it is stuck.
+// 10. The second note still tells Claude to escalate, which pauses a run the user isn't watching, or no look starts.
+// 11. A stuck look offers FASTER, which can't say whether it is stuck, or starts with too little to judge the mark.
+// 12. FINE on a stuck look leaves the mark open, so notes keep coming on work that is moving.
+// 13. WRONG on a stuck look is lost, or a FASTER said anyway is dropped.
+// 14. A stuck look uses up a time mark, so the 30-minute look never comes.
+// 15. A stuck look starts with the switch off, beside a running look, or more than once for one mark.
+// 16. An answer about a stuck mark that has since ended misdirects the main chat.
+// 17. Looks leave no record, so nobody can tell later how often the detector was right or whether looks helped.
 import { expect, mock } from 'claude-code/testing'
 import { overseerPrompt, overseerSays } from '../hooks/core'
 import { REFUND, ROOT, TOOL, endTurn, engine, said, test, until } from './kit'
@@ -24,6 +33,11 @@ const STATES = [
 const plan = ($: any, input: object) => $.tool.call({ tool: TOOL, ...input })
 const runOf = (eng: ReturnType<typeof engine>) => JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`] ?? '{}')
 const logOf = (eng: ReturnType<typeof engine>): string[] => (runOf(eng).log ?? []).map((l: any) => l.text)
+// run.json is written on a short timer after a change.
+const runNow = async (eng: ReturnType<typeof engine>, clock: any) => {
+  await clock.advance(20)
+  return runOf(eng)
+}
 const toolNote = async ($: any) => String((await $.tool.call({ tool: 'Read', file_path: `${ROOT}/src/money.ts` })).context ?? '')
 const fromAgent = ($: any, id: string, answer: string, more: object = {}) =>
   $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId: 'a', reason: 'answer', agentId: id, ...more })
@@ -36,8 +50,8 @@ let started = 0
 const clockFrom = (on: any) => mock.clock(on, { now: (started = Date.now()) })
 const minutes = (clock: any, n: number) => clock.set(started + n * 60_000)
 
-// A session with a locked plan and the main chat in a turn.
-const inRun = (name: string, body: (x: { $: any; eng: ReturnType<typeof engine>; clock: any }) => Promise<void>) =>
+// A session with a locked plan and the main chat in a turn. setup runs before the plan, such as a Library switch.
+const inRun = (name: string, body: (x: { $: any; eng: ReturnType<typeof engine>; clock: any }) => Promise<void>, setup?: ($: any) => Promise<unknown>) =>
   test(name, async ($: any, on: any) => {
     const eng = engine(on)
     const clock = clockFrom(on)
@@ -45,6 +59,7 @@ const inRun = (name: string, body: (x: { $: any; eng: ReturnType<typeof engine>;
     on('tool.register', () => ({ value: undefined }))
     on('command.register', () => ({ value: undefined }))
     await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+    await setup?.($)
     await $.tool.call({ tool: 'ExitPlanMode' })
     await plan($, { action: 'define', title: 'Refunds', states: STATES })
     await clock.advance(20)
@@ -117,6 +132,8 @@ inRun('FINE stays out of the main chat, and goes in the log', async ({ $, eng, c
   expect(await toolNote($)).not.toMatch(/overseer/i)
   expect(eng.submitted.join('\n')).not.toMatch(/overseer/i)
   await until(clock, () => logOf(eng).includes('service · overseer: fine · A long refactor, moving steadily.'))
+  // 17
+  expect((await runNow(eng, clock)).looks).toEqual([{ state: 'service', why: 'time', at: expect.any(Number), word: 'fine', line: 'A long refactor, moving steadily.' }])
 })
 
 inRun('WRONG reaches a working main chat on its next tool result, and tells the user', async ({ $, eng, clock }) => {
@@ -285,6 +302,152 @@ inRun('a running overseer does not keep the clock going once the main chat stops
   await until(clock, () => eng.agents().length)
   await endTurn($)
   await until(clock, () => runOf(eng).tasks?.service?.visits?.at(-1)?.to !== undefined)
+})
+
+// ---- the stuck look ----
+
+// Claude reads the same file n times; the stuck notes those reads carried.
+const circle = async ($: any, n: number) => {
+  const notes: string[] = []
+  for (let i = 0; i < n; i++) {
+    const note = String((await $.tool.call({ tool: 'Read', file_path: REFUND })).context ?? '')
+    if (/Stuck:/.test(note)) notes.push(note)
+  }
+  return notes
+}
+// The check fails, then Claude reads the same file again and again: the detector marks the state stuck, and eight calls
+// on, with health still low, sends a second note.
+async function stuckTwice($: any, eng: ReturnType<typeof engine>) {
+  eng.setBash({ fail: true, text: 'Tests: 1 failed\nexpected 49.99, received 50.00' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test -- refund' })
+  const notes: string[] = []
+  for (let i = 0; i < 24 && notes.length < 2; i++) notes.push(...(await circle($, 1)))
+  expect(notes).toHaveLength(2)
+  return notes
+}
+const finished = (eng: ReturnType<typeof engine>) => eng.setAgents(eng.agents().map(a => ({ ...a, status: 'completed' })))
+
+// 10
+inRun('a stuck mark\'s second note starts a look at once, and no longer tells Claude to escalate', async ({ $, eng }) => {
+  const [first, second] = await stuckTwice($, eng)
+  expect(first).not.toMatch(/escalate|overseer/)
+  expect(eng.spawns).toHaveLength(1)
+  expect(eng.spawns[0]).toMatchObject({ subagent_type: 'Explore', model: 'opus', description: 'overseer service' })
+  expect(second).toMatch(/This is note 2\./)
+  expect(second).toMatch(/asked its overseer/)
+  expect(second).not.toMatch(/escalate/)
+})
+
+// 11
+inRun('a stuck look answers only WRONG or FINE, and its prompt holds what the stuck mark is about', async ({ $, eng }) => {
+  await stuckTwice($, eng)
+  const prompt = eng.spawns[0].prompt
+  expect(prompt).toMatch(/WRONG/)
+  expect(prompt).toMatch(/FINE/)
+  expect(prompt).not.toMatch(/FASTER/)
+  expect(prompt).toMatch(/Read only/)
+  expect(prompt).toMatch(/drift/)
+  expect(prompt).toMatch(/reading the same things again/)
+  expect(prompt).toMatch(/fails "expected 49\.99, received 50\.00" on 1 run/)
+  expect(prompt).toMatch(/2 stuck notes/)
+  // The last eight calls, each with what the detector made of it, and how many there were in all: a live look took the
+  // eight for the whole visit.
+  expect(prompt.match(/refund\.ts · repeat/g)).toHaveLength(8)
+  expect(prompt).toMatch(/last 8 of 1[0-9] calls in this state/)
+})
+
+// 12
+inRun('FINE on a stuck look lifts the stuck mark for the rest of the visit, and tells Claude', async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  await fromAgent($, eng.agents()[0]!.id, 'FINE\nIt reads the fixture each time to compare the outputs.')
+  await clock.advance(1)
+  const note = await toolNote($)
+  expect(note).toMatch(/moving/)
+  expect(note).toMatch(/compare the outputs/)
+  const r = await runNow(eng, clock)
+  expect(r.traps).toHaveLength(1)
+  expect(r.traps[0].end).toBeDefined()
+  // More circling in this visit opens no new mark and carries no note.
+  expect(await circle($, 20)).toEqual([])
+  expect((await runNow(eng, clock)).traps).toHaveLength(1)
+  await until(clock, () => logOf(eng).some(l => l.startsWith('service · overseer: fine')))
+})
+
+// 13
+inRun('WRONG on a stuck look reaches Claude, and a FASTER said anyway counts as WRONG', async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  await fromAgent($, eng.agents()[0]!.id, 'FASTER\nThe same assertion fails each time; the rounding is in money.ts.')
+  await clock.advance(1)
+  const note = await toolNote($)
+  expect(note).toMatch(/^\[sentinel\]/m)
+  expect(note).toMatch(/says it is stuck/)
+  expect(note).toMatch(/the rounding is in money\.ts/)
+  expect(note).not.toMatch(/escalate/)
+  expect(eng.toasts.join('\n')).toMatch(/overseer/i)
+  expect((await runNow(eng, clock)).traps[0].end).toBeUndefined()
+  await until(clock, () => logOf(eng).some(l => l.startsWith('service · overseer: wrong')))
+})
+
+// 14
+inRun('a stuck look uses up no time mark, so the 30-minute look still comes', async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  const id = eng.agents()[0]!.id
+  finished(eng)
+  await fromAgent($, id, 'WRONG\nStuck on the rounding.')
+  await minutes(clock, 31)
+  await until(clock, () => eng.spawns.length === 2)
+  expect(eng.spawns[1].prompt).toMatch(/FASTER/)
+})
+
+// 15
+inRun('with the overseer switched off, the second note starts no look and says none started', async ({ $, eng }) => {
+  const [, second] = await stuckTwice($, eng)
+  expect(eng.spawns).toHaveLength(0)
+  expect(second).toMatch(/This is note 2\./)
+  expect(second).not.toMatch(/overseer|escalate/)
+}, $ => $.command.run({ command: 'sentinel', args: 'off overseer' }))
+
+inRun('no stuck look starts beside a running look; the next note starts one, and one mark gets one look', async ({ $, eng, clock }) => {
+  await minutes(clock, 31)
+  await until(clock, () => eng.spawns.length)
+  const [, second] = await stuckTwice($, eng)
+  expect(eng.spawns).toHaveLength(1)
+  expect(second).not.toMatch(/overseer/)
+  finished(eng)
+  await fromAgent($, eng.agents()[0]!.id, 'FINE')
+  // Note 3 comes eight calls on and starts the stuck look.
+  expect(await circle($, 8)).toHaveLength(1)
+  expect(eng.spawns).toHaveLength(2)
+  expect(eng.spawns[1].prompt).not.toMatch(/FASTER/)
+  finished(eng)
+  await fromAgent($, eng.agents()[1]!.id, 'WRONG\nStill the rounding.')
+  // Note 4 starts none: this mark had its look.
+  expect(await circle($, 8)).toHaveLength(1)
+  expect(eng.spawns).toHaveLength(2)
+})
+
+// 16
+inRun('an answer about a stuck mark that has since ended tells Claude nothing', async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  eng.setBash({ fail: false, text: 'ok' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test -- refund' })
+  expect((await runNow(eng, clock)).traps[0].end).toBeDefined()
+  await fromAgent($, eng.agents()[0]!.id, 'WRONG\nThe rounding is off.')
+  await clock.advance(1)
+  expect(await toolNote($)).not.toMatch(/overseer/i)
+  await until(clock, () => logOf(eng).some(l => l.startsWith('service · overseer: wrong')))
+})
+
+// 17
+inRun('a stuck look is kept with its mark and answer, and how long the state took to move on after it', async ({ $, eng, clock }) => {
+  await stuckTwice($, eng)
+  const trap = (await runNow(eng, clock)).traps[0].step
+  await fromAgent($, eng.agents()[0]!.id, 'WRONG\nThe rounding is off.')
+  expect((await runNow(eng, clock)).looks).toEqual([{ state: 'service', why: 'stuck', trap, at: expect.any(Number), word: 'wrong', line: 'The rounding is off.' }])
+  eng.setBash({ fail: false, text: 'ok' })
+  await $.tool.call({ tool: 'Bash', command: 'npm test -- refund' })
+  expect(said(await plan($, { action: 'advance', to: 'docs', outcome: 'Refunds round to the cent.' }))).toMatch(/Moved to docs/)
+  expect((await runNow(eng, clock)).looks[0].toAdvanceMin).toBe(0)
 })
 
 inRun('an answer about a state that has finished goes to the log only', async ({ $, eng, clock }) => {

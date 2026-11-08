@@ -1,6 +1,6 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
 import { usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
@@ -577,7 +577,25 @@ export function failSig(output: string): { sig: string; sigText: string; fails: 
 export type Observed =
   | { kind: 'plan' | 'ask' | 'look'; label: string; denied?: boolean; fp?: string }
   | { kind: 'edit'; label: string; file: string; ver?: string; before?: string; denied?: boolean; fix?: string }
-  | { kind: 'check'; label: string; pass: boolean; sig: string; sigText: string; fails: number; touches?: number; tail?: string }
+  | { kind: 'check'; label: string; pass: boolean; sig: string; sigText: string; fails: number; touches?: number; tail?: string; ms?: number }
+
+// A read or command's identity: the tool, its input and its output, with times and the like taken out of the output
+// (as failSig does), so running the same thing again counts as a repeat.
+export function lookPrint(tool: string, input: Record<string, unknown>, text: string): string {
+  const { tool: _t, tool_use_id: _id, consent: _c, description: _d, ...rest } = input
+  return fnv(`${tool}\n${JSON.stringify(rest, Object.keys(rest).sort())}\n${text.split(/\r?\n/).map(normLine).join('\n')}`)
+}
+
+// After this many edits with the check not run while it fails, an edit no longer counts as progress.
+const BLIND_EDITS = 6
+const editsSince = (calls: Call[], step: number) => calls.filter(x => x.kind === 'edit' && x.ver && !x.denied && x.step > step).length
+// The version a file held when a call ran: its last edit before then, or what it was before its first edit.
+function verAt(calls: Call[], file: string, step: number): string | undefined {
+  const edits = calls.filter(x => x.kind === 'edit' && x.file === file && x.ver && !x.denied)
+  return edits.findLast(x => x.step < step)?.ver ?? edits[0]?.before
+}
+// A version some failing check ran on.
+const failedOn = (calls: Call[], file: string, ver: string) => calls.some(x => x.kind === 'check' && !x.pass && verAt(calls, file, x.step) === ver)
 
 // The end of a check's output, which a refusal shows.
 // eslint-disable-next-line no-control-regex
@@ -602,14 +620,16 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
   if (o.kind === 'check') {
     if (!o.pass && o.tail) lastFail = { step, text: o.tail }
     Object.assign(c, { pass: o.pass, sig: o.sig, sigText: o.sigText, fails: o.fails })
+    if (o.ms !== undefined) c.ms = o.ms
     // Something touched the project while it ran: the result may be stale already.
     if (o.touches !== undefined && o.touches === (r.touches ?? 0)) c.touches = o.touches
-    if (o.pass || !lastCheck || lastCheck.pass) c.u = 1
-    else if (lastCheck.sig === o.sig && o.fails >= (lastCheck.fails ?? 0)) {
+    // A failure seen before in this visit, and no fewer of it, is the same failure, so bouncing between two counts too.
+    const seen = o.pass || !lastCheck || lastCheck.pass ? undefined : visit.findLast(x => x.kind === 'check' && !x.pass && x.sig === o.sig)
+    if (seen && o.fails >= (seen.fails ?? 0)) {
       c.repeat = true
       c.same = true
       // Edits since the last run were credited on faith; the same failure takes it back.
-      visit = visit.map(x => (x.prov && x.step > lastCheck.step ? { ...x, u: 0, prov: undefined, revoked: true } : x))
+      visit = visit.map(x => (x.prov && x.step > lastCheck!.step ? { ...x, u: 0, prov: undefined, revoked: true } : x))
     } else c.u = 1
     log.push(o.pass
       ? { t, icon: '✓', tone: 'ok', text: 'Check passed' }
@@ -629,25 +649,23 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
     if (o.ver === undefined) c.u = 0
     else {
       c.ver = o.ver
-      const seen = visit.find(x => x.file === o.file && (x.ver === o.ver || x.before === o.ver))
+      // Back to a version a failing check already ran on. One no check saw fail, such as the file before a debug line
+      // went in, is new as far as the check knows.
+      const seen = failedOn(visit, o.file, o.ver) ? visit.find(x => x.file === o.file && (x.ver === o.ver || x.before === o.ver)) : undefined
       if (seen) {
         c.repeat = true
         c.revisitOf = seen.step
-      } else {
+      } else if (failing && editsSince(visit, lastCheck!.step) >= BLIND_EDITS) c.blind = true
+      else {
         c.u = 1
         if (failing) c.prov = true
       }
     }
   } else if (o.kind === 'look') {
+    // A new read is progress however many come in a row; reading the same thing again is a repeat.
     c.fp = o.fp
     if (visit.some(x => x.fp === o.fp)) c.repeat = true
     else c.u = 1
-    let reads = 1
-    for (let i = visit.length - 1; i >= 0 && visit[i]!.kind === 'look'; i--) reads++
-    if (failing && reads > 4) {
-      c.u = 0
-      c.drift = true
-    }
   } else {
     c.u = 1
     if (o.kind === 'ask') audit.push({ step, t, state, kind: 'asked', text: o.label })
@@ -663,8 +681,9 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
   if (!last) c.p = 0.5
   else if (last.pass) c.p = 0
   else {
-    const ref = checks.findLast(x => x.step < win[0]!.step) ?? checks[0]!
-    c.p = ref.sig === last.sig ? 1 : 0.5
+    // The failure was there before the window began: from the checks before it, or the first check when none came before.
+    const before = checks.filter(x => x.step < win[0]!.step)
+    c.p = (before.length ? before : checks.slice(0, 1)).some(x => !x.pass && x.sig === last.sig) ? 1 : 0.5
   }
   c.H = 1 - c.p * Math.max(c.S, c.R)
 
@@ -672,18 +691,22 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
   let note: string | undefined
   let trapped: Trap | undefined
   const open = openTrap(r)
-  if (!open && c.n >= K && c.H <= THETA) {
+  // The overseer said a mark in this visit was moving: no new one opens until the state is entered again.
+  const muted = r.traps.some(x => x.muted && x.state === state && x.step > r.enteredAt)
+  if (!open && !muted && c.n >= K && c.H <= THETA) {
     const rev = win.findLast(x => x.revisitOf !== undefined)
-    const pattern = rev ? 'cycle' : win.some(x => x.drift) ? 'drift' : 'static'
+    const pattern = rev ? 'cycle' : win.filter(x => x.kind === 'look').length * 2 > win.length ? 'drift' : 'static'
     trapped = { state, pattern, step, notes: 1, lastNote: step }
     if (rev) Object.assign(trapped, { file: rev.file, ver: rev.ver, revisitOf: rev.revisitOf })
     traps = [...traps, trapped]
     c.trapStart = true
     log.push({ t, icon: '⟲', tone: 'err', text: `Stuck · ${pattern}${rev ? ` on ${rev.file}` : ''}` })
-  } else if (open && c.H > THETA) {
+  } else if (open && o.kind === 'check' && c.u === 1) {
+    // It ends when the check result changes, a pass or a failure not seen before, as the paper's recovery rule has it.
+    // Health rising on a few new reads doesn't end it, so it can't open again at note 1.
     traps = traps.map(x => (x === open ? { ...x, end: step } : x))
-    log.push({ t, icon: '✓', tone: 'ok', text: `Released · health ${c.H.toFixed(2)}` })
-  } else if (open && step - open.lastNote >= K) {
+    log.push({ t, icon: '✓', tone: 'ok', text: `Released · ${o.pass ? 'the check passes' : 'the check fails a new way'}` })
+  } else if (open && step - open.lastNote >= K && c.H <= THETA) {
     trapped = { ...open, notes: open.notes + 1, lastNote: step }
     traps = traps.map(x => (x === open ? trapped! : x))
   }
@@ -694,19 +717,34 @@ export function observe(r: Run, o: Observed, t: string): { run: Run; note?: stri
   return { run, note, trapped }
 }
 
-function noteText(r: Run, trap: Trap, H: number): string {
-  const st = stateOf(r, trap.state)
+// The failure a stuck mark is about: the check, what it printed, and the runs in this visit that failed that way.
+function gapOf(r: Run, st?: StateDef): string | undefined {
   const fails = visitOf(r).filter(x => x.kind === 'check' && !x.pass)
   const last = fails.at(-1)
+  if (!last || !st?.check) return undefined
+  const same = fails.filter(x => x.sig === last.sig).map(x => x.step)
+  return `\`${st.check}\` fails "${last.sigText}" on ${same.length} run(s) (steps ${same.join(', ')}).`
+}
+
+// What each stuck pattern means, in plain words.
+const PATTERN_SAYS: Record<Trap['pattern'], string> = {
+  cycle: 'a file went back to a version that already failed the check',
+  drift: 'reading the same things again without changing anything while the check fails',
+  static: 'calls that change nothing while the check fails',
+  hung: 'a check that stopped making output',
+}
+
+// Note 2 and later only say which note it is: the engine adds that the overseer looks, when one starts.
+function noteText(r: Run, trap: Trap, H: number): string {
   const lines = [`[sentinel] Stuck: ${trap.pattern.toUpperCase()} in state ${trap.state} (health ${H.toFixed(2)}).`]
   if (trap.file && trap.ver) lines.push(`${trap.file} is back to ${verLabel(r.calls, trap.file, trap.ver)}, a version it already had at step ${trap.revisitOf}. That version already failed the check.`)
-  if (last && st?.check) {
-    const same = fails.filter(x => x.sig === last.sig).map(x => x.step)
-    lines.push(`Gap: \`${st.check}\` fails "${last.sigText}" on ${same.length} run(s) (steps ${same.join(', ')}).`)
-  }
-  if (trap.pattern === 'drift') lines.push('You have been reading without changing anything while the check fails. Make the smallest edit that tests your current idea, then run the check.')
+  const gap = gapOf(r, stateOf(r, trap.state))
+  if (gap) lines.push(`Gap: ${gap}`)
+  const edits = editsSince(visitOf(r), visitOf(r).findLast(x => x.kind === 'check')?.step ?? r.enteredAt)
+  if (trap.pattern === 'drift') lines.push('You have been reading the same things again without changing anything while the check fails. Make the smallest edit that tests your current idea, then run the check.')
+  else if (edits >= BLIND_EDITS) lines.push(`You have made ${edits} edits since the check last ran. Run the check to see where you stand before the next edit.`)
   else lines.push("Until the failure changes, don't re-apply versions that already failed. Get new evidence before the next edit: read code you haven't read in this state, or log the value that comes out wrong.")
-  if (trap.notes >= 2) lines.push(`This is note ${trap.notes}. If the next attempts don't change the failure, call plan with action "escalate" and kind "stuck".`)
+  if (trap.notes >= 2) lines.push(`This is note ${trap.notes}.`)
   return lines.join('\n')
 }
 
@@ -2115,6 +2153,8 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
     traps: r.traps.map(x => (x.end === undefined ? { ...x, end: r.step } : x)),
     log: [...r.log, line], auto: 0, askToken: 0, breakingOk: false,
     tasks, ...(to === 'done' ? { endedAt: now } : {}),
+    // Moving on: each look at this state answered on its way here, and how long the state then took.
+    ...(r.looks && !back ? { looks: r.looks.map(l => (l.state === st.id && l.toAdvanceMin === undefined ? { ...l, toAdvanceMin: Math.max(0, Math.round((now - l.at) / 60_000)) } : l)) } : {}),
     // The reason for a way back was checked above; keep it for the task page of the state returned to.
     ...(back ? { trips: [...(r.trips ?? []), { from: st.id, to, at: now, t, reason: clip(evidence)! }] } : {}),
   }
@@ -2317,6 +2357,8 @@ export const healthTone = (h: number): Tone => (h <= THETA ? 'err' : h <= 0.5 ? 
 export type LedgerRow = {
   step: number; label: string; denied: boolean; vers: string[]; chk: string; chkTone: Tone
   u: string; uTone: Tone; H: number; trapStart: boolean; inWindow: boolean
+  // How long a check run took, when Sentinel timed it.
+  ms?: number
 }
 
 export type VM = {
@@ -2356,6 +2398,8 @@ export type VM = {
   log: LogLine[]
   timeline: { step: number; state: string; kind: Kind; label: string; u: 0 | 1; denied: boolean; revoked: boolean; H: number }[]
   traps: Trap[]
+  // Every overseer look, oldest first.
+  looks: Look[]
   // The ways back that were taken, latest last, and the wall-clock span of the run.
   trips: Trip[]
   startedAt?: number
@@ -2489,6 +2533,9 @@ export const FIRST_MARK_MS = 30 * 60_000
 
 export type TimeMark = { state: string; mark: number; ms: number }
 
+// A short length of time, such as a check run's: under 1 s, 42 s, or 3 min.
+export const span = (ms: number) => (ms < 1000 ? 'under 1 s' : ms < 90_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`)
+
 // 45 min, or 2 h 10 min. It rounds down, so it never reads as more than has passed.
 function timeText(ms: number): string {
   const min = Math.floor(ms / 60_000)
@@ -2525,6 +2572,9 @@ export function timeFacts(r: Run, id: string): string {
   const own = r.calls.filter(c => c.state === id)
   const checks = own.filter(c => c.kind === 'check')
   const failed = checks.filter(c => !c.pass).length
+  // Only runs Sentinel timed: a check sent to the background, or run another way, counts as a read and has no time.
+  const timed = checks.filter(c => c.ms !== undefined)
+  const took = timed.reduce((a, c) => a + c.ms!, 0)
   const edits = own.filter(c => c.kind === 'edit' && !c.denied)
   const files = new Set(edits.map(c => c.file)).size
   const minutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5))
@@ -2539,7 +2589,7 @@ export function timeFacts(r: Run, id: string): string {
   })
   const many = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`
   return [
-    checks.length ? `${many(checks.length, 'check run')}${failed ? `, ${failed} failed` : ''}` : '',
+    checks.length ? `${many(checks.length, 'check run')}${failed ? `, ${failed} failed` : ''}${timed.length ? `, ${span(took)} in all, about ${span(took / timed.length)} each` : ''}` : '',
     edits.length ? `${many(edits.length, 'edit')} to ${many(files, 'file')}` : '',
     longest ? `longest stretch between calls ${timeText(longest * 60_000)} by the clock, ended by ${ended.replace(/\s+/g, ' ').slice(0, 60)}` : '',
   ].filter(Boolean).join('; ')
@@ -2551,15 +2601,31 @@ export function timeNote(r: Run, due: TimeMark): string {
   return `[sentinel] ${due.state} has taken ${timeText(due.ms)} of working time.${facts ? ` The ledger shows ${facts}.` : ''} This does not stop the run. Look at where the time went: carry on if it is reasonable, speed it up if you can, and fix anything hung or failing. Record what you found with "decide" and the topic "time on ${due.state}", and go on.`
 }
 
-// What an overseer starts with: a fresh agent knows nothing of the run but this and what it reads. others: other agents
-// at work in the session.
-export function overseerPrompt(r: Run, due: TimeMark, diff: string, others: string[]): string {
-  const st = stateOf(r, due.state)
-  const facts = timeFacts(r, due.state)
-  const calls = r.calls.filter(c => c.state === due.state).slice(-25).map(c => `${c.t} ${c.kind}${c.kind === 'check' ? (c.pass ? ' passed' : ' failed') : ''}${c.denied ? ' refused' : ''}: ${c.label}`)
+// What an overseer starts with: a fresh agent knows nothing of the run but this and what it reads. why: the time mark it
+// looks at, or the stuck mark; a stuck look asks only whether it is stuck. others: other agents at work in the session.
+export function overseerPrompt(r: Run, why: TimeMark | Trap, diff: string, others: string[]): string {
+  const stuck = 'pattern' in why ? why : undefined
+  const st = stateOf(r, why.state)
+  const facts = timeFacts(r, why.state)
+  const line = (c: Call) => `${c.t} ${c.kind}${c.kind === 'check' ? (c.pass ? ' passed' : ' failed') : ''}${c.denied ? ' refused' : ''}: ${c.label}`
+  // A stuck look sees the window the detector judged, each call with what the detector made of it.
+  const calls = stuck
+    ? visitOf(r).slice(-K).map(c => `${line(c)} · ${c.u ? 'progress' : c.repeat ? 'repeat' : 'no progress'}`)
+    : r.calls.filter(c => c.state === why.state).slice(-25).map(line)
   const fail = r.lastFail && r.lastFail.step > r.enteredAt ? r.lastFail.text.slice(-2000) : ''
   const part = (name: string, text?: string) => (text ? [`${name}:`, text, ''] : [])
-  return [
+  const gap = stuck && gapOf(r, st)
+  const ask = stuck ? [
+    `You are Sentinel's overseer. Another Claude conversation is working through a signed-off plan. Sentinel's stuck detector, which judges progress from tool calls alone, marked one state stuck, and it still looked stuck eight calls after the first note. Sentinel asked you to look in from outside and say whether it really is stuck. It keeps working while you look.`,
+    '',
+    'Read only. Edit nothing, start nothing that keeps running, stop nothing. You may read files and logs and run read-only commands such as git log.',
+    '',
+    'Decide which of these holds:',
+    '- WRONG: it is stuck: failing for the same reason each time, going round the same ideas, or off what the state asked for.',
+    '- FINE: it is moving: each attempt teaches it something new, and the detector misread that.',
+    '',
+    'The first word of your final answer is that word. After it, at most five lines: what you saw and, for WRONG, what the main conversation should try next, naming files and commands. It reads your answer with none of your context. FINE lifts the stuck mark.',
+  ] : [
     "You are Sentinel's overseer. Another Claude conversation is working through a signed-off plan, and one state of it has run long. Sentinel asked you to look in from outside, so that conversation isn't judging its own time. It keeps working while you look.",
     '',
     'Read only. Edit nothing, start nothing that keeps running, stop nothing. You may read files and logs and run read-only commands such as git log.',
@@ -2570,16 +2636,21 @@ export function overseerPrompt(r: Run, due: TimeMark, diff: string, others: stri
     '- WRONG: something is hung, looping, failing for the same reason each time, or off what the state asked for.',
     '',
     'The first word of your final answer is that word. After it, at most five lines: what you saw, and what the main conversation should do, naming files and commands. The main conversation hears only FASTER and WRONG, and it reads your answer with none of your context.',
+  ]
+  return [
+    ...ask,
     '',
     `Plan: ${r.plan!.title}${r.plan!.source ? ` (written in ${r.plan!.source})` : ''}`,
-    `State: ${due.state}${st ? ` (${st.label})` : ''}${st?.ref ? `, details at ${st.ref}` : ''}`,
+    `State: ${why.state}${st ? ` (${st.label})` : ''}${st?.ref ? `, details at ${st.ref}` : ''}`,
     ...(st?.problem ? [`What is needed: ${st.problem}`] : []),
     ...(st?.approach ? [`How: ${st.approach}`] : []),
     ...(st?.check ? [`Done when this exits 0: ${st.check}`] : []),
     ...(st?.files?.length ? [`Files it may edit: ${st.files.join(', ')}`] : []),
-    `Working time so far: ${timeText(due.ms)}.${facts ? ` The ledger shows ${facts}.` : ''}`,
+    ...(stuck
+      ? [`Stuck pattern: ${stuck.pattern}, ${PATTERN_SAYS[stuck.pattern]}. Sentinel has sent ${stuck.notes} stuck notes.`, ...(gap ? [`The failure: ${gap}`] : []), ...(facts ? [`The ledger shows ${facts}.`] : [])]
+      : [`Working time so far: ${timeText((why as TimeMark).ms)}.${facts ? ` The ledger shows ${facts}.` : ''}`]),
     '',
-    ...part('Its recent calls, oldest first', calls.join('\n')),
+    ...part(stuck ? `Its last ${calls.length} of ${visitOf(r).length} calls in this state, oldest first, each with what the detector made of it` : 'Its recent calls, oldest first', calls.join('\n')),
     ...part('The last failure in this state', fail),
     ...part('Uncommitted changes (git diff --stat)', diff.trim().slice(0, 3000)),
     ...part('Other agents at work', others.join('\n')),
@@ -2588,7 +2659,6 @@ export function overseerPrompt(r: Run, due: TimeMark, diff: string, others: stri
 
 // What an overseer answered, by its first word. An answer with no such word still counts as something to hear, as it may
 // report what the word was meant for; a look that was stopped or said nothing has nothing to hear.
-export type OverseerWord = 'fine' | 'faster' | 'wrong' | 'unclear' | 'silent'
 export function overseerSays(answer: string): { word: OverseerWord; rest: string } {
   const text = answer.trim()
   if (!text) return { word: 'silent', rest: '' }
@@ -2792,7 +2862,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     return {
       step: c.step, label: c.kind === 'ask' ? `Ask: ${c.label}` : c.label.replace(/\S*\//g, ''), denied: !!c.denied, vers, chk, chkTone: c.kind !== 'check' ? 'dim' : c.pass ? 'ok' : 'err',
       u: c.revoked ? '1→0' : `${c.u}${c.repeat ? '=' : ''}`, uTone: c.revoked ? 'warn' : c.u ? 'ok' : 'dim',
-      H: c.H, trapStart: !!c.trapStart, inWindow: c.step >= winFrom,
+      H: c.H, trapStart: !!c.trapStart, inWindow: c.step >= winFrom, ...(c.ms !== undefined ? { ms: c.ms } : {}),
     }
   })
 
@@ -2812,6 +2882,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     counts, log: r.log.slice(-8),
     timeline: r.calls.map(c => ({ step: c.step, state: c.state, kind: c.kind, label: c.label, u: c.u, denied: !!c.denied, revoked: !!c.revoked, H: c.H })),
     traps: r.traps,
+    looks: r.looks ?? [],
     trips: (r.trips ?? []).slice(-50), startedAt: phase === 'draft' ? undefined : r.startedAt, endedAt: phase === 'draft' ? undefined : r.endedAt, ...(phase === 'complete' && r.closed ? { closed: r.closed } : {}), visitCalls: phase === 'live' ? visit.length : 0,
     spend: top.spend ?? [], spendFrom: top.spendFrom, usage: usageView(top.usage),
     lanes: (top.lanes ?? []).map(l => ({ ...l, name: l.name || l.id })),

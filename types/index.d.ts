@@ -208,7 +208,12 @@ export type Call = {
   denied?: true
   prov?: true
   revoked?: true
+  // Set by older runs only: a read after four in a row while the check failed.
   drift?: true
+  // An edit made blind: more than BLIND_EDITS (core.ts) edits with the check not run while it fails. No progress until it runs.
+  blind?: true
+  // How long a check run took, when Sentinel timed it.
+  ms?: number
   trapStart?: true
   fp?: string
   file?: string
@@ -247,7 +252,15 @@ export type Trap = {
   file?: string
   ver?: string
   revisitOf?: number
+  // The overseer looked and said the work is moving: the mark ended, and no new one opens in this visit.
+  muted?: true
 }
+
+// What an overseer answered, by its first word: unclear when it had none, silent when it said nothing or was stopped.
+export type OverseerWord = 'fine' | 'faster' | 'wrong' | 'unclear' | 'silent'
+// A look an overseer took. why: a time mark, or a stuck mark's second note (trap: that mark's step). at: when it
+// answered (ms). toAdvanceMin: minutes from the answer to the state moving on, to measure whether looks help.
+export type Look = { state: string; why: 'time' | 'stuck'; trap?: number; at: number; word: OverseerWord; line?: string; toAdvanceMin?: number }
 
 export type AuditKind = 'refused' | 'blocked' | 'decided' | 'amended' | 'auto' | 'asked' | 'escalated'
 // state: the state that was active when it happened; none for what was decided at the lock.
@@ -444,6 +457,8 @@ export type Run = {
   tasks?: Record<string, Task>
   // The last working-time mark (ms) said for each state. A run saved before it existed has said none.
   timeSaid?: Record<string, number>
+  // Every overseer look and what it said, oldest first. A run saved before looks were kept has none.
+  looks?: Look[]
   trips?: Trip[]
   // When .sentinel/run.json was last written. Only the saved file has it.
   savedAt?: number
@@ -465,9 +480,9 @@ export type Run = {
 declare module 'claude-code' {
   interface PluginState {
     // said: the session's typed messages and the files Claude wrote. Never saved, unlike run.
-    // overseers: the agents started to look into a long state, by agent id, with what each answered. They die with the
-    // session's process, and so does this.
+    // overseers: the agents started to look into a long or stuck state, by agent id, with what each answered and, for a
+    // stuck look, the stuck mark's step. They die with the session's process, and so does this.
     // watch: the running measurement of what 1% of the week costs, here so a reload of the plugin keeps it.
-    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }>; overseers: Shaped<Record<string, { state: string; word?: string }>>; watch: Shaped<Watch | null> }
+    sentinel: { run: Shaped<Run>; view: Shaped<View>; said: Shaped<{ messages: { text: string; at: string }[]; wrote: string[] }>; overseers: Shaped<Record<string, { state: string; word?: string; trap?: number }>>; watch: Shaped<Watch | null> }
   }
 }

@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { Args, EngineInterface, Next, Register, ToolCallResult } from 'claude-code'
-import type { PlanSetting, Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PresetView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, View, Weight, Watch } from '../types'
+import type { PlanSetting, Change, Checking, Depth, Drift, DriftFacts, FlowDef, Fingerprint, InstructionAt, InstructionDef, LibraryItem, LibraryScope, LibraryView, PresetView, MapLook, Marks, PlanLibrary, Run, Source, StateDef, Switches, SystemMap, Trap, View, Weight, Watch } from '../types'
 import { areaOf, changesOf, driftOf, dropParts, envLeads, fingerprint, formatSystem, mergeDrawing, outlineOf, parseMarks, parsePlans, parseSystem, partsInside, unmappedFolders, verifyEvidence, withBase, withDrawn, withoutFine, withPlan, withProof, type Git } from './system'
 import { BUILTINS, BUILTIN_FLOWS, WEIGHTS } from './builtins'
 import { WEEKLY, keptPrices, parsePrices, perPoint, watch } from './usage'
@@ -11,7 +11,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
-  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 import { mcpProblem, mcpStates, serverList } from './mcp'
@@ -459,16 +459,17 @@ export const register: Register = on => {
       const check = stateOf(r)?.check
       // The check as written, run from the project root, can stand in for advance's own run. The shell may sit elsewhere.
       const here = check !== undefined && sameText(cmd, check) && dirKey(await $.session.cwd().catch(() => '')) === dirKey(await $.session.root())
+      const t0 = await clockMs($)
       const ran = await next(e)
       if (ran.deny !== undefined) return ran
       if (check !== undefined && sameCommand(cmd, check) && !input.run_in_background && !unfinished(ran)) {
-        return record($, ran, { kind: 'check', label: cmd, pass: passed(ran), ...failSig(ran.text ?? ''), tail: tailOf(ran.text ?? ''), ...(here && { touches: r.touches ?? 0 }) })
+        return record($, ran, { kind: 'check', label: cmd, pass: passed(ran), ...failSig(ran.text ?? ''), tail: tailOf(ran.text ?? ''), ...(here && { touches: r.touches ?? 0 }), ms: (await clockMs($)) - t0 })
       }
-      return record($, ran, { kind: 'look', label: `Bash ${cmd}`.slice(0, 80), fp: fnv(`Bash\n${cmd}\n${ran.text ?? ''}`) })
+      return record($, ran, { kind: 'look', label: `Bash ${cmd}`.slice(0, 80), fp: lookPrint('Bash', { command: cmd }, ran.text ?? '') })
     }
 
     const ran = await next(e)
-    return record($, ran, { kind: 'look', label: lookLabel(tool, input), fp: fnv(`${tool}\n${stable(input)}\n${ran.text ?? ''}`) })
+    return record($, ran, { kind: 'look', label: lookLabel(tool, input), fp: lookPrint(tool, input, ran.text ?? '') })
   }).catch(($, e, next) => next(e))
 
   // Keep going when the model stops mid-plan, at most AUTO_CAP times without a state change.
@@ -852,36 +853,63 @@ async function overseerLook($: $) {
   const due = timeDue(await read($, run), await clockMs($))
   if (!due) return
   await change($, r => timeMarked(r, due, now()))
-  // Switched off in the Library: the log keeps the mark, and no agent starts. A plan locked before the switch existed
-  // has no overseer either; the next plan does.
+  if ((await startLook($, due)) === 'refused') {
+    const r = await read($, run)
+    nudge($, timeNote(r, due), holdsNudge(r))
+  }
+}
+
+// Starts an overseer on a time mark or a stuck mark: started, refused by the engine, or none (the switch is off, or one
+// is still looking). Switched off in the Library, no agent starts; a plan locked before the switch existed has no
+// overseer either, and the next plan does.
+async function startLook($: $, why: TimeMark | Trap): Promise<'started' | 'refused' | undefined> {
   const locked = (await read($, run)).library
-  if (locked && !locked.on.includes('overseer')) return
+  if (locked && !locked.on.includes('overseer')) return undefined
   const looks = await read($, overseers)
   const list = await agents($)
-  if (list.some(a => working(a) && looks[a.id])) return
+  if (list.some(a => working(a) && looks[a.id])) return undefined
   const diff = await git($, await $.session.root(), ['diff', '--stat', 'HEAD']).catch(() => '')
   const r = await read($, run)
   const others = list.filter(working).map(a => a.description ?? a.id)
-  const description = `overseer ${due.state}`
-  const spawned = await $.agent.spawn({ prompt: overseerPrompt(r, due, diff, others), description, subagentType: 'Explore', model: 'opus' })
+  const description = `overseer ${why.state}`
+  const spawned = await $.agent.spawn({ prompt: overseerPrompt(r, why, diff, others), description, subagentType: 'Explore', model: 'opus' })
     .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err), agentId: undefined }))
-  if (spawned.deny !== undefined) return nudge($, timeNote(r, due), holdsNudge(r))
+  if (spawned.deny !== undefined) return 'refused'
   // Core sets agentId. A spawn a hook answered carries none, and the list still finds the agent.
   const id = spawned.agentId ?? (await agents($)).findLast(a => a.description === description)?.id
-  if (id) await update($, overseers, m => ({ ...m, [id]: { state: due.state } }))
+  if (id) await update($, overseers, m => ({ ...m, [id]: { state: why.state, ...('pattern' in why ? { trap: why.step } : {}) } }))
+  return 'started'
 }
 
-// An overseer answered. It all goes in the log, as FINE goes nowhere else. The main conversation hears the rest, unless
-// the state has since finished.
+// An overseer answered. It all goes in the log and the run's looks, as FINE on a time mark goes nowhere else. FINE on a
+// stuck mark lifts it for the visit, and Claude hears so. The main conversation hears the rest, unless the state has
+// since finished or the stuck mark has ended.
 async function overseerAnswered($: $, id: string, answer: string) {
-  const state = (await read($, overseers))[id]!.state
-  const { word, rest } = overseerSays(answer)
-  await update($, overseers, m => ({ ...m, [id]: { state, word } }))
+  const { state, trap } = (await read($, overseers))[id]!
+  const said = overseerSays(answer)
+  // A stuck look asks only whether it is stuck, so a FASTER said anyway means it is.
+  const word = trap !== undefined && said.word === 'faster' ? 'wrong' : said.word
+  const rest = said.rest
+  await update($, overseers, m => ({ ...m, [id]: { state, word, ...(trap !== undefined ? { trap } : {}) } }))
   const line = rest.replace(/\s+/g, ' ').slice(0, 140)
-  await change($, r => ({ ...r, log: [...r.log, { t: now(), icon: '!', tone: word === 'fine' || word === 'silent' ? 'dim' : 'warn', text: `${state} · overseer: ${word}${line ? ` · ${line}` : ''}` }] }))
+  const at = Date.now()
+  await change($, r => {
+    const lift = word === 'fine' && trap !== undefined ? r.traps.find(x => x.step === trap && x.end === undefined) : undefined
+    return {
+      ...r,
+      looks: [...(r.looks ?? []), { state, why: trap === undefined ? 'time' : 'stuck', ...(trap !== undefined ? { trap } : {}), at, word, ...(line ? { line } : {}) }],
+      traps: lift ? r.traps.map(x => (x === lift ? { ...x, end: r.step, muted: true } : x)) : r.traps,
+      log: [...r.log, { t: now(), icon: '!', tone: word === 'fine' || word === 'silent' ? 'dim' : 'warn', text: `${state} · overseer: ${word}${line ? ` · ${line}` : ''}` },
+        ...(lift ? [{ t: now(), icon: '✓', tone: 'ok' as const, text: 'Released · the overseer says it is moving' }] : [])],
+    }
+  })
   const r = await read($, run)
-  if (word === 'fine' || word === 'silent' || !isLive(r) || r.active !== state) return
+  if (word === 'silent' || !isLive(r) || r.active !== state) return
+  const mark = trap === undefined ? undefined : r.traps.find(x => x.step === trap)
+  if (mark?.muted) return nudge($, `${TAG} Sentinel's overseer looked at the stuck mark on ${state} and says the work is moving${rest ? `:\n${rest}` : '.'}\nThe stuck mark is lifted, and no more stuck notes come in this visit. Go on.`, holdsNudge(r))
+  if (word === 'fine' || mark?.end !== undefined) return
   $.ui.toast(`Sentinel: the overseer found something on ${state}`)
+  if (mark) return nudge($, `${TAG} Sentinel's overseer, a read-only agent, looked at the stuck mark on ${state} and ${word === 'unclear' ? 'says' : 'says it is stuck'}:\n${rest}\nThis does not stop the run. Try what it says. Record what you found with "decide" and the topic "stuck on ${state}", and go on.`, holdsNudge(r))
   nudge($, `${TAG} Sentinel's overseer, a read-only agent that looks in when a state runs long, says about ${state}: ${word === 'unclear' ? '' : `${word.toUpperCase()}\n`}${rest}\nThis does not stop the run. If it holds, act on it. Record what you found with "decide" and the topic "time on ${state}", and go on.`, holdsNudge(r))
 }
 
@@ -986,7 +1014,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     if ('deny' in ran) return record($, { deny: `Sentinel couldn't run \`${check}\`: ${ran.deny}` }, { kind: 'plan', label, denied: true })
     if (signal?.aborted) return { deny: STOPPED }
     if (ran.stuck) return record($, { deny: stuckText(check, ran) }, { kind: 'plan', label, denied: true })
-    note = await track($, { kind: 'check', label: check, pass: ran.pass, ...failSig(ran.text), tail: tailOf(ran.text), touches: was.touches ?? 0 })
+    note = await track($, { kind: 'check', label: check, pass: ran.pass, ...failSig(ran.text), tail: tailOf(ran.text), touches: was.touches ?? 0, ms: ran.took })
     slow = slowNote(was, check, ran.took)
     passing = ran.pass
   }
@@ -2547,7 +2575,6 @@ const EXIT = /\[sentinel\] exit \d+/
 // A check over LONG_MS gets the model a note on keeping checks to their state's own tests.
 const LONG_MS = 60_000
 const START_CAP = 60_000
-const span = (ms: number) => (ms < 1000 ? 'under 1 s' : ms < 90_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`)
 const lastLine = (text: string) => text.trimEnd().split(/\r?\n/).at(-1)?.trim().slice(0, 160) ?? ''
 
 // How each check ran before in this project, by command: its longest quiet stretch and its longest run, in ms, from
@@ -2849,17 +2876,19 @@ const record = async ($: $, ran: Result, o: Observed) => attach(attach(ran, awai
 
 async function track($: $, o: Observed): Promise<string | undefined> {
   let note: string | undefined
-  let first = false
-  let where = ''
+  let trapped: Trap | undefined
   await change($, r => {
     // Any check run clears one stopped as stuck.
     const out = observe(o.kind === 'check' && r.hung ? { ...r, hung: undefined } : r, o, now())
     note = out.note
-    first = out.trapped?.notes === 1
-    where = out.trapped ? `${out.trapped.pattern} in ${out.trapped.state}` : ''
+    trapped = out.trapped
     return out.run
   })
-  if (first) $.ui.toast(`Sentinel: stuck (${where}). Recovery note sent.`)
+  if (trapped?.notes === 1) $.ui.toast(`Sentinel: stuck (${trapped.pattern} in ${trapped.state}). Recovery note sent.`)
+  // Still stuck at a later note: the overseer looks, once for each stuck mark, and its answer comes on a later result.
+  else if (trapped && !Object.values(await read($, overseers)).some(l => l.trap === trapped!.step) && (await startLook($, trapped)) === 'started') {
+    note += '\nSentinel has asked its overseer, a read-only agent, to look at whether this is really stuck. Its answer comes on a later tool result.'
+  }
   void after($)
   return note
 }
@@ -3377,9 +3406,4 @@ function lookLabel(tool: string, input: Record<string, unknown>): string {
   const pick = input.file_path ?? input.pattern ?? input.url ?? input.query ?? input.path ?? ''
   const text = String(pick).replace(/\\/g, '/').split('/').slice(-2).join('/')
   return `${tool} ${text}`.trim().slice(0, 80)
-}
-
-function stable(input: Record<string, unknown>): string {
-  const { tool: _t, tool_use_id: _id, consent: _c, description: _d, ...rest } = input
-  return JSON.stringify(rest, Object.keys(rest).sort())
 }

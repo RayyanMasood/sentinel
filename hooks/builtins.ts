@@ -61,10 +61,11 @@ export const BUILTINS: readonly Builtin[] = [
       + 'the command and its saved output, a rendered image, a log.',
   },
   {
-    name: 'overseer', title: 'Look in when a state runs long', at: 'always', kind: 'checks', weights: ['light', 'standard', 'thorough'],
-    cost: 'A read-only Opus agent each time a state passes a mark. In a small repo one look took 4,000 to 8,000 tokens of output and read 280,000 to 460,000 from the cache.',
+    name: 'overseer', title: 'Look in when a state runs long or stays stuck', at: 'always', kind: 'checks', weights: ['light', 'standard', 'thorough'],
+    cost: 'A read-only Opus agent each time a state passes a mark, and once more at a stuck mark that lasts past its first note. In a small repo one look took 4,000 to 8,000 tokens of output and read 280,000 to 460,000 from the cache.',
     text: "When a state's working time passes 30 minutes, then 1, 2 and 4 hours, Sentinel starts a read-only Opus agent that looks at "
       + 'it from outside. It answers FINE, FASTER or WRONG, and only FASTER and WRONG reach Claude. The run never stops for it. '
+      + 'A stuck mark that lasts past its first note gets one look too, answered WRONG or FINE; FINE lifts the mark. '
       + 'Switched off, the log still notes the time and no agent starts.',
   },
   {
