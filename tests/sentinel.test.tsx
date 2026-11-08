@@ -3286,6 +3286,8 @@ test("the draft takes the user's flows, and a revise keeps them", async ($: any,
   expect(String(drafted.context)).toMatch(/Flows the user can add while checking the draft: review \(Test the state, then wait for my review\.\); setup; close-phase \(Close a phase/)
   expect(await sentinel('add setup')).toMatch(/Use \/sentinel add <flow> start, end/)
   expect(await sentinel('add nope start')).toMatch(/There is no flow "nope"/)
+  expect(await sentinel('add setup start')).toBe("setup is off until you trust it: Sentinel didn't save this file on this computer, or it changed since. Check it, then /sentinel trust setup.")
+  expect(await sentinel('flow trust setup')).toMatch(/^Trusted/)
   expect(await sentinel('add setup start')).toBe('Added setup at the start.')
   expect(await sentinel('drop review')).toBe('Took review out of the draft.')
   expect(await sentinel('add review after verify')).toBe('Added review after verify.')
@@ -3335,6 +3337,13 @@ test('the dashboard adds and takes out flows on the draft it shows, and saves, r
   await sentinel('lock')
   await $.tool.call({ tool: TOOL, ...PLAN })
   await until(clock, () => eng.snap().draftKey)
+  // A flow file Sentinel didn't save here is refused until the user trusts it.
+  eng.page({ kind: 'addflow', draft: eng.snap().draftKey, name: 'setup', at: 'start' })
+  await until(clock, () => eng.snap().flowSaid)
+  expect(eng.snap().flowSaid.ok).toBe(false)
+  expect(eng.snap().flowSaid.text).toMatch(/^setup is off until you trust it/)
+  expect(eng.snap().states.some((x: any) => x.flow)).toBe(false)
+  await sentinel('flow trust setup')
   // A tab that shows an older draft changes nothing.
   eng.page({ kind: 'addflow', draft: 'older', name: 'setup', at: 'start' })
   eng.page({ kind: 'addflow', draft: eng.snap().draftKey, name: 'setup', at: 'after', state: 'service' })
@@ -3342,7 +3351,7 @@ test('the dashboard adds and takes out flows on the draft it shows, and saves, r
   expect(eng.snap().states.map((x: any) => x.id)).toEqual(['explore', 'service', 'setup-branch', 'verify', 'done'])
   expect(eng.snap().states[2].flow).toEqual({ name: 'setup', as: 'setup', why: 'Added by you after service' })
   eng.page({ kind: 'addflow', draft: eng.snap().draftKey, name: 'setup', at: 'before', state: 'nope' })
-  await until(clock, () => eng.snap().flowSaid)
+  await until(clock, () => /nope/.test(eng.snap().flowSaid?.text ?? ''))
   expect(eng.snap().flowSaid).toMatchObject({ ok: false, text: '"nope" is not one of the states.' })
   eng.page({ kind: 'dropflow', draft: eng.snap().draftKey, as: 'setup' })
   await until(clock, () => !eng.snap().states.some((x: any) => x.flow))
@@ -3352,8 +3361,8 @@ test('the dashboard adds and takes out flows on the draft it shows, and saves, r
   eng.page({ kind: 'saveflow', scope: 'project', was: { name: 'lint', scope: 'personal' }, flow: { name: 'lint-all', states: [{ id: 'lint', label: 'Lint passes', check: 'npm run lint' }] } })
   await until(clock, () => eng.files[`${ROOT}/.sentinel/flows/lint-all.json`])
   await until(clock, () => !eng.files[`${HOME}/.sentinel/flows/lint.json`])
-  // A flow saved from the page is trusted; one written by hand is not.
-  expect(eng.snap().flows.map((f: any) => [f.name, f.scope, f.trusted])).toEqual([['lint-all', 'project', true], ['setup', 'personal', false], ['close-phase', 'built-in', true]])
+  // A flow saved from the page is trusted, as is the hand-written one the user trusted above.
+  expect(eng.snap().flows.map((f: any) => [f.name, f.scope, f.trusted])).toEqual([['lint-all', 'project', true], ['setup', 'personal', true], ['close-phase', 'built-in', true]])
   eng.page({ kind: 'saveflow', scope: 'project', flow: { name: '../x', states: [] } })
   await until(clock, () => eng.snap().flowSaid?.ok === false && /Bad flow name/.test(eng.snap().flowSaid.text))
   eng.page({ kind: 'delflow', name: 'lint-all', scope: 'project' })
@@ -4447,6 +4456,7 @@ test("sources: the user's changes to a draft keep them, once each", async ($: an
   await sentinel('lock')
   await definePlan($, { ...DEPTH_PLAN, source: 'docs/plan.md' })
   eng.files[DOC] = 'Edited after the copy.'
+  await sentinel('flow trust review')
   expect(await sentinel('add review after verify')).toMatch(/Added review/)
   expect(heldRun(eng).draft!.sources).toEqual([fileCopy()])
   expect(await sentinel('drop review')).toMatch(/Took review out/)

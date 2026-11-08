@@ -1558,6 +1558,8 @@ async function addNow($: $, raw: string): Promise<string> {
   if (!['start', 'end', 'before', 'after'].includes(at) || side !== !!state || more.length) return 'Use /sentinel add <flow> start, end, before <state> or after <state>.'
   const f = (await loadFlows($)).find(x => x.name === name)
   if (!f) return `There is no flow "${name}". /sentinel flows lists them.`
+  // Its checks are shell commands, so a file Sentinel didn't save here runs nothing until the user reads and trusts it.
+  if (!f.trusted) return `${name} is off until you trust it: Sentinel didn't save this file on this computer, or it changed since. Check it, then /sentinel trust ${name}.`
   const where = side ? `${at} ${state}` : `at the ${at}`
   return changeDraft($, held => addFlow(held, f, { at, state } as Where, `Added by you ${where}`), `Added ${name} ${where}.`)
 }
