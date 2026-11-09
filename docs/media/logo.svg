@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-130 -130 260 260" width="260" height="260">
+  <!-- The dashboard's mark (web/view.html, symbol "logo"), in ink for light pages. logo-dark.svg is the same in light ink. -->
+  <mask id="under" maskUnits="userSpaceOnUse" x="-130" y="-130" width="260" height="260"><rect x="-130" y="-130" width="260" height="260" fill="#fff"/><path d="M0 0C-35 -45 -92 -50 -100 0" fill="none" stroke="#000" stroke-width="33"/><circle cx="-100" r="27"/></mask>
+  <g transform="scale(-1 1) rotate(-60)" fill="none" stroke="#10161d" stroke-width="13" stroke-linecap="round"><g id="q"><path d="M0 0C45 -35 50 -92 0 -100"/><path d="M0 -100C-62 -100 -100 -62 -100 -38V0" mask="url(#under)"/><circle cy="-100" r="17" fill="#10161d" stroke="none"/></g><use href="#q" transform="rotate(90)"/><use href="#q" transform="rotate(180)"/><use href="#q" transform="rotate(270)"/></g>
+</svg>

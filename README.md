@@ -1,4 +1,22 @@
-# Sentinel
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
+    <img src="docs/media/logo.svg" width="96" height="96" alt="">
+  </picture>
+</p>
+
+<h1 align="center">Sentinel</h1>
+
+<p align="center">Holds Claude Code to the plan you approved, one tool call at a time.</p>
+
+<p align="center">
+  <img alt="Claude Code plugin" src="https://img.shields.io/badge/Claude_Code-plugin-1462c4?style=flat-square&logo=claude&logoColor=white">
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-0d7a4a?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> · <a href="#how-a-run-goes">How a Run Goes</a> · <a href="#the-dashboard">The Dashboard</a> · <a href="#library">Library</a> · <a href="#commands">Commands</a>
+</p>
 
 Sentinel is a Claude Code plugin that holds the plan you approved as a state machine and checks Claude's work against it, tool call by tool call. You follow the run in a band above the prompt, a pane, or a live page in your browser.
 
@@ -6,7 +24,7 @@ Sentinel is a Claude Code plugin that holds the plan you approved as a state mac
 
 On a long task, an agent can drift from the plan, edit files nobody agreed to, say a step is done without proving it, or go round in circles. Sentinel catches each of these as it happens and tells Claude what to do instead. Its Library sets how much testing each plan asks for, from quick checks to proof that a test fails without the change. It adds no model calls: every rule is a hook on a tool call. It is a cut-down version of the belief-state idea in "Beyond Memory: Harnessing Long-Horizon Agents with Explicit Belief States" (arXiv 2610.01415).
 
-## How a run goes
+## How a Run Goes
 
 You approve a plan in plan mode, or agree on one in the chat and type `/sentinel lock`. Claude declares it as states. Each state names the files it may edit and a check command that exits 0 when the state is done. From then on:
 
@@ -16,7 +34,7 @@ You approve a plan in plan mode, or agree on one in the chat and type `/sentinel
 - **Done means everything still passes.** Before the plan completes, Sentinel runs the checks of the done states again, two at a time, on the project as it is then. A check that fails stops the others and runs once more on its own, in case it tripped over the other one. If it still fails, its state reopens and the plan goes back there, and the remaining checks wait for the next run. If it passes, the stopped checks start over. A check that keeps printing at five times the longest it has taken is stopped as stuck. Each run is written to `.sentinel/final-checks.log`. A check that holds only at one moment, such as one tied to a branch, can set `once`: it runs at its own advance and not again at the end, and the draft shows the mark.
 - **Stopping halfway is caught.** When a turn ends with the plan unfinished and nothing waiting on you or on background work, Sentinel tells Claude to continue, at most twice per state.
 
-## Proof each state was asked for
+## Proof Each State Was Asked For
 
 A plan can drift from what you asked for, or pick up work nobody requested. So each state quotes the words that asked for it, and Sentinel compares them itself, with code and no model. The words must match exactly; only spacing and formatting marks are ignored.
 
@@ -29,7 +47,7 @@ A plan can drift from what you asked for, or pick up work nobody requested. So e
 
 Sentinel keeps its own copy of each source, so later edits to a file change nothing. Only the messages a quote uses are written to disk or shown on the page. `/sentinel source` prints the saved copy with each quote marked. This is the `quote-the-source` built-in, on at every weight.
 
-## Your OK, or hands-free
+## Your OK, or Hands-Free
 
 ![A state waits for approval; the user goes hands-free and Claude makes those calls, each listed for later](docs/media/free.webp)
 
@@ -41,7 +59,7 @@ When the work waits on something outside, such as a locked machine or someone's 
 
 When you want to step away, go hands-free: type `/sentinel hands-free`, press Go hands-free in the dashboard, press Lock and go hands-free on the draft, or press Approve and go hands-free on a state that waits for you. Claude then makes the calls that would have waited for you (a proposal, a review of its own work, a breaking change, a question), picks what it would recommend, and goes on. The dashboard lists each one under "Decided without asking you", and each task page shows its own. A state Claude is stuck in can be skipped and left for you, unless a later state builds on it; then the run stops and waits. `/sentinel hands-free off` or Turn off on the dashboard hands the calls back.
 
-## When Claude goes in circles
+## When Claude Goes in Circles
 
 ![Health drops as the same test fails; Sentinel marks the run stuck, sends a note, and the run recovers](docs/media/stuck.webp)
 
@@ -57,7 +75,7 @@ A state can also drag on with nothing going in circles, so Sentinel watches the 
 
 A look runs on Opus for several requests. In a small test repo, one took 4,000 to 8,000 tokens of output, 120,000 written to the cache and 280,000 to 460,000 read from it. A state run by a member gets no overseer yet, and an overseer ends with the session that started it. In a terminal you may see one dim line such as `Prompt dropped by a hook: overseer: fine`, which is Sentinel keeping the agent's own report out of the chat. Every look is kept in `.sentinel/run.json` under `looks`: why it started (time or stuck), what it said, and the minutes until the state moved on.
 
-## The System map
+## The System Map
 
 Experimental: the System tab says so too, and has no switch.
 
@@ -90,7 +108,7 @@ The Library holds what Sentinel adds to every plan: instructions, which are shor
 
 Thorough is slower: `fails-without-change` runs a state's check up to twice more, in a scratch copy of the project.
 
-### Built-ins
+### Built-Ins
 
 | Name | When | Kind | On at |
 | --- | --- | --- | --- |
@@ -105,14 +123,14 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 | `measure-before-delete` | every turn | told | Thorough (needs a mutation-testing tool) |
 | `overseer` | while a state runs long or stays stuck | Sentinel checks | Light, Standard, Thorough |
 | `sources-first` | while Claude drafts a plan | told | off; switch it on for projects with a spec and designs |
-| `state-settings` | while Claude drafts a plan | told | off; see [Settings per state](#settings-per-state) |
+| `state-settings` | while Claude drafts a plan | told | off; see [Settings per State](#settings-per-state) |
 | `close-phase` (a flow) | at the end of a plan | flow | off |
 
-"Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `quote-the-source` compares each state's quote with its sources (see [Proof each state was asked for](#proof-each-state-was-asked-for)). `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
+"Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `quote-the-source` compares each state's quote with its sources (see [Proof Each State Was Asked For](#proof-each-state-was-asked-for)). `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ.
 
 `depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. You tick the ones you want as you lock it, on the dashboard or with `/sentinel lock <id> <id>`. A state that only an unticked answer names comes out.
 
-### Settings per state
+### Settings per State
 
 Experimental, and off until you turn it on. The switch is the row marked Experimental under the weights on the Library page, for this project, the preset in use or every project. It is there for testing. No weight turns it on, Claude can't, and a plan reads it when it is drafted, so flipping it mid-run changes nothing in a running plan. With it off, Sentinel drops these fields from what Claude sends, says so once, and the plan runs as it did before.
 
@@ -125,9 +143,9 @@ With it on, a plan can differ from its one weight where a state calls for it:
 
 A stricter setting applies with its reason shown. A looser one waits for you: the draft card lists what differs, one row for each reason, with Keep and Use Standard, or Remove on an addition, and the band above the prompt asks the same. Hands-free, nobody is there to answer, so a state's lighter weight goes through and shows under Decided without asking you. Lock and go hands-free does the same for the plan's own settings, which don't change once a plan runs. Words you typed count as your answer, once Sentinel has found them in your messages. For anything looser that takes at least 5 words that name it, and a state's row keeps a button to take it back, since Sentinel compares words and not what they mean. If you lock with one unanswered, the plan runs without it. A state added mid-run takes the plan's weight unless it names a stricter one.
 
-Each state's Map card and task page show its weight, its additions and its skips (see [The dashboard](#the-dashboard)). A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
+Each state's Map card and task page show its weight, its additions and its skips (see [The Dashboard](#the-dashboard)). A member agent running a state doesn't get Sentinel's rerun without its changes, so it is told to check that itself and say so.
 
-### Your own instructions
+### Your Own Instructions
 
 An instruction is a JSON file named after it, in `.sentinel/instructions/` (this project, committed), `~/.sentinel/presets/<name>/instructions/` (a preset) or `~/.sentinel/instructions/` (every project):
 
@@ -277,7 +295,7 @@ Only you skip a state, with the command, by asking Claude, or with Skip on the s
 
 The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off and a plan Claude sent before the sign-off go to `.sentinel/draft.json`, so they can't replace an earlier session's plan. A new session starts empty, and the status line says when the project holds any of these; `/sentinel resume` loads it, an unfinished plan first. While paused, nothing is checked or recorded, it is safe to close the session, and on resume Claude is told to read the plan's status first, since files may have changed.
 
-## The dashboard
+## The Dashboard
 
 ![The Map of a twelve-state plan; a state's page opens, and groups fold as the run moves on](docs/media/map.webp)
 
@@ -297,14 +315,14 @@ That page comes from a small background process, `web/hub.mjs`, on port 40999. I
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
 - **Library** has the Preset line on top, with the preset in use, the needed MCPs and the chooser, then Change for and two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
-- **System** shows once the project has a map, with or without a plan running. See [The System map](#the-system-map). A banner names the parts that changed since the map was drawn, with Redraw this area and It's fine on each.
+- **System** shows once the project has a map, with or without a plan running. See [The System Map](#the-system-map). A banner names the parts that changed since the map was drawn, with Redraw this area and It's fine on each.
 - **The draft card** also says how many states quote their source, notes the sections nothing quotes, lists What you asked for, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
 
 The pane in the terminal has four views, switched with `f`, `m`, `l` and `s`: Focus (the active state and its check runs), Map (the whole machine, health and log), Ledger (every call with the arithmetic) and System (the project's map, once it has one). `b` opens the dashboard.
 
 ## More
 
-### A plan already under way
+### A Plan Already Under Way
 
 Type `/sentinel lock` in the middle of the work. Claude defines the whole plan and starts it at the first unfinished state. Sentinel runs the check of each state before that and refuses the plan if one fails; a finished state without a check needs evidence, such as a commit. Claude records decisions already made and where the plan's details live, so they survive compaction. You check the draft in the pane and lock it with a second `/sentinel lock`.
 
@@ -312,7 +330,7 @@ Type `/sentinel lock` in the middle of the work. Claude defines the whole plan a
 
 Claude can give each state a `group`, such as `auth`, or `marking/runs` for a group inside a group. Groups only label states and fold them in the views; checks, loops and the stuck detector work the same with or without them.
 
-### Parallel states (experimental)
+### Parallel States (Experimental)
 
 Each state can list the states it `needs`. Without `needs`, a state needs the one before it, so a plan is a straight line. `define` refuses a plan whose needs go round in a circle, or where two states that could run at the same time share files.
 
@@ -370,4 +388,4 @@ The clips play real runs through `hooks/core.ts` and show them on the real dashb
 
 ## License
 
-MIT
+Apache License 2.0: see [LICENSE](LICENSE). Copies and changed versions must keep the attribution in [NOTICE](NOTICE).
