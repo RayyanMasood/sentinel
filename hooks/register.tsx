@@ -3233,7 +3233,8 @@ function after($: $): Promise<void> {
       const big = wrote.bytes > BIG_RUN
       const at = big ? await $.clock.now().catch(() => Date.now()) : 0
       const wait = big && turning ? wrote.at + 1000 - at : 0
-      // A timer that fails writes at once: a throw here would leave queued set, and nothing would write again.
+      // A hook that refuses the timer says nothing (its fn never runs), so the write then waits for the turn's end, which
+      // releases it. The catch is for a throw, which would leave queued set, and nothing would write again.
       if (wait > 0) await new Promise<void>(go => ((heldWrite = go), $.clock.after(wait, go))).catch(() => undefined)
       heldWrite = undefined
       queued = false
