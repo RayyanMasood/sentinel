@@ -7,6 +7,7 @@
 //  3. A state with no files of its own is kept, though nothing says what would have changed it.
 //  4. A review the user never gave is kept (a first walk through, or hands-free), or the notice hides what changed upstream.
 //  5. A helper subagent changed the state's files, and the review is kept because only the main conversation's edits count.
+//  6. A helper edits after the user was asked, and their answer passes a review of files they never saw.
 import { expect } from 'claude-code/testing'
 import type { Run } from '../types'
 import { act, emptyRun, helpedBy, observe, stopSettled, type PlanInput } from '../hooks/core'
@@ -110,4 +111,19 @@ test("a helper edit to the state's files drops the kept review, and one elsewher
   const kept = act(helpedBy(backAtPage(reviewedThenLooped()), 'src/b.ts'), { action: 'advance', to: 'verify' }, '09:00', {}, at(8))
   expect(kept.ok).toBe(true)
   expect(kept.text).toMatch(/src\/b\.ts/)
+})
+
+// 6
+test('a helper edit after the user was asked asks again, though they answered', () => {
+  let r = go({ ...emptyRun(), signedOff: true }, PLAN(), T0)
+  r = go(look(r), { action: 'advance', to: 'service', evidence: 'found it' }, at(1))
+  r = go(pass(edit(r, 'src/a.ts'), 'npm test -- svc'), { action: 'advance', to: 'page' }, at(2))
+  const asked = act(pass(edit(r, 'web/view.html'), 'npm test -- page'), { action: 'advance', to: 'verify' }, '09:00', {}, at(3))
+  expect([asked.ok, asked.stop]).toEqual([false, 'after'])
+  // The advance call is counted after it returns, as the plan tool records it, and then a helper edits the page.
+  r = helpedBy(observe(asked.run, { kind: 'plan', label: 'advance' }, '09:00').run, 'web/view.html')
+  r = look(stopSettled(r, { how: 'yes' } as any, '09:03', at(4)))
+  const again = act(r, { action: 'advance', to: 'verify' }, '09:00', {}, at(5))
+  expect([again.ok, again.stop]).toEqual([false, 'after'])
+  expect(again.run.pending).toMatchObject({ state: 'page', kind: 'after' })
 })

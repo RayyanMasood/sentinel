@@ -2232,7 +2232,8 @@ function advance(r: Run, i: PlanInput, t: string, now: number, proofs: Proofs = 
     if (waitOf(st) === 'after' && r.handsFree) r = { ...r, audit: [...r.audit, { step: r.step + 1, t, state: st.id, kind: 'decided', text: `Passed its review hands-free${said ? `: ${said}` : ''}` }] }
     else if (waitOf(st) === 'after') {
       const p = pendingOf(r)
-      const seen = p?.kind === 'after' && !visit.some(c => c.kind === 'edit' && c.ver !== undefined && c.step > p.step)
+      // A helper's edit counts too. One stamped with the ask's own step landed after it, as the advance is counted on return.
+      const seen = p?.kind === 'after' && !visit.some(c => c.kind === 'edit' && c.ver !== undefined && c.step > p.step) && !r.helped?.some(h => h.step >= p.step)
       // Not asked in this visit, but the user reviewed it in an earlier one and none of its files changed since.
       const kept = p ? undefined : keptReview(r, st)
       if (kept) {
