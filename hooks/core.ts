@@ -2138,8 +2138,13 @@ export const isTestFile = (rel: string) => TEST_GLOBS.some(g => globMatch(g, rel
 // The visit's snapshot (Run.snap), if it is this visit's.
 const snapOf = (r: Run) => (r.snap?.state === r.active && r.snap.enteredAt === r.enteredAt ? r.snap : undefined)
 export const withSnap = (r: Run, sha: string): Run => ({ ...r, snap: { state: r.active!, enteredAt: r.enteredAt, sha } })
-// A helper subagent's edit in the main checkout, kept as long as the calls are.
-export const helpedBy = (r: Run, file: string): Run => ({ ...r, helped: [...(r.helped ?? []), { file, step: r.step }].slice(-MAX_CALLS) })
+// A helper subagent's edit in the main checkout, kept as long as the calls are. It lands between two counted calls. One
+// that lands after the call in progress opened a visit or asked the user, such as while the review dialog is open, comes
+// after them, so it takes the step that call will be counted at.
+export const helpedBy = (r: Run, file: string): Run => {
+  const step = r.enteredAt === r.step || r.pending?.step === r.step + 1 ? r.step + 1 : r.step
+  return { ...r, helped: [...(r.helped ?? []), { file, step }].slice(-MAX_CALLS) }
+}
 // The files edited after `step`, by the main conversation or its helpers.
 const editedAfter = (r: Run, step: number) => [
   ...r.calls.flatMap(c => (c.kind === 'edit' && !c.denied && c.file !== undefined && c.step > step ? [c.file] : [])),

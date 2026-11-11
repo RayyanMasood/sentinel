@@ -15,6 +15,8 @@
 //  5. The session ends inside the second a write is held back, so run.json misses the last change.
 //  6. A Library change Sentinel makes waits behind the Library's five seconds on a big run, and between turns, with
 //     nothing else writing, the page never shows it.
+//  7. A call that waits for its write, such as the plan's last advance or a pause, waits on a held write's timer, and a
+//     timer a hook refused (its fn never runs) keeps the call, and so the turn, from ending.
 import { expect, mock } from 'claude-code/testing'
 import type { Run } from '../types'
 import { act, emptyRun, observe } from '../hooks/core'
@@ -226,4 +228,21 @@ test('a Library switch from the page shows at once on a big run, between turns',
   expect(String((await $.command.run({ command: 'sentinel', args: 'preset new quick' })).text)).toMatch(/quick/)
   await clock.settle()
   expect(eng.snap().library.using?.name).toBe('quick')
+})
+
+// 7
+test("a call that waits for its write on a big run gets it at once, though the held write's timer never fires", { timeoutMs: 60_000 }, async ($: any, on: any) => {
+  const { eng, clock } = await bigSession($, on)
+  await clock.advance(2000)
+  for (let i = 400; i < 410; i++) await call($, eng, i)
+  await clock.settle()
+  const saved = () => JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!)
+  expect(saved().step).toBeLessThan(eng.memory.run!.step)
+  // The clock stands still from here, as it does for a timer a hook refused. A pause waits for its write.
+  let back = false
+  const paused = $.command.run({ command: 'sentinel', args: 'pause' }).then(() => (back = true))
+  await clock.settle()
+  expect(back).toBe(true)
+  await paused
+  expect([saved().paused, saved().step]).toEqual([true, eng.memory.run!.step])
 })

@@ -793,7 +793,7 @@ async function pause($: $): Promise<string> {
   const r = await read($, run)
   if (!isLive(r)) return r.paused ? 'Sentinel is already paused.' : 'No plan is running.'
   await change($, x => ({ ...x, paused: true, log: [...x.log, { t: now(), icon: '‖', tone: 'warn' as const, text: 'Paused' }] }))
-  await after($)
+  await after($, true)
   const members = Object.keys(r.running ?? {})
   const end = members.length ? ` Member agents end with the session: ${members.join(', ')} can be briefed again, and ${members.length > 1 ? 'their worktrees stay' : 'its worktree stays'}.` : ''
   return `Paused at ${r.active}. Edits, questions and stopped turns go unchecked until /sentinel resume. It's safe to close this session: the plan is saved, and /sentinel resume picks it up in a later one.${end}`
@@ -2211,7 +2211,7 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
         : `Sentinel couldn't start a member agent for ${st.id}: ${why}`,
     }, { kind: 'plan', label, denied: true })
   }
-  await change($, x => startMember(x, st.id, { agent, name: wt.name, ...(how ? { how } : {}) }, now(), Date.now()))
+  await change($, x => startMember(x, st.id, { agent, name: wt.name, repo: { top: wt.top, prefix: wt.prefix }, ...(how ? { how } : {}) }, now(), Date.now()))
   await markStart($)
   return record($, { result: `Started a member agent for ${st.id}${how ? ` (${how})` : ''} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
 }
@@ -2227,13 +2227,15 @@ const checkoutAt = (root: string, repo: Repo, name: string): Checkout => {
   const outer = `${root}/.claude/worktrees/${name}`
   return { ...repo, name, outer, inner: repo.prefix ? `${outer}/${repo.prefix}` : outer }
 }
-// Asked once per session; a .git there answers without running git.
+// A yes is kept for the session; a .git there answers without running git. A no is asked again, as the folder can
+// become a repository mid-session (git init).
 const repoRoots = new Map<string, Promise<boolean>>()
 function rootIsRepo($: $, root: string): Promise<boolean> {
   let known = repoRoots.get(root)
   if (!known) {
     known = (async () => (await $.fs.exists(`${root}/.git`).catch(() => false)) || git($, root, ['rev-parse', '--show-toplevel']).then(() => true, () => false))()
     repoRoots.set(root, known)
+    void known.then(yes => yes || repoRoots.delete(root))
   }
   return known
 }
@@ -2363,6 +2365,11 @@ async function rerun($: $, check: string, id: string, w: { sha: string; tests: s
   const c = checkoutAt(root, repo, `sentinel-wo-${id}-${Date.now().toString(36)}`)
   const path = c.outer
   const inRepo = (f: string) => (c.prefix && f.toLowerCase().startsWith(`${c.prefix.toLowerCase()}/`) ? f.slice(c.prefix.length + 1) : f)
+  // Only the repository's own files go into its copy. A fix to a done state's files in another repository has no place
+  // there, and a folder written for it would keep the copy's folder from being removed.
+  const ours = (fs: string[]) => (c.prefix ? fs.filter(f => inRepo(f) !== f) : fs)
+  w = { ...w, tests: ours(w.tests), code: ours(w.code) }
+  if (!w.tests.length || !w.code.length) return { skipped: `no ${w.tests.length ? 'code' : 'test'} files changed in ${c.prefix}` }
   // The project's version of each file goes into the copy; a file deleted in the project goes from the copy too.
   const copy = async (files: string[]) => {
     for (const f of files) {
@@ -2436,8 +2443,8 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     const mine = async () => (await read($, run)).running?.[id]?.agent === m.agent
     const root = await rootOf($)
     // The check runs in the outer folder, as in the project; git runs in the repository's checkout, and the work goes
-    // to that repository. Its file names gain the repository's folder again on the way back.
-    const repo = await repoFor($, st)
+    // to that repository, the one named at the brief. Its file names gain the repository's folder again on the way back.
+    const repo = m.repo ?? (await repoFor($, st))
     const c = checkoutAt(root, 'why' in repo ? { top: root, prefix: '' } : repo, m.name)
     const path = c.outer
     const inRepo = (g: string) => (c.prefix && g.toLowerCase().startsWith(`${c.prefix.toLowerCase()}/`) ? g.slice(c.prefix.length + 1) : g)
@@ -2670,7 +2677,7 @@ async function lookAll($: $): Promise<void> {
   const unmapped = unmappedFolders(map, facts.files, globMatch)
   const leads = envLeads(String(await $.fs.read(`${await $.session.root()}/.env.example`).catch(() => '')), map)
   looked = { ...looked, drift: withoutFine(driftOf(map, facts, globMatch), marks, looked.now ?? {}), unmapped, leads }
-  await after($)
+  await after($, true)
 }
 
 // What git says about the project since the commits the map's parts were drawn at. With no repo there is nothing to ask. A
@@ -2771,7 +2778,7 @@ function logPlan($: $, r: Run): Promise<unknown> {
     const lines = withPlan(parsePlans(String(await $.fs.read(file).catch(() => ''))), { title, at: new Date().toISOString(), ended: r.closed ? 'closed' : 'complete', parts })
     await $.fs.write(file, JSON.stringify(lines))
     looked = { ...looked, plans: lines }
-    await after($)
+    await after($, true)
   }).catch(() => undefined))
 }
 
@@ -3240,8 +3247,15 @@ const BIG_RUN = 64 * 1024
 const LIBRARY_MS = 5000
 let queued = false
 let heldWrite: (() => void) | undefined
+// A caller that waits for the write (now) gets it at once, a held one included: its call would otherwise wait on the
+// timer, and the turn can't end while a call waits.
+let rush = false
 const wrote = { at: -Infinity, bytes: 0, library: -Infinity }
-function after($: $): Promise<void> {
+function after($: $, now = false): Promise<void> {
+  if (now) {
+    rush = true
+    heldWrite?.()
+  }
   if (queued) return writing
   queued = true
   writing = writing
@@ -3249,12 +3263,14 @@ function after($: $): Promise<void> {
       // Only a big run asks the time: the wait for it would put a small run's write after what reads it straight away.
       const big = wrote.bytes > BIG_RUN
       const at = big ? await $.clock.now().catch(() => Date.now()) : 0
-      const wait = big && turning ? wrote.at + 1000 - at : 0
-      // A hook that refuses the timer says nothing (its fn never runs), so the write then waits for the turn's end, which
-      // releases it. The catch is for a throw, which would leave queued set, and nothing would write again.
+      const wait = big && turning && !rush ? wrote.at + 1000 - at : 0
+      // A hook that refuses the timer says nothing (its fn never runs), so the write then waits for the turn's end, or
+      // for a caller that waits on it, which release it. The catch is for a throw, which would leave queued set, and
+      // nothing would write again.
       if (wait > 0) await new Promise<void>(go => ((heldWrite = go), $.clock.after(wait, go))).catch(() => undefined)
       heldWrite = undefined
       queued = false
+      rush = false
       const t = at + Math.max(0, wait)
       wrote.at = t
       // The clock's update, every time: it reads the run as it is now, which a call's own read misses once other calls

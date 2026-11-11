@@ -13,6 +13,9 @@
 //  8. The draft gives no warning that some states can't get a member, so the user finds out mid-run.
 //  9. A helper subagent of the main conversation writes the tests, and the rerun skips with "no test files changed".
 // 10. Two helpers' first edits come together: no snapshot before them, two through one index, or a failed one blanks a good one.
+// 11. The bring-back looks the repository up again, and a git hiccup then sends the work to the project folder.
+// 12. The rerun's copy gets files of another repository, such as a fix to a done state there, and its folder can't go.
+// 13. The folder becomes a repository mid-session (git init), and an answer kept from before refuses every member.
 // A plain repository root makes no extra git calls: the pinned brief and rerun tests in sentinel.test.tsx cover it.
 import { expect, mock } from 'claude-code/testing'
 import { emptyRun, snapTaken, withSnap, type PlanInput } from '../hooks/core'
@@ -103,7 +106,7 @@ test("a one-repo state's brief starts a member in its repository's checkout, wit
   expect(await edit(`${outer}/shop-api/src/app.ts`)).toMatch(/outside the files of state ui/)
 })
 
-// 3, 7
+// 3, 7, 11
 test('its work is applied in its repository, named with the repository folder, and its checkout goes without touching the packages', async ($: any, on: any) => {
   const { eng, clock } = await at($, on, true)
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
@@ -122,6 +125,8 @@ test('its work is applied in its repository, named with the repository folder, a
   const apply = after.find(x => x.argv[1] === 'apply')!
   expect([apply.cwd, apply.stdin]).toEqual([B, patch])
   cleanedUp(eng, outer, 'shop-web', B)
+  // 11: the repository is the one found at the brief; git isn't asked again.
+  expect(after.some(x => x.argv.includes('--show-toplevel'))).toBe(false)
   expect(eng.submitted.at(-1)).toMatch(/ui is in: its member passed `cd shop-web && npm test` in its worktree\. Sentinel applied its changes to the project: shop-web\/src\/box\.tsx\./)
   expect(runOf(eng).done).toContain('ui')
 })
@@ -260,4 +265,30 @@ test("the draft lists the states that can't get a member here, and why", async (
 test("with parallel states off, the draft doesn't say which states can't get a member", async ($: any, on: any) => {
   const { defined } = await at($, on, false)
   expect(notes(defined)).not.toMatch(/can't get a member/)
+})
+
+// 12
+test("the rerun's copy holds only its repository's files, though a fix to another repository's done state is in the visit", async ($: any, on: any) => {
+  const { eng } = await inApi($, on)
+  await $.tool.call({ tool: 'Write', file_path: `${A}/src/refund.ts`, content: 'refund v2' })
+  await $.tool.call({ tool: 'Write', file_path: `${A}/tests/refund.test.ts`, content: 'test v1' })
+  expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'ui' }))).toMatch(/Moved to ui/)
+  // In ui, shop-web's work and a fix to api's test, which is done.
+  await $.tool.call({ tool: 'Write', file_path: `${B}/src/box.tsx`, content: 'box' })
+  await $.tool.call({ tool: 'Write', file_path: `${B}/src/box.test.tsx`, content: 'box test' })
+  expect(said(await $.tool.call({ tool: 'Write', file_path: `${A}/tests/refund.test.ts`, content: 'test v2' }))).toBe('ok')
+  await $.tool.call({ tool: TOOL, action: 'advance', to: 'docs', evidence: 'done' })
+  const inner = git(eng, 'worktree', 'add').find(x => x.cwd === B)!.argv[4]!
+  const outer = inner.replace(/\/shop-web$/, '')
+  expect(eng.files[`${inner}/src/box.test.tsx`]).toBe('box test')
+  expect(Object.keys(eng.files).filter(f => f.startsWith(`${outer}/shop-api/`))).toEqual([])
+})
+
+// 13
+test('a project folder that becomes a repository mid-session gets members, though the draft found it was none', async ($: any, on: any) => {
+  const { eng, defined } = await at($, on, true)
+  expect(notes(defined)).toMatch(/can't get a member/)
+  eng.setRepos(undefined)
+  expect(said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' }))).toMatch(/Started a member agent for ui/)
+  expect(eng.spawns[0]!.cwd).toMatch(/^D:\/proj\/\.claude\/worktrees\/sentinel-ui-\w+$/)
 })

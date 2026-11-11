@@ -8,9 +8,11 @@
 //  4. A review the user never gave is kept (a first walk through, or hands-free), or the notice hides what changed upstream.
 //  5. A helper subagent changed the state's files, and the review is kept because only the main conversation's edits count.
 //  6. A helper edits after the user was asked, and their answer passes a review of files they never saw.
+//  7. A helper's edit lands while the call in progress opens a visit or asks the user, and is counted before it: the
+//     review dialog passes it, and the rerun leaves out the tests it wrote.
 import { expect } from 'claude-code/testing'
 import type { Run } from '../types'
-import { act, emptyRun, helpedBy, observe, stopSettled, type PlanInput } from '../hooks/core'
+import { act, emptyRun, helpedBy, observe, rerunOf, stopSettled, withSnap, type PlanInput } from '../hooks/core'
 import { test } from './kit'
 
 const T0 = Date.UTC(2026, 9, 26, 9, 0, 0)
@@ -126,4 +128,21 @@ test('a helper edit after the user was asked asks again, though they answered', 
   const again = act(r, { action: 'advance', to: 'verify' }, '09:00', {}, at(5))
   expect([again.ok, again.stop]).toEqual([false, 'after'])
   expect(again.run.pending).toMatchObject({ state: 'page', kind: 'after' })
+})
+
+// 7
+test('a helper edit while the review dialog is open asks again, and one as a state opens counts for it', () => {
+  let r = go({ ...emptyRun(), signedOff: true }, PLAN(), T0)
+  r = go(look(r), { action: 'advance', to: 'service', evidence: 'found it' }, at(1))
+  // The advance to service is not counted yet when the helper writes the tests: they are service's.
+  r = helpedBy(r, 'src/a.test.ts')
+  const tests = rerunOf(withSnap(edit(r, 'src/a.ts'), 'snap1'))
+  expect(tests).toEqual({ sha: 'snap1', tests: ['src/a.test.ts'], code: ['src/a.ts'] })
+  r = go(pass(edit(r, 'src/a.ts'), 'npm test -- svc'), { action: 'advance', to: 'page' }, at(2))
+  const asked = act(pass(edit(r, 'web/view.html'), 'npm test -- page'), { action: 'advance', to: 'verify' }, '09:00', {}, at(3))
+  expect([asked.ok, asked.stop]).toEqual([false, 'after'])
+  // The dialog is up, inside the advance call, when a helper edits the page; the user says yes and the call goes on.
+  r = stopSettled(helpedBy(asked.run, 'web/view.html'), { how: 'yes' } as any, '09:03', at(4))
+  const again = act(r, { action: 'advance', to: 'verify' }, '09:00', {}, at(5))
+  expect([again.ok, again.stop]).toEqual([false, 'after'])
 })

@@ -299,8 +299,9 @@ export type Spend = { model: string; effort?: string; sub: boolean; requests: nu
 export type Lane = { id: string; name: string; state: string; calls: number; edits: string[]; last: string; running: boolean }
 
 // A member agent working on one state: its agent id, the name of its worktree under .claude/worktrees/, how
-// often its check has failed there, and its answer while helpers it started still work.
-export type Member = { agent: string; name: string; since: number; how?: string; fails?: number; answer?: string }
+// often its check has failed there, and its answer while helpers it started still work. repo: the repository its work
+// goes back to and its folder in the project ('' when the project is the repository), as found at the brief.
+export type Member = { agent: string; name: string; since: number; how?: string; fails?: number; answer?: string; repo?: { top: string; prefix: string } }
 
 // A way back that was taken: when, along which edge, and the reason the model gave.
 export type Trip = { from: string; to: string; at: number; t: string; reason: string }
