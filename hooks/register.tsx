@@ -871,7 +871,7 @@ async function startLook($: $, why: TimeMark | Trap): Promise<'started' | 'refus
   const looks = await read($, overseers)
   const list = await agents($)
   if (list.some(a => working(a) && looks[a.id])) return undefined
-  const diff = await git($, await $.session.root(), ['diff', '--stat', 'HEAD']).catch(() => '')
+  const diff = await uncommitted($, (await read($, run)).plan?.states ?? [])
   const r = await read($, run)
   const others = list.filter(working).map(a => a.description ?? a.id)
   const description = `overseer ${why.state}`
@@ -2241,15 +2241,32 @@ async function repoFor($: $, st: StateDef): Promise<Repo | { why: string }> {
   const root = await rootOf($)
   if (await rootIsRepo($, root)) return { top: root, prefix: '' }
   const tops: (string | undefined)[] = []
-  for (const g of st.files) {
-    // The glob's folder, or the nearest one above it that git answers in: a folder that doesn't exist yet fails too.
-    let top: string | undefined
-    for (let dir = globFolder(g); dir && !top; dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '') {
-      top = await git($, `${root}/${dir}`, ['rev-parse', '--show-toplevel']).then(s => s.trim() || undefined, () => undefined)
-    }
-    tops.push(top)
-  }
+  for (const g of st.files) tops.push(await topOf($, root, globFolder(g)))
   return repoOf(root, st, tops)
+}
+// The repository a project folder sits in: git asked in the folder, or the nearest one above it that git answers in, as a
+// folder that doesn't exist yet fails too.
+async function topOf($: $, root: string, dir: string): Promise<string | undefined> {
+  for (; dir; dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '') {
+    const top = await git($, `${root}/${dir}`, ['rev-parse', '--show-toplevel']).then(s => s.trim() || undefined, () => undefined)
+    if (top) return top
+  }
+  return undefined
+}
+// What is uncommitted, for the overseer. At a project folder that holds repositories but isn't one, git there has
+// nothing to say, so each repository the plan's files sit in gives its own, under its folder.
+async function uncommitted($: $, states: StateDef[]): Promise<string> {
+  const root = await rootOf($)
+  const stat = (dir: string) => git($, dir, ['diff', '--stat', 'HEAD']).catch(() => '')
+  if (await rootIsRepo($, root)) return stat(root)
+  const folders = [...new Set(states.flatMap(s => s.files).map(globFolder))]
+  const tops = new Set((await Promise.all(folders.map(d => topOf($, root, d)))).flatMap(t => (t ? [t] : [])))
+  const name = (t: string) => (t.toLowerCase().startsWith(`${root.toLowerCase()}/`) ? t.slice(root.length + 1) : t)
+  const each = await Promise.all([...tops].sort().map(async t => {
+    const s = (await stat(t)).trimEnd()
+    return s ? `${name(t)}:\n${s}` : ''
+  }))
+  return each.filter(Boolean).join('\n\n')
 }
 // With parallel states on at a project folder that isn't a repository: the states that can't get a member, and why.
 async function memberless($: $, states: StateDef[], start?: string): Promise<string | undefined> {

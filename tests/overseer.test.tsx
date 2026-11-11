@@ -3,7 +3,8 @@
 //
 // How this can fail, and where each is tested below:
 //  1. It starts too early, with no plan, or more than one at a time, so tokens go on looks nobody needs.
-//  2. It starts with too little to go on, or able to edit, or on a model the user didn't ask for.
+//  2. It starts with too little to go on, or able to edit, or on a model the user didn't ask for. At a project folder
+//     that holds repositories but isn't one, git at the folder fails, and the look starts with no changes listed.
 //  3. A FINE reaches the main chat, either as Sentinel's message or as the agent's own hand-back (a real terminal delivers
 //     one, seen in mockups/time-note/spike.log), which disturbs the run and can wake an idle chat.
 //  4. A finding never reaches the main chat, whether it is working or idle, or an answer it can't read is lost.
@@ -277,6 +278,39 @@ inRun('it asks git what changed, and the prompt carries the answer, other agents
   expect(prompt).toContain('a helper')
   expect(prompt).toContain('49.99')
   expect(overseerPrompt({ ...r, enteredAt: r.lastFail.step }, { state: 'service', mark: 1, ms: 1 }, '', [])).not.toContain('49.99')
+})
+
+// 2
+test('at a folder of repositories, each one the plan reaches lists its own changes, under its name', async ($: any, on: any) => {
+  const A = `${ROOT}/shop-api`
+  const B = `${ROOT}/shop-web`
+  const eng = engine(on)
+  eng.setRepos([A, B])
+  // git diff in either repository answers this; at the project folder git fails.
+  eng.setPatch(' src/app.ts | 4 ++\n')
+  const clock = clockFrom(on)
+  on('session.start', (_: any, e: any) => ({ cwd: e.cwd }))
+  on('tool.register', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  await $.session.start({ cwd: ROOT, surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'ExitPlanMode' })
+  await plan($, {
+    action: 'define', title: 'Phase 3', states: [
+      { id: 'api', label: 'Backend', check: 'cd shop-api && npm test', files: ['shop-api/src/**', 'shop-api/tests/**'] },
+      { id: 'ui', label: 'Frontend', check: 'cd shop-web && npm test', files: ['shop-web/src/**'] },
+      { id: 'verify', label: 'Both suites', check: 'npm test' },
+    ],
+  })
+  await clock.advance(20)
+  await $.turn.start({ text: '', turnId: 't' })
+  await minutes(clock, 31)
+  await until(clock, () => eng.spawns.length)
+  const prompt = eng.spawns[0].prompt
+  // Each block named by its folder in the project, not the full path.
+  expect(prompt).toMatch(/^shop-api:\n src\/app\.ts \| 4 \+\+$/m)
+  expect(prompt).toMatch(/^shop-web:\n src\/app\.ts \| 4 \+\+$/m)
+  // Each repository once, and nothing at the project folder, where git has nothing to say.
+  expect(eng.runs.filter(x => x.argv.includes('--stat')).map(x => x.cwd).sort()).toEqual([A, B])
 })
 
 test('the first word of an answer is what counts', () => {
