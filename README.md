@@ -355,11 +355,14 @@ States that run side by side each pass their own check, but nothing tests them t
 - Plan mode sign-off locks straight away, so a flow goes into such a plan only by its rule. To place one by hand, use `/sentinel lock`.
 - Flow rules and `define` compare file globs as text, so two globs that could cover the same file without matching each other, such as `src/*.ts` and `src/a*`, don't count as overlapping.
 - Parallel states need a git repository with at least one commit, and snapshotting a large one is slow. Member agents end with the session that started them.
+- In a folder that holds several repositories and isn't one itself, each state's files must sit in one repository. Its member works in a checkout at `.claude/worktrees/<name>/<repo>`, with that repository's `node_modules` linked beside it. States whose files span repositories, or sit outside any, run in the main conversation, and the draft lists them when parallel states are on.
+- The `node_modules` link sits beside the checkout because on Windows 11, `git worktree remove --force` on a checkout with the link inside deleted the real packages. `Remove-Item -Recurse`, `rm -rf`, `rmdir /s` and Node's `rmSync` left them alone, so a leftover `.claude/worktrees` folder is safe to delete with any of those. Run `git worktree prune` in the repository afterwards.
+- A run over 64 KB, as a long plan gets, updates the dashboard at most once a second while Claude works, and reads the Library for the page at most every five seconds. A change Sentinel makes to the Library shows at once.
 - The quote comparison only shows the words are in the source. It can't tell whether the state does what they say. A five-word quote that leaves out an earlier "not" still passes.
 - The stop for a state added during the run reads its file patterns. A broad one such as `src/**` that later reaches a sign-in file doesn't stop. A public API change or deleted data still relies on Claude flagging it with `escalate`.
 - A state Claude marks as part of a flow in a `define` skips the comparison. States added during a run can't use that mark.
 - A new plan-mode sign-off while a plan runs replaces that plan's saved sources until the new draft locks.
-- In `claude -p`, a prompt doesn't count as a typed message, so quotes need a file from before the session or a plan-mode approval. Checks run through the Bash tool as `(cd <root> && <check>); echo ...`, so a narrow allow rule such as `Bash(node:*)` doesn't cover them and `advance` is refused.
+- In `claude -p` or the Agent SDK, a prompt doesn't count as a typed message, so quotes need a file from before the session or a plan-mode approval. Checks run through the Bash tool as `(cd <root> && <check>); echo ...`, so a narrow allow rule such as `Bash(node:*)` doesn't cover them and `advance` is refused.
 - Claude Code only for now. The state machine and detector in `hooks/core.ts` have no engine dependency, so other agents could reuse them.
 
 ## Develop
