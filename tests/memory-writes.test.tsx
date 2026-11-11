@@ -13,6 +13,8 @@
 //     this: they read state.js straight after each action, on a clock that stands still.
 //  4. A big run still rereads the Library's files on every write.
 //  5. The session ends inside the second a write is held back, so run.json misses the last change.
+//  6. A Library change Sentinel makes waits behind the Library's five seconds on a big run, and between turns, with
+//     nothing else writing, the page never shows it.
 import { expect, mock } from 'claude-code/testing'
 import type { Run } from '../types'
 import { act, emptyRun, observe } from '../hooks/core'
@@ -207,4 +209,21 @@ test('a burst of calls on a big run stays within the write budget, and the last 
   const last = JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!)
   expect([last.step, last.calls.at(-1).label]).toEqual([ended.step, ended.calls.at(-1)!.label])
   expect(eng.files[`${ROOT}/.sentinel/state.js`]).toContain(`"step":${ended.step},`)
+})
+
+// 6
+test('a Library switch from the page shows at once on a big run, between turns', { timeoutMs: 60_000 }, async ($: any, on: any) => {
+  const { eng, clock } = await bigSession($, on)
+  const item = (name: string) => eng.snap().library.instructions.find((x: any) => x.name === name)
+  await $.turn.complete({ answer: 'Done for now.', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await clock.settle()
+  expect(item('failure-list').on).toBe(true)
+  eng.page({ kind: 'libon', name: 'failure-list', scope: 'project', on: false })
+  await clock.settle()
+  expect(eng.snap().flowSaid?.text).toMatch(/failure-list is off/)
+  expect(item('failure-list').on).toBe(false)
+  // A preset made with a command shows at once too.
+  expect(String((await $.command.run({ command: 'sentinel', args: 'preset new quick' })).text)).toMatch(/quick/)
+  await clock.settle()
+  expect(eng.snap().library.using?.name).toBe('quick')
 })

@@ -1717,6 +1717,7 @@ async function loadPresets($: $): Promise<SavedPreset[]> {
 // What the user's change did to the Library: the snapshot again, and the page and the band redrawn.
 const changed = async ($: $) => {
   await loadLibrary($)
+  wrote.library = -Infinity
   void after($)
 }
 
@@ -3232,7 +3233,8 @@ function after($: $): Promise<void> {
       const big = wrote.bytes > BIG_RUN
       const at = big ? await $.clock.now().catch(() => Date.now()) : 0
       const wait = big && turning ? wrote.at + 1000 - at : 0
-      if (wait > 0) await new Promise<void>(go => ((heldWrite = go), $.clock.after(wait, go)))
+      // A timer that fails writes at once: a throw here would leave queued set, and nothing would write again.
+      if (wait > 0) await new Promise<void>(go => ((heldWrite = go), $.clock.after(wait, go))).catch(() => undefined)
       heldWrite = undefined
       queued = false
       const t = at + Math.max(0, wait)
@@ -3470,7 +3472,8 @@ async function fromPage($: $, m: Record<string, unknown>) {
   }
   if (m.kind === 'resume' && r.paused) return void (await resume($))
   // Flows: the draft's flows (dropped when the draft changed since the page showed it), and the saved ones.
-  const flowReply = (out: { ok: boolean; text: string }) => void ((flowSaid = { at: Date.now(), ...out }), after($))
+  // A change Sentinel made to the Library shows at once, even on a big run.
+  const flowReply = (out: { ok: boolean; text: string }) => void ((flowSaid = { at: Date.now(), ...out }), (wrote.library = -Infinity), after($))
   if ((m.kind === 'addflow' || m.kind === 'dropflow') && r.draft && m.draft === draftKey(r)) {
     const out = m.kind === 'addflow'
       ? await addNow($, [m.name, m.at, m.state].filter(x => typeof x === 'string' && x).join(' '))
