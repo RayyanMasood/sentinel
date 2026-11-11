@@ -1,11 +1,18 @@
 // What Sentinel does on each tool call once its run is as big as a long real plan's (400 calls, about 200 KB): reads and writes
-// of the run in the host's state, file writes and their bytes, and Library reads with the dashboard up. It measures; it
-// sets no budget yet. Run with `node tests/only.mjs memory-writes`; the numbers print on a "Received" line, which
-// only.mjs keeps.
+// of the run in the host's state, file writes and their bytes, and Library reads with the dashboard up. Run with
+// `node tests/only.mjs memory-writes`; the numbers print on "Received" lines, which only.mjs keeps.
 //
 // The big run is built with core's own functions and resumed from run.json, as driving 400 calls through the hooks takes
 // longer than the kit lets the dashboard's helper live.
 // What it can't see: the band redrawing on each write (the kit draws no band), and claude.exe's memory.
+//
+// How the write budget can fail, and where each is tested below:
+//  1. A burst of calls on a big run still writes state.js, the port's state file and run.json on every change.
+//  2. The limit drops the last change: once the burst ends, the files hold an older state than the run.
+//  3. The limit reaches small runs, so a page reads an older state right after an action. The suite's page reads cover
+//     this: they read state.js straight after each action, on a clock that stands still.
+//  4. A big run still rereads the Library's files on every write.
+//  5. The session ends inside the second a write is held back, so run.json misses the last change.
 import { expect, mock } from 'claude-code/testing'
 import type { Run } from '../types'
 import { act, emptyRun, observe } from '../hooks/core'
@@ -54,49 +61,64 @@ async function call($: any, eng: ReturnType<typeof engine>, i: number) {
   }
 }
 
-test('per tool call with a full-sized run and the dashboard up: state reads and writes, file writes and bytes, Library reads', async ($: any, on: any) => {
+// The dashboard up on a full-sized run an earlier session left behind, with the project's Library for the page to read. n
+// counts the host's reads and writes of the run.
+async function bigSession($: any, on: any) {
   const eng = engine(on)
   const clock = mock.clock(on)
   const n = { get: 0, set: 0 }
   on('state.get', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => (e.key === 'run' && n.get++, next(e)))
   on('state.set', { plugin: 'sentinel' }, (_: unknown, e: any, next: any) => (e.key === 'run' && n.set++, next(e)))
-  // The project's Library, so the dashboard has files to read, and the big run left by an earlier session.
   eng.files[`${ROOT}/.sentinel/library.json`] = '{"on":{"break-it-once":true}}\n'
   eng.files[`${ROOT}/.sentinel/flows/review.json`] = JSON.stringify({ name: 'review', description: 'Review a change', states: [{ id: 'review', label: 'Review' }] })
   eng.files[`${ROOT}/.sentinel/instructions/tone.json`] = JSON.stringify({ name: 'tone', at: 'always', text: 'Plain words.' })
   eng.files[`${ROOT}/.sentinel/run.json`] = JSON.stringify({ ...bigRun(), savedAt: Date.now() })
-
   await openPage($, clock)
   expect(String((await $.command.run({ command: 'sentinel', args: 'resume' })).text)).toMatch(/Resumed "Phase 3 handoff"/)
   await clock.settle()
   expect(eng.memory.run?.calls.length).toBe(400)
-
-  // Each call's counts go in `cur`; a call made with the dashboard up adds them to `sum`. The kit owns fs.write, so each of
-  // Sentinel's files counts its own writes. They all exist by now.
-  type Counts = { get: number; set: number; library: number; writes: Record<string, { count: number; bytes: number }> }
-  const zero = (): Counts => ({ get: 0, set: 0, library: 0, writes: {} })
-  let cur = zero()
-  const sum = zero()
-  const before = new Set(Object.keys(eng.files))
-  for (const path of [...before].filter(f => f.startsWith(`${ROOT}/.sentinel/`))) {
+  // Claude works on it in a turn.
+  await $.turn.start({ text: '', turnId: 't' })
+  await clock.settle()
+  return { eng, clock, n }
+}
+type Writes = Record<string, { count: number; bytes: number }>
+// The kit owns fs.write, so each of Sentinel's files counts its own writes, into whatever `into` gives at the time. They
+// all exist once the page is up.
+function countWrites(eng: ReturnType<typeof engine>, into: () => Writes) {
+  for (const path of Object.keys(eng.files).filter(f => f.startsWith(`${ROOT}/.sentinel/`))) {
     let text = eng.files[path]!
     const name = path.slice(`${ROOT}/.sentinel/`.length)
     Object.defineProperty(eng.files, path, {
       enumerable: true, configurable: true, get: () => text,
       set: (v: string) => {
         text = v
-        const w = (cur.writes[name] ??= { count: 0, bytes: 0 })
+        const w = (into()[name] ??= { count: 0, bytes: 0 })
         w.count++
         w.bytes += v.length
       },
     })
   }
-  const isLibrary = (p: string) => /\/\.sentinel\/(library\.json|flows\/|instructions\/|presets\/)/.test(p) || p.startsWith(`${HOME}/.sentinel/`)
+}
+const isLibrary = (p: string) => /\/\.sentinel\/(library\.json|flows\/|instructions\/|presets\/)/.test(p) || p.startsWith(`${HOME}/.sentinel/`)
+const PAGE_FILES = ['state.js', 'state-41234.js', 'run.json']
 
-  // 100 calls with the dashboard up, each settled before the next, as tool calls in a real session come seconds apart.
-  // The kit's helper lives 10 s, so when a call shows it gone (no write to its port's file), the page opens again and
-  // that call doesn't count.
-  const CALLS = 100
+// 1, 4
+test('per tool call with a full-sized run and the dashboard up: state reads and writes, file writes and bytes, Library reads', { timeoutMs: 60_000 }, async ($: any, on: any) => {
+  const { eng, clock, n } = await bigSession($, on)
+
+  // Each call's counts go in `cur`; a call made with the dashboard up adds them to `sum`.
+  type Counts = { get: number; set: number; library: number; writes: Writes }
+  const zero = (): Counts => ({ get: 0, set: 0, library: 0, writes: {} })
+  let cur = zero()
+  const sum = zero()
+  const before = new Set(Object.keys(eng.files))
+  countWrites(eng, () => cur.writes)
+
+  // 20 calls with the dashboard up, a second apart, as tool calls in a real session come. A second of the test clock takes
+  // about one of real time, so 20 it is: five rounds of the mix. The kit's helper lives 10 s, so when a call shows it gone
+  // (no write to its port's file), the page opens again and that call doesn't count.
+  const CALLS = 20
   let measured = 0
   let skipped = 0
   for (let i = 400; measured < CALLS && i < 400 + 3 * CALLS; i++) {
@@ -104,7 +126,7 @@ test('per tool call with a full-sized run and the dashboard up: state reads and 
     n.get = n.set = 0
     const reads = eng.reads.length
     await call($, eng, i)
-    await clock.settle()
+    await clock.advance(1000)
     if (!cur.writes['state-41234.js']) {
       skipped++
       await openPage($, clock)
@@ -138,4 +160,51 @@ test('per tool call with a full-sized run and the dashboard up: state reads and 
   expect(sum.writes['run.json']?.count).toBeGreaterThan(0)
   // The numbers, on a line only.mjs keeps.
   console.log(`Received per call: ${JSON.stringify(numbers)}`)
+  // With calls a second apart, each of the page's files is written once a call, the run in the host's state twice (the
+  // call's record and the clock's update), and the Library read every few calls. Each was two, three and 22 before the
+  // budget.
+  for (const f of PAGE_FILES) expect([f, files[f]?.perCall]).toEqual([f, 1])
+  expect(numbers.stateWrites).toBeLessThanOrEqual(2)
+  expect(numbers.libraryReads).toBeLessThan(5)
+})
+
+// 1, 2, 4, 5
+test('a burst of calls on a big run stays within the write budget, and the last state is the one written', { timeoutMs: 60_000 }, async ($: any, on: any) => {
+  const { eng, clock } = await bigSession($, on)
+  // The turn's start wrote within the last second; a quiet second follows.
+  await clock.advance(2000)
+  let writes: Writes = {}
+  countWrites(eng, () => writes)
+  const reads = eng.reads.length
+  // 50 calls in one moment of the test clock, as a run of reads and greps comes.
+  for (let i = 400; i < 450; i++) await call($, eng, i)
+  await clock.settle()
+  const burst = writes
+  const library = eng.reads.slice(reads).filter(isLibrary)
+  // A second on, the write held back lands.
+  writes = {}
+  await clock.advance(1000)
+  console.log(`Received in the burst: ${JSON.stringify({ library: library.length, views: library.filter(p => p.endsWith('/instructions/tone.json')).length, burst: Object.fromEntries(PAGE_FILES.map(f => [f, burst[f]?.count ?? 0])), after: Object.fromEntries(PAGE_FILES.map(f => [f, writes[f]?.count ?? 0])) })}`)
+  for (const f of PAGE_FILES) expect([f, burst[f]?.count ?? 0, writes[f]?.count ?? 0]).toEqual([f, 1, 1])
+  // The files hold the run as it is now, with the burst's last call in it.
+  const r = eng.memory.run!
+  const saved = JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!)
+  expect([saved.step, saved.calls.at(-1).label]).toEqual([r.step, r.calls.at(-1)!.label])
+  expect(eng.files[`${ROOT}/.sentinel/state.js`]).toContain(`"step":${r.step},`)
+  expect(eng.files[`${ROOT}/.sentinel/state-41234.js`]).toBe(eng.files[`${ROOT}/.sentinel/state.js`])
+  // The Library's files are read for the page once in the burst, not on each write.
+  expect(library.filter(p => p.endsWith('/instructions/tone.json')).length).toBeLessThanOrEqual(1)
+
+  // 5: a second burst, and the turn ends with its last write held back. That write goes at the turn's end, with the
+  // clock standing still.
+  for (let i = 450; i < 460; i++) await call($, eng, i)
+  await clock.settle()
+  const behind = JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!).step
+  expect(behind).toBeLessThan(eng.memory.run!.step)
+  await $.turn.complete({ answer: 'Done for now.', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' })
+  await clock.settle()
+  const ended = eng.memory.run!
+  const last = JSON.parse(eng.files[`${ROOT}/.sentinel/run.json`]!)
+  expect([last.step, last.calls.at(-1).label]).toEqual([ended.step, ended.calls.at(-1)!.label])
+  expect(eng.files[`${ROOT}/.sentinel/state.js`]).toContain(`"step":${ended.step},`)
 })

@@ -501,6 +501,8 @@ export const register: Register = on => {
     if (e.agentId === undefined) {
       turning = false
       stoppedByUser = e.reason === 'aborted'
+      // A big run's write held back goes now: the session may end before its second is up.
+      heldWrite?.()
     }
     const done = await next(e)
     // A helper agent's turn ends: its lane is done until another call of it. A member's work gets checked and brought back.
@@ -2309,14 +2311,15 @@ async function snapTree($: $, top: string, dir: string, name: string, message: s
 // fails-without-change: the state's repository as the active state's visit begins, before its first edit, for the rerun
 // at advance. A snapshot that fails is said once in the log, and that visit gets no rerun. One at a time: helpers' first
 // edits can come together, and every snapshot goes through one index file.
+// A call that wants none goes on at once: waiting behind the queue would put its writes after what reads them.
 let snapping: Promise<void> = Promise.resolve()
-function snapStart($: $): Promise<void> {
+async function snapStart($: $): Promise<void> {
+  if (!snapWanted(await read($, run))) return
   const go = snapping.then(() => snapNow($))
   snapping = go.catch(() => undefined)
   return go
 }
 async function snapNow($: $): Promise<void> {
-  if (!snapWanted(await read($, run))) return
   // read gives this call's copy of the run, which a snapshot another call took since doesn't reach. update sees it.
   let r = emptyRun()
   await update($, run, x => ((r = x), x))
@@ -3210,13 +3213,32 @@ async function change($: $, fn: (r: Run) => Run) {
 
 // Status line, plus the snapshot the browser page polls. This is where the task clock follows its one rule (clocked).
 // A write already waiting to start reads the run as it is then, so a second call before it starts adds nothing.
+// A big run (run.json over BIG_RUN) writes at most once a second while the main conversation's turn runs, and reads the
+// Library's files for the page at most every LIBRARY_MS: a change inside that second waits, and the write then takes the
+// run as it is. The page polls once a second, so it shows the same. The write held back goes when the turn ends, as the
+// session may end there, and between turns every change writes. Small runs write on every change.
+// ponytail: members working between turns write on every change; hold those too if a run with members shows it.
+const BIG_RUN = 64 * 1024
+const LIBRARY_MS = 5000
 let queued = false
+let heldWrite: (() => void) | undefined
+const wrote = { at: -Infinity, bytes: 0, library: -Infinity }
 function after($: $): Promise<void> {
   if (queued) return writing
   queued = true
   writing = writing
     .then(async () => {
+      // Only a big run asks the time: the wait for it would put a small run's write after what reads it straight away.
+      const big = wrote.bytes > BIG_RUN
+      const at = big ? await $.clock.now().catch(() => Date.now()) : 0
+      const wait = big && turning ? wrote.at + 1000 - at : 0
+      if (wait > 0) await new Promise<void>(go => ((heldWrite = go), $.clock.after(wait, go)))
+      heldWrite = undefined
       queued = false
+      const t = at + Math.max(0, wait)
+      wrote.at = t
+      // The clock's update, every time: it reads the run as it is now, which a call's own read misses once other calls
+      // changed it, and it makes the band draw again for what it shows from outside the run, such as an open question.
       await update($, run, x => clocked(x, atWork()))
       const r = await read($, run)
       $.ui.status(statusText(r))
@@ -3226,11 +3248,16 @@ function after($: $): Promise<void> {
       const dir = `${await $.session.root()}/.sentinel`
       if (!ignored) await $.fs.write(`${dir}/.gitignore`, IGNORE)
       ignored = true
-      // ponytail: reads the Library's files on every write while the dashboard is up, so edits made outside Sentinel
-      // show; watch the folders if that shows.
-      if (serving) await libraryView($).catch(() => undefined)
+      // ponytail: reads the Library's files on writes while the dashboard is up, so edits made outside Sentinel show;
+      // watch the folders if that shows.
+      if (serving && (!big || t - wrote.library >= LIBRARY_MS)) {
+        wrote.library = t
+        await libraryView($).catch(() => undefined)
+      }
       await putState($, dir, snapshot(r, parallelSeen ?? (await parallelOn($))))
-      if (r.plan) await $.fs.write(`${dir}/run.json`, JSON.stringify({ ...r, sweep: undefined, checking: undefined, savedAt: Date.now() }))
+      const saved = r.plan ? JSON.stringify({ ...r, sweep: undefined, checking: undefined, savedAt: Date.now() }) : ''
+      wrote.bytes = saved.length
+      if (saved) await $.fs.write(`${dir}/run.json`, saved)
       const keep = kept ? JSON.stringify(kept) : lastDraft && '{}'
       if (keep && keep !== lastDraft) {
         lastDraft = keep
