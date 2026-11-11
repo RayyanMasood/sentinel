@@ -479,6 +479,34 @@ export function relPath(root: string, file: string): string | undefined {
   return f.toLowerCase().startsWith(r.toLowerCase() + '/') ? f.slice(r.length + 1) : undefined
 }
 
+// The folder a glob's files sit in: the path before its first wildcard, up to the last /. A path with no wildcard may be a
+// folder itself, so it is kept whole; git is asked from it, and from the folder above when that fails.
+export function globFolder(glob: string): string {
+  const g = glob.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+  const wild = g.search(/[*?]/)
+  if (wild < 0) return g
+  const head = g.slice(0, wild)
+  return head.includes('/') ? head.slice(0, head.lastIndexOf('/')) : ''
+}
+
+// Which repository a state's files sit in, at a project folder that holds repositories but isn't one. tops has the
+// repository git names for each of the state's globs, in order, or undefined where there is none. One repository under
+// the project gives its folder and its path from the project root; otherwise the reason the state can't have a worktree.
+export function repoOf(root: string, st: StateDef, tops: (string | undefined)[]): { top: string; prefix: string } | { why: string } {
+  if (!st.files.length) return { why: 'it lists no files' }
+  const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  const under = (t?: string) => {
+    const p = t?.replace(/\\/g, '/').replace(/\/+$/, '')
+    return p && p.toLowerCase().startsWith(`${r.toLowerCase()}/`) ? { top: p, prefix: p.slice(r.length + 1) } : undefined
+  }
+  const found = st.files.map((_, k) => under(tops[k]))
+  const outside = st.files.filter((_, k) => !found[k])
+  if (outside.length) return { why: `its files ${outside.join(', ')} sit outside any git repository` }
+  const names = [...new Map(found.map(f => [f!.prefix.toLowerCase(), f!.prefix])).values()]
+  if (names.length > 1) return { why: `its files span ${names.slice(0, -1).join(', ')} and ${names.at(-1)}` }
+  return found[0]!
+}
+
 // A path as the session's list of written files keeps it: absolute, forward slashes, no . or .. parts, lower-cased on
 // Windows (a drive letter shows it). A file in a member's worktree counts as the project's, where its work comes back.
 export function pathKey(root: string, file: string): string {

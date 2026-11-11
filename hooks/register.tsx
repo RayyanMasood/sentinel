@@ -9,7 +9,7 @@ import {
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, lineNote, PARALLEL_DRAFT, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, lastLines, withTail, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
-  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch,
+  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
   timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
   libraryAsk, notAsked, NOT_LIBRARY, pickLoosens,
@@ -1147,6 +1147,8 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   // A new plan or draft whose parallel states nothing tests together gets a warning, while it can still change.
   const plan = (a.run.draft ?? a.run).plan
   const apart = parallel && (input.action === 'define' || input.action === 'revise') && plan ? untestedNote(plan.states) : undefined
+  // At a folder that holds repositories but isn't one, the states that can't get a member, while the plan can still change.
+  const alone = parallel && (input.action === 'define' || input.action === 'revise') && plan ? await memberless($, plan.states, (a.run.draft ?? a.run).active) : undefined
   // Only a draft can still change its order.
   const inLine = parallel && (input.action === 'define' || input.action === 'revise') && a.run.draft ? lineNote(a.run.draft.plan!.states) : undefined
   if (input.action === 'status') {
@@ -1174,7 +1176,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const offered = a.event === 'drafted' && flowsSeen?.length
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
-  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), inLine), unrun), rules), offered), a.ok ? dropped : undefined)
+  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), alone), inLine), unrun), rules), offered), a.ok ? dropped : undefined)
 }
 
 // ---- the drawing: what the model draws with a plan, merged into the project's map ----
@@ -2174,12 +2176,16 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
   const why = briefRefusal(r, i, await parallelOn($))
   if (why) return record($, { deny: why }, { kind: 'plan', label, denied: true })
   const st = stateOf(r, i.to!.trim())!
-  const wt = await worktree($, st.id)
+  const repo = await repoFor($, st)
+  if ('why' in repo) {
+    return record($, { deny: `${st.id} can't get a member: ${repo.why}. The project folder isn't a git repository, so a member works in one repository, and all of its state's files must sit in it. Run ${st.id} in the main conversation when it comes up.` }, { kind: 'plan', label, denied: true })
+  }
+  const wt = await worktree($, st.id, repo)
   if ('deny' in wt) return record($, { deny: `Sentinel couldn't make a worktree for ${st.id}: ${wt.deny}` }, { kind: 'plan', label, denied: true })
   const named = (v: unknown) => (typeof v === 'string' && v.trim()) || undefined
   const type = named(i.agent), model = named(i.model), how = [type, model].filter(Boolean).join(', ') || undefined
   const spawned = await $.agent.spawn({
-    prompt: memberPrompt(r, st, wt.path, i.brief!.trim()), description: `member ${st.id}`, name: wt.name, cwd: wt.path,
+    prompt: memberPrompt(r, st, wt, i.brief!.trim()), description: `member ${st.id}`, name: wt.name, cwd: wt.outer,
     ...(type ? { subagentType: type } : {}), ...(model ? { model } : {}),
   })
     .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err), agentId: undefined }))
@@ -2187,7 +2193,7 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
   const agent = spawned.agentId ?? (spawned.deny === undefined ? (await agents($)).find(a => a.name === wt.name)?.id : undefined)
   if (!agent) {
     // Nothing was done in it yet, so the worktree goes.
-    await $.process.run(['git', 'worktree', 'remove', '--force', wt.path], { cwd: await $.session.root() }).catch(() => undefined)
+    await dropCheckout($, wt)
     const why = spawned.deny ?? 'no agent id'
     const full = /limit|too many|maximum/i.test(why)
     return record($, {
@@ -2201,39 +2207,108 @@ async function brief($: $, i: PlanInput, label: string): Promise<Result> {
   return record($, { result: `Started a member agent for ${st.id}${how ? ` (${how})` : ''} in .claude/worktrees/${wt.name}/. Its answer comes back when it stops. Carry on with ${r.active}.` }, { kind: 'plan', label })
 }
 
-// The project as it is now, untracked files included, checked out under .claude/worktrees/.
-async function worktree($: $, id: string): Promise<{ name: string; path: string } | { deny: string }> {
-  const root = (await $.session.root()).replace(/\\/g, '/')
-  const name = `sentinel-${id}-${Date.now().toString(36)}`
-  const path = `${root}/.claude/worktrees/${name}`
+// Where a state's work happens in git. A project folder that is a repository, as most are, is the repository: git isn't
+// asked, and a checkout is of the whole project. A folder that holds repositories but isn't one checks out the one
+// repository the state's files sit in, at its own path inside the worktree folder (outer/prefix), so the project's paths
+// lead to the files there as they do in the project.
+type Repo = { top: string; prefix: string }
+type Checkout = Repo & { name: string; outer: string; inner: string }
+const rootOf = async ($: $) => (await $.session.root()).replace(/\\/g, '/').replace(/\/+$/, '')
+const checkoutAt = (root: string, repo: Repo, name: string): Checkout => {
+  const outer = `${root}/.claude/worktrees/${name}`
+  return { ...repo, name, outer, inner: repo.prefix ? `${outer}/${repo.prefix}` : outer }
+}
+// Asked once per session; a .git there answers without running git.
+const repoRoots = new Map<string, Promise<boolean>>()
+function rootIsRepo($: $, root: string): Promise<boolean> {
+  let known = repoRoots.get(root)
+  if (!known) {
+    known = (async () => (await $.fs.exists(`${root}/.git`).catch(() => false)) || git($, root, ['rev-parse', '--show-toplevel']).then(() => true, () => false))()
+    repoRoots.set(root, known)
+  }
+  return known
+}
+async function repoFor($: $, st: StateDef): Promise<Repo | { why: string }> {
+  const root = await rootOf($)
+  if (await rootIsRepo($, root)) return { top: root, prefix: '' }
+  const tops: (string | undefined)[] = []
+  for (const g of st.files) {
+    // The glob's folder, or the nearest one above it that git answers in: a folder that doesn't exist yet fails too.
+    let top: string | undefined
+    for (let dir = globFolder(g); dir && !top; dir = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '') {
+      top = await git($, `${root}/${dir}`, ['rev-parse', '--show-toplevel']).then(s => s.trim() || undefined, () => undefined)
+    }
+    tops.push(top)
+  }
+  return repoOf(root, st, tops)
+}
+// With parallel states on at a project folder that isn't a repository: the states that can't get a member, and why.
+async function memberless($: $, states: StateDef[], start?: string): Promise<string | undefined> {
+  if (await rootIsRepo($, await rootOf($))) return undefined
+  const out: string[] = []
+  for (const st of states) {
+    if (st.id === start || waitOf(st) || st.evidence) continue
+    const repo = await repoFor($, st)
+    if ('why' in repo) out.push(`${st.id} (${repo.why})`)
+  }
+  return out.length ? `${TAG} The project folder isn't a git repository, so each member works in one repository, and all of its state's files must sit in it. These states can't get a member and run in the main conversation: ${out.join('; ')}.` : undefined
+}
+
+// A sub-repository's checkout has no node_modules above it, so Node and npx would find no installed packages. The
+// repository's own is linked into the outer folder, outside git's worktree, so git never stages it or walks into it.
+// ponytail: links the repository's top node_modules only; a workspace's nested ones would need their own links.
+const LINK = 'require("fs").symlinkSync(process.argv[1], process.argv[2], "junction")'
+// The link goes first, without following it, then the folders the checkout leaves empty. rmdir refuses a folder that
+// still holds anything, so nothing behind the link can go.
+const UNLINK = 'const fs = require("fs"), path = require("path"), [dir, prefix] = process.argv.slice(1), link = path.join(dir, "node_modules"); try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link) } catch {} for (let d = path.dirname(path.join(dir, prefix)); d.length >= path.resolve(dir).length; d = path.dirname(d)) fs.rmdirSync(d)'
+async function linkPackages($: $, c: Checkout) {
+  if (!c.prefix || !(await $.fs.exists(`${c.top}/node_modules`).catch(() => false))) return
+  await $.process.run(['node', '-e', LINK, `${c.top}/node_modules`, `${c.outer}/node_modules`], { timeoutMs: 10_000 }).catch(() => undefined)
+}
+// A checkout goes: git removes it from its repository, then the link to the packages and the folders left empty go.
+// Nothing here deletes recursively, and the link is never inside the checkout: git worktree remove --force deletes
+// through a junction it finds there.
+async function dropCheckout($: $, c: Checkout) {
+  if (!c.prefix) return void (await $.process.run(['git', 'worktree', 'remove', '--force', c.outer], { cwd: c.top }).catch(() => undefined))
+  await $.process.run(['git', 'worktree', 'remove', '--force', c.inner], { cwd: c.top }).catch(() => undefined)
+  await $.process.run(['node', '-e', UNLINK, c.outer, c.prefix], { timeoutMs: 10_000 }).catch(() => undefined)
+}
+
+// The state's repository as it is now, untracked files included, checked out under .claude/worktrees/.
+async function worktree($: $, id: string, repo: Repo): Promise<Checkout | { deny: string }> {
+  const root = await rootOf($)
+  const c = checkoutAt(root, repo, `sentinel-${id}-${Date.now().toString(36)}`)
   try {
-    const commit = await snapTree($, root, name, `Sentinel: the project when ${id} became ready`)
-    await git($, root, ['worktree', 'add', '--detach', path, commit])
-    return { name, path }
+    const commit = await snapTree($, repo.top, `${root}/.sentinel`, c.name, `Sentinel: the project when ${id} became ready`)
+    await git($, repo.top, ['worktree', 'add', '--detach', c.inner, commit])
+    await linkPackages($, c)
+    return c
   } catch (err) {
     return { deny: err instanceof Error ? err.message : String(err) }
   }
 }
 
-// The project as it is now, untracked files included, as a commit object on no branch. It is made through a separate
-// index, .sentinel/<name>.index, so HEAD, the branches and the user's index stay as they are.
+// A repository as it is now, untracked files included, as a commit object on no branch. It is made through a separate
+// index, <dir>/<name>.index in the project's .sentinel folder, so HEAD, the branches and the user's index stay as they are.
 // ponytail: a fresh index hashes every file, and each member leaves its index file in .sentinel/; seed it from the real index if big repos get slow.
-async function snapTree($: $, root: string, name: string, message: string): Promise<string> {
-  const index = { GIT_INDEX_FILE: `${root}/.sentinel/${name}.index` }
+async function snapTree($: $, top: string, dir: string, name: string, message: string): Promise<string> {
+  const index = { GIT_INDEX_FILE: `${dir}/${name}.index` }
   const who = { GIT_AUTHOR_NAME: 'Sentinel', GIT_AUTHOR_EMAIL: 'sentinel@localhost', GIT_COMMITTER_NAME: 'Sentinel', GIT_COMMITTER_EMAIL: 'sentinel@localhost' }
-  await git($, root, ['read-tree', 'HEAD'], { env: index })
-  await git($, root, ['add', '-A', '--', '.', ':(exclude).claude/worktrees'], { env: index })
-  const tree = (await git($, root, ['write-tree'], { env: index })).trim()
-  return (await git($, root, ['commit-tree', tree, '-p', 'HEAD', '-m', message], { env: who })).trim()
+  await git($, top, ['read-tree', 'HEAD'], { env: index })
+  await git($, top, ['add', '-A', '--', '.', ':(exclude).claude/worktrees'], { env: index })
+  const tree = (await git($, top, ['write-tree'], { env: index })).trim()
+  return (await git($, top, ['commit-tree', tree, '-p', 'HEAD', '-m', message], { env: who })).trim()
 }
 
-// fails-without-change: the project as the active state's visit begins, before its first edit, for the rerun at
-// advance. A snapshot that fails is said once in the log, and that visit gets no rerun.
+// fails-without-change: the state's repository as the active state's visit begins, before its first edit, for the rerun
+// at advance. A snapshot that fails is said once in the log, and that visit gets no rerun.
 async function snapStart($: $): Promise<void> {
   const r = await read($, run)
   if (!snapWanted(r)) return
-  const root = (await $.session.root()).replace(/\\/g, '/')
-  const sha = await snapTree($, root, 'snap', `Sentinel: the project when ${r.active} started`).catch((err: unknown) => new Error(err instanceof Error ? err.message : String(err)))
+  const root = await rootOf($)
+  const repo = await repoFor($, stateOf(r)!)
+  const sha = 'why' in repo ? new Error(repo.why)
+    : await snapTree($, repo.top, `${root}/.sentinel`, 'snap', `Sentinel: the project when ${r.active} started`).catch((err: unknown) => new Error(err instanceof Error ? err.message : String(err)))
   await change($, x => (x.active !== r.active || x.enteredAt !== r.enteredAt ? x
     : typeof sha === 'string' ? withSnap(x, sha)
     : withSnap({ ...x, log: [...x.log, { t: now(), icon: '!', tone: 'warn', text: `${r.active} · no snapshot for the rerun without the change: ${sha.message}` }] }, '')))
@@ -2245,32 +2320,39 @@ async function snapStart($: $): Promise<void> {
 // well, the copy can't run it and the rerun is skipped. The worktree goes once the checks have run.
 // ponytail: files are copied as text; a binary fixture in a test folder would need git to carry it.
 async function rerun($: $, check: string, id: string, w: { sha: string; tests: string[]; code: string[] }, signal?: AbortSignal): Promise<Without> {
-  const root = (await $.session.root()).replace(/\\/g, '/')
-  const path = `${root}/.claude/worktrees/sentinel-wo-${id}-${Date.now().toString(36)}`
+  const root = await rootOf($)
+  const st = stateOf(await read($, run), id)
+  const repo = st ? await repoFor($, st) : { why: `${id} is not one of the states` }
+  if ('why' in repo) return { skipped: `Sentinel couldn't make the copy: ${repo.why}` }
+  // The check runs in the outer folder, as it does in the project; git runs in the repository's checkout.
+  const c = checkoutAt(root, repo, `sentinel-wo-${id}-${Date.now().toString(36)}`)
+  const path = c.outer
+  const inRepo = (f: string) => (c.prefix && f.toLowerCase().startsWith(`${c.prefix.toLowerCase()}/`) ? f.slice(c.prefix.length + 1) : f)
   // The project's version of each file goes into the copy; a file deleted in the project goes from the copy too.
   const copy = async (files: string[]) => {
     for (const f of files) {
       if (await $.fs.exists(`${root}/${f}`)) await $.fs.write(`${path}/${f}`, String(await $.fs.read(`${root}/${f}`)))
-      else await git($, path, ['rm', '-q', '--ignore-unmatch', '--', f])
+      else await git($, c.inner, ['rm', '-q', '--ignore-unmatch', '--', inRepo(f)])
     }
   }
-  const run = async () => {
+  const inCopy = async () => {
     const ran = await runCheck($, check, { dir: path, signal })
     return 'deny' in ran ? `Sentinel couldn't run the check there: ${ran.deny}` : ran.ended ? ran.pass : "the check didn't finish there"
   }
   try {
-    await git($, root, ['worktree', 'add', '--detach', path, w.sha])
+    await git($, c.top, ['worktree', 'add', '--detach', c.inner, w.sha])
+    await linkPackages($, c)
     await copy(w.tests)
-    const without = await run()
+    const without = await inCopy()
     if (without !== false) return typeof without === 'string' ? { skipped: without } : { pass: true, tests: w.tests, code: w.code }
     await copy(w.code)
-    const withIt = await run()
+    const withIt = await inCopy()
     if (withIt !== true) return { skipped: typeof withIt === 'string' ? withIt : "the check fails in the copy even with the change, so the copy can't run it (it may need files git doesn't track, such as installed packages)" }
     return { pass: false, tests: w.tests, code: w.code }
   } catch (err) {
     return { skipped: `Sentinel couldn't make the copy: ${err instanceof Error ? err.message : String(err)}` }
   } finally {
-    await $.process.run(['git', 'worktree', 'remove', '--force', path], { cwd: root }).catch(() => undefined)
+    await dropCheckout($, c)
   }
 }
 
@@ -2317,8 +2399,14 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
   try {
     // A loop back can let the member go while its check runs. Its work then stays in its worktree.
     const mine = async () => (await read($, run)).running?.[id]?.agent === m.agent
-    const root = (await $.session.root()).replace(/\\/g, '/')
-    const path = `${root}/.claude/worktrees/${m.name}`
+    const root = await rootOf($)
+    // The check runs in the outer folder, as in the project; git runs in the repository's checkout, and the work goes
+    // to that repository. Its file names gain the repository's folder again on the way back.
+    const repo = await repoFor($, st)
+    const c = checkoutAt(root, 'why' in repo ? { top: root, prefix: '' } : repo, m.name)
+    const path = c.outer
+    const inRepo = (g: string) => (c.prefix && g.toLowerCase().startsWith(`${c.prefix.toLowerCase()}/`) ? g.slice(c.prefix.length + 1) : g)
+    const inProject = (f: string) => (c.prefix ? `${c.prefix}/${f}` : f)
     // Work the member or its helpers left running stops here, or its worktree changes under the check and goes from under it.
     for (const t of bg) {
       await $.tool.call({ tool: 'TaskStop', task_id: t }).catch(() => undefined)
@@ -2326,10 +2414,10 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     }
     // What would come back now. Everything is staged, since git add refuses a glob that matches no file; the diff takes
     // the state's files.
-    const specs = st.files.map(g => `:(glob,icase)${g}`)
+    const specs = st.files.map(g => `:(glob,icase)${inRepo(g)}`)
     const stage = async () => {
-      await git($, path, ['add', '-A'])
-      return specs.length ? git($, path, ['diff', '--cached', '--binary', 'HEAD', '--', ...specs]) : ''
+      await git($, c.inner, ['add', '-A'])
+      return specs.length ? git($, c.inner, ['diff', '--cached', '--binary', 'HEAD', '--', ...specs]) : ''
     }
     // The files that come back are the files that passed: a change during the check means it runs again.
     let checked: string | undefined
@@ -2371,15 +2459,15 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     let left: string[] = []
     try {
       const patch = checked ?? (await stage())
-      left = (await git($, path, ['diff', '--cached', '--name-only', 'HEAD'])).split('\n').map(f => f.trim()).filter(Boolean)
+      left = (await git($, c.inner, ['diff', '--cached', '--name-only', 'HEAD'])).split('\n').map(f => f.trim()).filter(Boolean).map(inProject)
       if (specs.length) {
         if (!(await mine())) return
         if (patch.trim()) {
           // From here the project may hold the member's work.
           await change($, touched)
-          await git($, root, ['apply', '--binary', '-'], { stdin: patch })
+          await git($, c.top, ['apply', '--binary', '-'], { stdin: patch })
         }
-        files = [...patch.matchAll(/^diff --git a\/(.+?) b\//gm)].map(x => x[1]!)
+        files = [...patch.matchAll(/^diff --git a\/(.+?) b\//gm)].map(x => inProject(x[1]!))
       }
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
@@ -2398,9 +2486,14 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
     left = left.filter(f => !files.includes(f))
     // Its work is in the project now, so the state's parts are proved as they stand.
     if (!late) await markPass($, [id])
-    if (!left.length) await $.process.run(['git', 'worktree', 'remove', '--force', path], { cwd: root }).catch(() => undefined)
+    if (!left.length) await dropCheckout($, c)
+    // A sub-repository's checkout has a link to its packages beside it. The link goes before the folder, so nothing
+    // deletes through it.
+    const drop = c.prefix
+      ? `remove its checkout with \`git -C ${c.top} worktree remove --force ${c.inner}\`, take the link to ${c.prefix}'s packages off with \`node -e "require('fs').unlinkSync(process.argv[1])" ${c.outer}/node_modules\`, then remove the empty folder ${c.outer}. Never move that link inside a checkout: git worktree remove --force deletes through it.`
+      : `remove the worktree with \`git worktree remove --force .claude/worktrees/${m.name}\`.`
     const kept = left.length
-      ? `It also changed files outside ${id}'s list, which stay in its worktree at .claude/worktrees/${m.name}/: ${left.slice(0, 20).join(', ')}${left.length > 20 ? ` and ${left.length - 20} more` : ''}. Bring over what the plan needs (amend first), then remove the worktree with \`git worktree remove --force .claude/worktrees/${m.name}\`.`
+      ? `It also changed files outside ${id}'s list, which stay in its worktree at .claude/worktrees/${m.name}/: ${left.slice(0, 20).join(', ')}${left.length > 20 ? ` and ${left.length - 20} more` : ''}. Bring over what the plan needs (amend first), then ${drop}`
       : undefined
     void after($)
     if (late) {
@@ -2417,11 +2510,13 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
   }
 }
 
-function memberPrompt(r: Run, st: StateDef, path: string, brief: string): string {
+function memberPrompt(r: Run, st: StateDef, c: Checkout, brief: string): string {
+  const path = c.outer
   return [
     `You are a member agent of the plan "${r.plan!.title}". You do one state of it: ${st.id} (${st.label}).`,
     `Your brief from the main conversation:\n${brief}`,
     `Work in ${path}. It is a worktree of the project as it was when ${st.id} became ready, apart from the main checkout. Edit files there only, and only these: ${st.files.length ? st.files.join(', ') : 'none, this state edits nothing'}. Sentinel refuses other edits.`,
+    c.prefix ? `${st.id}'s files sit in the ${c.prefix} repository, checked out at ${c.inner}. Run git there: ${path} itself isn't a repository. Its node_modules links to the repository's own packages, so leave it alone.` : '',
     st.check ? `${st.id} is done when \`${st.check}\` exits 0, run from ${path}.` : `${st.id} has no check: say what you found.`,
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),

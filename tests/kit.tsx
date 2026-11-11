@@ -80,7 +80,15 @@ export function engine(on: any) {
     files[key(e.path)] = e.text
     return { value: undefined }
   })
-  on('fs.exists', (_: unknown, e: any) => ({ value: Object.hasOwn(files, key(e.path)) }))
+  // The git repositories: by default the session root is one. A folder that holds a repository but isn't one, as
+  // D:\Work\Shop holds two, sets its repositories here.
+  let repos: string[] | undefined
+  const tops = () => repos ?? [key(root).replace(/\/$/, '')]
+  // A folder exists when it holds a file, and a repository has its .git.
+  on('fs.exists', (_: unknown, e: any) => {
+    const k = key(e.path).replace(/\/$/, '')
+    return { value: Object.hasOwn(files, k) || Object.keys(files).some(f => f.startsWith(`${k}/`)) || tops().some(t => k.toLowerCase() === `${t}/.git`.toLowerCase()) }
+  })
   // A folder holds what is written under it.
   on('fs.list', (_: unknown, e: any) => {
     const dir = `${key(e.path).replace(/\/$/, '')}/`
@@ -232,6 +240,15 @@ export function engine(on: any) {
       if (hubExit === undefined) throw new Error('node not found')
       return { value: { exitCode: hubExit, stdout: '', stderr: '' } }
     }
+    // At a folder that holds repositories but isn't one, git answers only inside a repository or a member's checkout of
+    // one (.claude/worktrees/<name>/<repo>), and --show-toplevel names the repository a folder is in.
+    if (e.argv[0] === 'git' && repos) {
+      const at = key(e.init?.cwd ?? '').replace(/\/$/, '')
+      const top = repos.find(t => at.toLowerCase() === t.toLowerCase() || at.toLowerCase().startsWith(`${t.toLowerCase()}/`))
+      if (!top && !/\/\.claude\/worktrees\/[^/]+\/[^/]+/.test(at)) return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } }
+      if (e.argv.includes('--show-toplevel')) return { value: { exitCode: 0, stdout: `${top ?? at}\n`, stderr: '' } }
+    }
+    if (e.argv[0] === 'git' && e.argv.includes('--show-toplevel')) return { value: { exitCode: 0, stdout: `${tops()[0]}\n`, stderr: '' } }
     // The commit the project is at, or no git repo when it is unset.
     if (e.argv[0] === 'git' && e.argv.includes('rev-parse')) return { value: head === undefined ? { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository' } : { exitCode: 0, stdout: `${head}\n`, stderr: '' } }
     // What changed since a commit, as git diff --name-status -M gives it. A commit not in setHistory is one git does not know.
@@ -262,7 +279,7 @@ export function engine(on: any) {
   })
   return {
     files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory, store,
-    helperEnv: () => helperEnv, setRoot: (d: string) => (root = d), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
+    helperEnv: () => helperEnv, setRoot: (d: string) => (root = d), setRepos: (r?: string[]) => (repos = r), setHub: (code?: number) => (hubExit = code), setHelperFails: (f: boolean) => (helperFails = f),
     setUsage: (u: object | Promise<object>) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f), setTools: (t: string[]) => (tools = t),
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
