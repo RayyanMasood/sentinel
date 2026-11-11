@@ -446,6 +446,9 @@ export type Run = {
   // fails-without-change: the project as the active state's visit began, as a commit. state and enteredAt name the
   // visit. An empty sha: the snapshot failed, and the log said so.
   snap?: { state: string; enteredAt: number; sha: string }
+  // Edits by helper subagents of the main conversation, in the main checkout, at the step they came in. They stay out of
+  // calls so the health window doesn't see them, and count with its edits for the kept review and the rerun.
+  helped?: { file: string; step: number }[]
   // The define behind a plan that isn't locked yet: one sent before any sign-off, which /sentinel lock drafts as it
   // is, or the one that made the draft, which revise changes.
   held?: PlanInput

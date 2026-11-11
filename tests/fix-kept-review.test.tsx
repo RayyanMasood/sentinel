@@ -6,9 +6,10 @@
 //  2. The review is kept after the state's own files changed, so the user approves what they did not see.
 //  3. A state with no files of its own is kept, though nothing says what would have changed it.
 //  4. A review the user never gave is kept (a first walk through, or hands-free), or the notice hides what changed upstream.
+//  5. A helper subagent changed the state's files, and the review is kept because only the main conversation's edits count.
 import { expect } from 'claude-code/testing'
 import type { Run } from '../types'
-import { act, emptyRun, observe, stopSettled, type PlanInput } from '../hooks/core'
+import { act, emptyRun, helpedBy, observe, stopSettled, type PlanInput } from '../hooks/core'
 import { test } from './kit'
 
 const T0 = Date.UTC(2026, 9, 26, 9, 0, 0)
@@ -96,4 +97,17 @@ test('a review passed hands-free is not the user\'s, so a loop back asks once th
   r = backAtPage({ ...r, handsFree: undefined })
   const again = act(r, { action: 'advance', to: 'verify' }, '09:00', {}, at(8))
   expect([again.ok, again.stop]).toEqual([false, 'after'])
+})
+
+test("a helper edit to the state's files drops the kept review, and one elsewhere is named", () => {
+  // A helper subagent of the main conversation edits page's file in the main checkout: its edit stays out of the calls.
+  const back = backAtPage(reviewedThenLooped())
+  const r = helpedBy(back, 'web/view.html')
+  expect(r.calls).toEqual(back.calls)
+  const again = act(r, { action: 'advance', to: 'verify' }, '09:00', {}, at(8))
+  expect([again.ok, again.stop]).toEqual([false, 'after'])
+  // A helper edit to another state's file keeps the review, and the notice names it.
+  const kept = act(helpedBy(backAtPage(reviewedThenLooped()), 'src/b.ts'), { action: 'advance', to: 'verify' }, '09:00', {}, at(8))
+  expect(kept.ok).toBe(true)
+  expect(kept.text).toMatch(/src\/b\.ts/)
 })

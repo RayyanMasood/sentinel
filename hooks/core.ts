@@ -407,13 +407,14 @@ export function notYet(r: Run): string | undefined {
 }
 // A review the user already gave of the active state, still good after a loop back: none of the state's own files has been
 // edited since. A state with no files of its own can't show that, so it asks again. elsewhere: the files edited since in
-// other states, which the user did not look at. Only what the ledger recorded counts, as with the map's marks.
+// other states, which the user did not look at. Only what the ledger recorded counts, as with the map's marks: the main
+// conversation's edits and its helpers'.
 export function keptReview(r: Run, st: StateDef): { elsewhere: string[] } | undefined {
   const at = r.reviewed?.[st.id]
   if (at === undefined || !st.files.length) return undefined
-  const since = r.calls.filter(c => c.kind === 'edit' && !c.denied && c.file !== undefined && c.step > at)
-  if (since.some(c => st.files.some(g => globMatch(g, c.file!)))) return undefined
-  return { elsewhere: [...new Set(since.map(c => c.file!))] }
+  const since = editedAfter(r, at)
+  if (since.some(f => st.files.some(g => globMatch(g, f)))) return undefined
+  return { elsewhere: [...new Set(since)] }
 }
 export const shortCount = (n: number) => (n < 1e3 ? String(n) : n < 1e6 ? `${+(n / 1e3).toFixed(n < 1e4 ? 1 : 0)}k` : `${+(n / 1e6).toFixed(n < 1e7 ? 2 : 1)}M`)
 
@@ -2137,13 +2138,27 @@ export const isTestFile = (rel: string) => TEST_GLOBS.some(g => globMatch(g, rel
 // The visit's snapshot (Run.snap), if it is this visit's.
 const snapOf = (r: Run) => (r.snap?.state === r.active && r.snap.enteredAt === r.enteredAt ? r.snap : undefined)
 export const withSnap = (r: Run, sha: string): Run => ({ ...r, snap: { state: r.active!, enteredAt: r.enteredAt, sha } })
+// A helper subagent's edit in the main checkout, kept as long as the calls are.
+export const helpedBy = (r: Run, file: string): Run => ({ ...r, helped: [...(r.helped ?? []), { file, step: r.step }].slice(-MAX_CALLS) })
+// The files edited after `step`, by the main conversation or its helpers.
+const editedAfter = (r: Run, step: number) => [
+  ...r.calls.flatMap(c => (c.kind === 'edit' && !c.denied && c.file !== undefined && c.step > step ? [c.file] : [])),
+  ...(r.helped ?? []).flatMap(h => (h.step > step ? [h.file] : [])),
+]
+// A snapshot's answer for the visit `was` was in. One that comes after the run moved on, or after this visit already has
+// a good snapshot, changes nothing: two at once must not blank the first.
+export function snapTaken(x: Run, was: Run, sha: string | Error, t: string): Run {
+  if (x.active !== was.active || x.enteredAt !== was.enteredAt || snapOf(x)?.sha) return x
+  if (typeof sha === 'string') return withSnap(x, sha)
+  return withSnap({ ...x, log: [...x.log, { t, icon: '!', tone: 'warn', text: `${was.active} · no snapshot for the rerun without the change: ${sha.message}` }] }, '')
+}
 
 // The active state needs its snapshot now: fails-without-change is on, the state has a check and files, and this visit
 // has no snapshot and no edit yet. A new visit, such as a return along a loop, takes a new one.
 export function snapWanted(r: Run): boolean {
   const st = isLive(r) ? stateOf(r) : undefined
   if (!st?.check || !st.files.length || !r.library || !onFor(r, st, 'fails-without-change') || snapOf(r)) return false
-  return !visitOf(r).some(c => c.kind === 'edit' && !c.denied)
+  return !editedAfter(r, r.enteredAt).length
 }
 
 // What the rerun at a forward advance needs: the visit's snapshot, and the files edited in the visit as tests and code.
@@ -2155,7 +2170,7 @@ export function rerunOf(r: Run): { sha: string; tests: string[]; code: string[] 
   const st = stateOf(r)
   const snap = snapOf(r)
   if (!st || !snap?.sha || r.audit.some(a => a.kind === 'decided' && a.by === 'claude' && a.state === st.id && a.step > r.enteredAt && /fails[- ]without[- ]change/i.test(a.text.split(' → ')[0]!))) return undefined
-  const files = [...new Set(visitOf(r).flatMap(c => (c.kind === 'edit' && !c.denied && c.file ? [c.file] : [])))]
+  const files = [...new Set(editedAfter(r, r.enteredAt))]
   const tests = files.filter(isTestFile)
   const code = files.filter(f => !isTestFile(f))
   if (!tests.length || !code.length) return `no ${tests.length ? 'code' : 'test'} files changed`

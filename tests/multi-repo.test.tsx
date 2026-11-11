@@ -11,9 +11,11 @@
 //  6. The rerun's copy has no installed packages, or its check runs where a project-relative check can't find its folder.
 //  7. A cleanup deletes through the link to the repository's node_modules and empties it.
 //  8. The draft gives no warning that some states can't get a member, so the user finds out mid-run.
+//  9. A helper subagent of the main conversation writes the tests, and the rerun skips with "no test files changed".
+// 10. Two helpers' first edits come together: no snapshot before them, two through one index, or a failed one blanks a good one.
 // A plain repository root makes no extra git calls: the pinned brief and rerun tests in sentinel.test.tsx cover it.
 import { expect, mock } from 'claude-code/testing'
-import type { PlanInput } from '../hooks/core'
+import { emptyRun, snapTaken, withSnap, type PlanInput } from '../hooks/core'
 import { ROOT, TOOL, engine, said, test } from './kit'
 
 const A = `${ROOT}/shop-api`
@@ -144,13 +146,13 @@ test('a member that cannot start leaves no checkout, and its packages link goes 
   cleanedUp(eng, outer, 'shop-web', B)
 })
 
-// 5, 6, 7
-test("the visit's snapshot is of the state's repository, and the rerun without the change runs in a linked copy of it", async ($: any, on: any) => {
+// fails-without-change on, parallel states off, and the main conversation in api with its snapshot taken. In the copy
+// the check passes only with the code change in.
+async function inApi($: any, on: any) {
   const plan = { ...PLAN, states: PLAN.states.map(s => ({ ...s, needs: undefined })) }
   const eng = twoRepos(on)
   const clock = mock.clock(on)
   eng.files[`${ROOT}/.sentinel/library.json`] = JSON.stringify({ on: { 'fails-without-change': true, 'quote-the-source': false } })
-  // The check passes in the project. In the copy it passes only with the code change in.
   eng.setBash(cmd => {
     const dir = /cd '([^']+)'/.exec(cmd)?.[1] ?? ''
     if (!dir.includes('/sentinel-wo-')) return PASS
@@ -162,6 +164,12 @@ test("the visit's snapshot is of the state's repository, and the rerun without t
   await $.tool.call({ tool: TOOL, ...plan })
   await $.tool.call({ tool: 'Read', file_path: `${A}/src/app.ts` })
   expect(said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'api', evidence: 'read it' }))).toMatch(/Moved to api/)
+  return { eng, clock }
+}
+
+// 5, 6, 7
+test("the visit's snapshot is of the state's repository, and the rerun without the change runs in a linked copy of it", async ($: any, on: any) => {
+  const { eng } = await inApi($, on)
   const read = git(eng, 'read-tree', 'HEAD')
   expect(read.map(x => [x.cwd, x.env?.GIT_INDEX_FILE])).toEqual([[A, `${ROOT}/.sentinel/snap.index`]])
   await $.tool.call({ tool: 'Write', file_path: `${A}/src/refund.ts`, content: 'refund v2' })
@@ -180,6 +188,62 @@ test("the visit's snapshot is of the state's repository, and the rerun without t
   const log = runOf(eng).log.map((l: any) => l.text)
   expect(log).toContain('api · check fails without the change')
   expect(log.filter((t: string) => /no snapshot|skipped/.test(t))).toEqual([])
+})
+
+// 9
+test('tests a helper subagent wrote count for the rerun without the change', async ($: any, on: any) => {
+  const { eng } = await inApi($, on)
+  eng.setAgents([{ id: 'h-1', status: 'running', description: 'Write the refund tests' }])
+  await $.tool.call({ tool: 'Write', file_path: `${A}/src/refund.ts`, content: 'refund v2' })
+  expect(said(await $.tool.call({ tool: 'Write', file_path: `${A}/tests/refund.test.ts`, content: 'test v1', agentId: 'h-1' }))).toBe('ok')
+  const moved = said(await $.tool.call({ tool: TOOL, action: 'advance', to: 'ui' }))
+  expect(moved).toMatch(/failed, as it should\.\nMoved to ui/)
+  const inner = git(eng, 'worktree', 'add')[0]!.argv[4]!
+  expect(eng.files[`${inner}/tests/refund.test.ts`]).toBe('test v1')
+  const run = runOf(eng)
+  expect(run.log.map((l: any) => l.text)).toContain('api · check fails without the change')
+  // The helper's edit stays out of the calls, so the stuck detector and the health window don't see it.
+  expect(run.calls.some((c: any) => c.file === 'shop-api/tests/refund.test.ts')).toBe(false)
+})
+
+// 10
+test("two helpers' first edits at once leave one good snapshot, taken before either lands", async ($: any, on: any) => {
+  const eng = twoRepos(on)
+  const clock = mock.clock(on)
+  eng.files[`${ROOT}/.sentinel/library.json`] = JSON.stringify({ on: { 'fails-without-change': true, 'quote-the-source': false } })
+  // A draft the user locks starts its first visit with no snapshot: it is taken before the first edit, here a helper's.
+  await $.command.run({ command: 'sentinel', args: 'lock' })
+  await clock.advance(1)
+  await $.tool.call({ tool: TOOL, ...PLAN, states: [{ ...PLAN.states[1]!, needs: undefined }] })
+  expect(said(await $.command.run({ command: 'sentinel', args: 'lock' }))).toMatch(/Locked "Phase 3" at api/)
+  expect(git(eng, 'commit-tree')).toHaveLength(0)
+  eng.setAgents([{ id: 'h-1', status: 'running' }, { id: 'h-2', status: 'running' }])
+  let held: (string | undefined)[] = ['not taken']
+  eng.setDuring('commit-tree', async () => { held = [eng.files[`${A}/src/one.ts`], eng.files[`${A}/tests/one.test.ts`]] })
+  const both = await Promise.all([
+    $.tool.call({ tool: 'Write', file_path: `${A}/src/one.ts`, content: 'one', agentId: 'h-1' }),
+    $.tool.call({ tool: 'Write', file_path: `${A}/tests/one.test.ts`, content: 'test', agentId: 'h-2' }),
+  ])
+  expect(both.map(said)).toEqual(['ok', 'ok'])
+  expect(git(eng, 'commit-tree')).toHaveLength(1)
+  expect(held).toEqual([undefined, undefined])
+  const r = eng.memory.run!
+  expect(r.snap).toMatchObject({ state: 'api', sha: 'snap1' })
+  expect(r.log.filter(l => /no snapshot/.test(l.text))).toEqual([])
+})
+
+test('a later answer for the same visit leaves its good snapshot alone', () => {
+  const r = { ...emptyRun(), active: 'api', enteredAt: 5 }
+  const good = withSnap(r, 'snap1')
+  const after = snapTaken(good, r, new Error('git read-tree: index.lock exists'), '09:00')
+  expect(after.snap?.sha).toBe('snap1')
+  expect(after.log).toEqual(good.log)
+  // With none yet, a failure is said once and the visit gets no rerun.
+  const failed = snapTaken(r, r, new Error('git read-tree: index.lock exists'), '09:00')
+  expect(failed.snap?.sha).toBe('')
+  expect(failed.log.at(-1)?.text).toBe('api · no snapshot for the rerun without the change: git read-tree: index.lock exists')
+  // A run that has moved on to another visit takes nothing.
+  expect(snapTaken({ ...r, enteredAt: 9 }, r, 'snap2', '09:00').snap).toBeUndefined()
 })
 
 // 8

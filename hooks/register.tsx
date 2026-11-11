@@ -9,7 +9,7 @@ import {
   memberOff, knownPass, observe, revised, openTrap, recordStart, sameText, sweepChecks, untestedNote, lineNote, PARALLEL_DRAFT, touched, visitOf, startCheck, clocked, startMember, stopClock, outOfScope, priorChecks, relInput, relPath, sameCommand, stateOf, summarize,
   answered as settled, lastLines, withTail, fixChecks, fixOf, notYet, sweptPass, pendingOf, tailOf, waitOf, waitingOn, addFlow, dropFlow, flowOf, ruleText, withRules, type Acted, type Observed, type PlanInput, type Proofs, type Where,
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
-  rerunOf, snapWanted, withSnap, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
+  rerunOf, snapWanted, snapTaken, helpedBy, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
   timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
   libraryAsk, notAsked, NOT_LIBRARY, pickLoosens,
@@ -405,8 +405,14 @@ export const register: Register = on => {
       }
       if (why) return record($, { deny: why }, { kind: 'edit', label: `${tool} ${rel}`, file: rel, denied: true })
       if (sub) {
+        // A helper of the main conversation edits the main checkout: the visit's snapshot comes first, and its edit counts
+        // for the kept review and the rerun. It stays out of the calls, so the health window doesn't see it.
+        const helper = !own && !member
+        if (helper) await snapStart($)
         const ran = await next(e)
-        await lane($, r, e.agentId!, { label: `${tool} ${rel}`, file: ran.isError || ran.deny !== undefined ? undefined : rel })
+        const ok = !ran.isError && ran.deny === undefined
+        if (helper && ok) await change($, x => helpedBy(x, rel))
+        await lane($, r, e.agentId!, { label: `${tool} ${rel}`, file: ok ? rel : undefined })
         return ran
       }
       // A visit the user locked with /sentinel lock has no snapshot yet: it is taken before the first edit.
@@ -2301,17 +2307,25 @@ async function snapTree($: $, top: string, dir: string, name: string, message: s
 }
 
 // fails-without-change: the state's repository as the active state's visit begins, before its first edit, for the rerun
-// at advance. A snapshot that fails is said once in the log, and that visit gets no rerun.
-async function snapStart($: $): Promise<void> {
-  const r = await read($, run)
+// at advance. A snapshot that fails is said once in the log, and that visit gets no rerun. One at a time: helpers' first
+// edits can come together, and every snapshot goes through one index file.
+let snapping: Promise<void> = Promise.resolve()
+function snapStart($: $): Promise<void> {
+  const go = snapping.then(() => snapNow($))
+  snapping = go.catch(() => undefined)
+  return go
+}
+async function snapNow($: $): Promise<void> {
+  if (!snapWanted(await read($, run))) return
+  // read gives this call's copy of the run, which a snapshot another call took since doesn't reach. update sees it.
+  let r = emptyRun()
+  await update($, run, x => ((r = x), x))
   if (!snapWanted(r)) return
   const root = await rootOf($)
   const repo = await repoFor($, stateOf(r)!)
   const sha = 'why' in repo ? new Error(repo.why)
     : await snapTree($, repo.top, `${root}/.sentinel`, 'snap', `Sentinel: the project when ${r.active} started`).catch((err: unknown) => new Error(err instanceof Error ? err.message : String(err)))
-  await change($, x => (x.active !== r.active || x.enteredAt !== r.enteredAt ? x
-    : typeof sha === 'string' ? withSnap(x, sha)
-    : withSnap({ ...x, log: [...x.log, { t: now(), icon: '!', tone: 'warn', text: `${r.active} · no snapshot for the rerun without the change: ${sha.message}` }] }, '')))
+  await change($, x => snapTaken(x, r, sha, now()))
 }
 
 // fails-without-change: the state's check again, in a scratch worktree at the visit's snapshot with the visit's test
