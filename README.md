@@ -59,6 +59,16 @@ When the work waits on something outside, such as a locked machine or someone's 
 
 When you want to step away, go hands-free: type `/sentinel hands-free`, press Go hands-free in the dashboard, press Lock and go hands-free on the draft, or press Approve and go hands-free on a state that waits for you. Claude then makes the calls that would have waited for you (a proposal, a review of its own work, a breaking change, a question), picks what it would recommend, and goes on. The dashboard lists each one under "Decided without asking you", and each task page shows its own. A state Claude is stuck in can be skipped and left for you, unless a later state builds on it; then the run stops and waits. `/sentinel hands-free off` or Turn off on the dashboard hands the calls back.
 
+## Skills and Other Plugins During a Plan
+
+While a plan runs, a skill runs only when the plan lists it or you name it.
+
+- **The plan lists it.** While drafting, Claude can put `skills` on a state, for that state, or on the plan, for every state. They are written as the Skill tool names them, such as `impeccable:impeccable`. The draft card and each state's page show them, so you approve them when you lock. They can't be added once the plan runs.
+- **You named it.** A skill goes through once a message you typed names it as a whole word: its full name, its plugin (`impeccable`) or its own name (`ponytail-audit`). Your messages are kept across a restart, so a skill you named stays allowed.
+- **Anything else is refused.** Claude is told to go on without it, or to stop and say so if the state can't. The refusal goes in the plan log. A helper's call is checked against the state it works on. A `/skill` you type yourself runs as usual, and with the plan paused or finished every skill runs.
+
+Notes other plugins send after an edit, such as impeccable's design findings, are held the same way. A note from a `PostToolUse` hook reaches Claude only when it names a skill the state may use or a plugin you named. A held note goes in the plan log with its first 200 characters. The hooks still run; Claude just doesn't read what they send. Notes at session start or when you send a prompt, and a Stop hook's reason, are left alone.
+
 ## When Claude Goes in Circles
 
 ![Health drops as the same test fails; Sentinel marks the run stuck, sends a note, and the run recovers](docs/media/stuck.webp)
@@ -363,6 +373,7 @@ States that run side by side each pass their own check, but nothing tests them t
 - A state Claude marks as part of a flow in a `define` skips the comparison. States added during a run can't use that mark.
 - A new plan-mode sign-off while a plan runs replaces that plan's saved sources until the new draft locks.
 - In `claude -p` or the Agent SDK, a prompt doesn't count as a typed message, so quotes need a file from before the session or a plan-mode approval. Checks run through the Bash tool as `(cd <root> && <check>); echo ...`, so a narrow allow rule such as `Bash(node:*)` doesn't cover them and `advance` is refused.
+- A skill you name is matched by whole word, so one named after a common word ("run", "loop") goes through on a sentence such as "run the tests". The engine doesn't say which plugin a hook's note came from, so a note is let through by name only when its text carries a `[name@1]` tag, as impeccable's does.
 - Claude Code only for now. The state machine and detector in `hooks/core.ts` have no engine dependency, so other agents could reuse them.
 
 ## Develop

@@ -54,11 +54,12 @@ function library(project = {}, personal = {}, preset = {}, mine = []) {
 const page = (r, extra = {}, look) => ({ ...summarize(r, look), savedAt: now, parallel: false, members: {}, ...library(), ...extra })
 const plan = {
   action: 'define', title: 'Order search',
+  skills: ['ponytail:ponytail-review'],
   states: [
     { id: 'explore', label: 'Read the orders code' },
     { id: 'api', label: 'Search endpoint', check: 'npm test -- search.api', files: ['src/api/**'] },
     { id: 'perf', label: 'Time the search on 50,000 orders', check: 'npm test -- search.perf', files: ['tests/perf/**'] },
-    { id: 'page', label: 'Search page', check: 'npm test -- search.page', files: ['web/**'] },
+    { id: 'page', label: 'Search page', check: 'npm test -- search.page', files: ['web/**'], skills: ['impeccable:impeccable'] },
   ],
 }
 const drafted = act({ ...emptyRun(), signedOff: true, review: true }, plan, '', {}, now).run
@@ -1721,6 +1722,7 @@ try {
   // The draft card: depth ticks, the plan's own switches, and Lock carrying both.
   p = await open('draft', '')
   check(await p.locator('#slip .deep label').count() === 2, 'depth items')
+  check((await p.locator('#slip').innerText()).replace(/\s+/g, ' ').includes('Skills Claude may use In every state: ponytail:ponytail-review. In page: impeccable:impeccable. Any other skill waits until you name it in the chat.'), 'draft: the skills Claude may use, plan-wide and per state')
   check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted && i.name !== XS).length, 'a switch per trusted instruction')
   await p.locator('#slip [data-deep=perf]').check()
   await p.locator('#slip [data-plan=failure-list]').uncheck()

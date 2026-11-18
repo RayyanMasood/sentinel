@@ -2108,6 +2108,7 @@ const SLIP = {
     const ts = tasks(), waits = ts.filter(s => s.wait).map(s => code(s.id)), fl = [...new Set(ts.filter(s => s.flow).map(s => s.flow.as))], where = whereFrom(), from = vm.proof?.of ? vm.proof.sources[0] : undefined
     const locking = `<h3>What locking does</h3><p>Claude works through the ${ts.length} states${par() && vm.deps ? ', running some side by side in member agents once what they need is done' : ' in order'}. `
       + `A state with a check ends when the check exits 0. The others end when Claude moves on${waits.length ? `, and ${and(waits)} ${waits.length > 1 ? 'end' : 'ends'} on your OK` : ''}. Edits outside a state's listed files are refused while it runs.</p>`
+      + (vm.skills?.length || ts.some(s => s.skills?.length) ? `<h3 class="gap">Skills Claude may use</h3><p>${[vm.skills?.length && `In every state: ${vm.skills.map(code).join(' ')}.`, ...ts.filter(s => s.skills?.length).map(s => `In ${code(s.id)}: ${s.skills.map(code).join(' ')}.`)].filter(Boolean).join(' ')} Any other skill waits until you name it in the chat.</p>` : '')
     const flows = `Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p>`
     return `<div class="slip-h"><h2>Before you lock it</h2>${from ? `<span class="quiet">From ${esc(srcName(from))}. ${esc(from.origin)}.</span>` : vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
       + `<div class="slip-b">${where ? `${where}<div>${locking}<h3 class="gap">${flows}</div>` : `<div>${locking}</div><div><h3>${flows}</div>`}`
@@ -3269,6 +3270,7 @@ function nowSec() {
   html += '<dl class="dl">'
     + dt('Done when', done + (steps.length ? `<span class="cmd">${(all ? steps : steps.slice(0, SHOW)).map(x => `<code>${esc(x)}</code>`).join('')}</span>${steps.length > SHOW ? more(ck, all, `Show all ${steps.length} steps`) : ''}` : ''))
     + dt('May edit', a.files?.length ? a.files.map(code).join(' ') : 'Nothing. It only reads or checks.')
+    + (skillsOf(a).length ? dt('Skills', skillsOf(a).map(code).join(' ')) : '')
     + (taskMs(s) != null ? dt('On it for', `<span class="num" data-took="${esc(a.id)}">${fmtDur(taskMs(s))}</span>`) : '')
     + (s.flow ? dt('Added by', `Your <b>${esc(s.flow.name)}</b> flow`) : '')
     + (par() ? dt('Runs in', 'The main conversation') : '')
@@ -3462,6 +3464,8 @@ function ledger() {
 // A click on a task opens its page in place of the plan. The address carries #task-<id>, so Back and a reload work.
 let detailId = null, savedY = 0, saved = null, lastTask = null
 const tasks = () => vm.states.filter(s => s.id !== 'done')
+// The skills a state may call while the plan runs: the plan's and its own.
+const skillsOf = s => [...new Set([...(vm.skills || []), ...(s?.skills || [])])]
 const byId = id => vm?.states.find(s => s.id === id)
 const titleOf = id => { const s = byId(id); return s?.title || s?.label || id }
 
@@ -3691,6 +3695,7 @@ function taskPage(s, i, T) {
         <aside class="tp-side">
           <h3>Done when</h3>${done}${s.wait === 'after' ? `<p>${s.check ? 'Then you review it' : 'You approve it'}, here or in the chat.</p>` : ''}${s.wait && s.wait !== 'after' ? '<p class="fine">It waits for your OK before it starts.</p>' : ''}
           <h3>May change</h3>${files.length ? `<ul class="files">${files.map(x => `<li>${code(x)}</li>`).join('')}</ul>` : `<p>Nothing. It only ${s.wait ? 'waits' : 'reads'}.</p>`}
+          ${skillsOf(s).length ? `<h3>Skills it may use</h3><ul class="files">${skillsOf(s).map(x => `<li>${code(x)}</li>`).join('')}</ul><p class="fine">Any other waits until you name it in the chat.</p>` : ''}
           ${s.from !== undefined ? `<h3>Changed</h3>${s.edited?.length ? `<ul class="files">${s.edited.map(x => `<li>${code(x)}</li>`).join('')}</ul>` : `<p class="quiet">${s.status === 'done' ? 'Nothing.' : 'Nothing yet.'}</p>`}<p class="fine">Files written by shell commands don't show here.</p>` : ''}
           ${s.flow ? `<h3>Added by</h3><p>Your <b>${esc(s.flow.name)}</b> flow.${s.flow.why ? ` ${ticks(s.flow.why)}.` : ''}</p>` : ''}
           ${act && act.id !== s.id ? `<h3>${hereWord()}</h3><p><button type="button" class="lnk" data-task="${esc(act.id)}">${code(act.id)}${icon('arrow')}</button></p>` : ''}

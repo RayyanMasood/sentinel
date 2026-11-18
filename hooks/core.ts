@@ -822,6 +822,7 @@ const refuse = (r: Run, text: string): Acted => ({ run: r, text, ok: false })
 export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = Date.now(), typed = false, without?: Without): Acted {
   if (i.action === 'define') return define(r, i, t, proofs, now)
   if (i.action === 'revise') {
+    if (isLive(r) && !r.draft && changesSkills(r, i)) return refuse(r, SKILLS_FIXED)
     if (addsMidRun(r)) return addStates(r, i, t)
     const whole = revised(r, i)
     if (typeof whole === 'string') return refuse(r, whole)
@@ -1101,6 +1102,7 @@ function here(r: Run, final = false): string {
     waitOf(st) === 'before' ? 'It asks the user first: call propose with your intent, stop your turn, and start once they answer.'
       : waitOf(st) === 'after' ? 'The user reviews it when it is done: advance tells them, then stop your turn until they answer.' : '',
     `Files you may edit: ${st.files.length ? st.files.join(', ') : 'none in this state'}.`,
+    skillsFor(r, st.id).length ? `Skills you may use here: ${skillsFor(r, st.id).join(', ')}. Any other waits until the user names it.` : '',
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),
     mapHere(r, st),
@@ -1189,6 +1191,45 @@ function proofOf(i: PlanInput, states: StateDef[], at: number, depth: Depth[], p
 // the running plan's sources; mark the sign-off's sources if that route shows up.
 export const keptSources = (r: Run): Source[] | undefined => (!r.review ? r.sources : r.draft ? r.draft.sources : isUnfinished(r) ? undefined : r.sources)
 
+// ---- skills and other plugins' notes while a plan runs ----
+
+// A skill as the Skill tool names it: plugin:skill, or a skill of its own.
+const SKILL_NAME = /^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/
+export const SKILLS_FIXED = 'Skills are set when the plan locks: the user approves them on the draft. Mid-run, a skill runs once the user names it in the chat.'
+function skillsFrom(v: unknown, at: string): string[] | string {
+  if (v === undefined) return []
+  if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) return `"skills" on ${at} is a list of skill names, such as "impeccable:impeccable".`
+  const names = [...new Set((v as string[]).map(x => x.trim()).filter(Boolean))]
+  const bad = names.find(n => !SKILL_NAME.test(n))
+  return bad ? `"${bad}" on ${at} isn't a skill name: use the name the Skill tool takes, such as "impeccable:impeccable".` : names
+}
+// What a revise of a running plan would change about skills: a plan-wide list, or a state's, new or different.
+function changesSkills(r: Run, i: PlanInput): boolean {
+  const same = (a: unknown, b?: string[]) => JSON.stringify(a ?? []) === JSON.stringify(b ?? [])
+  if (i.skills !== undefined && !same(i.skills, r.plan?.skills)) return true
+  return (i.states ?? []).some(s => s.skills !== undefined && !same(s.skills, r.plan?.states.find(x => x.id === s.id?.trim())?.skills))
+}
+// The skills a state may call: the plan's and its own.
+export const skillsFor = (r: Run, id?: string | null): string[] => [...new Set([...(r.plan?.skills ?? []), ...(r.plan?.states.find(s => s.id === id)?.skills ?? [])])]
+// A name as a whole word in a text: letters, digits, - and _ on neither side.
+const named = (text: string, word: string) => new RegExp(`(^|[^\\w-])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`, 'i').test(text)
+// The words that name a skill: plugin:skill, the plugin and the skill alone.
+const wordsOf = (name: string) => [...new Set([name, ...name.split(':')])]
+// A skill call goes through when the state may use it, or the user named it in a message.
+export function skillAllowed(r: Run, id: string | null | undefined, name: string, typed: string[]): boolean {
+  // A full name listed allows that skill only; a bare one, any skill whose plugin or own name it is.
+  const n = name.toLowerCase()
+  if (skillsFor(r, id).some(s => s.toLowerCase() === n || (!s.includes(':') && n.split(':').includes(s.toLowerCase())))) return true
+  return wordsOf(name).some(w => typed.some(m => named(m, w)))
+}
+// Another plugin's note goes through when it names a skill the state may use, or a name the user typed: impeccable's
+// carries [impeccable@1]. typed: the user's messages.
+export function noteAllowed(r: Run, id: string | null | undefined, text: string, typed: string[]): boolean {
+  if (skillsFor(r, id).some(s => wordsOf(s).some(w => named(text, w)))) return true
+  const from = /\[([\w.-]+)@\d+\]/.exec(text)?.[1]
+  return !!from && typed.some(m => named(m, from))
+}
+
 // One state as sent. A string says what is wrong. proofOf sets asked and added; okAt and look are Sentinel's own.
 function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | string {
   const id = (s.id ?? '').trim()
@@ -1202,13 +1243,15 @@ function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | stri
   const needs = s.needs && [...new Set(s.needs.map(n => n.trim()).filter(Boolean))]
   // Which parts of the map these are is checked against the map where the drawing is (the link state).
   const parts = Array.isArray(s.parts) ? [...new Set(s.parts.filter((p): p is string => typeof p === 'string').map(p => p.trim()).filter(Boolean))] : []
+  const skills = skillsFrom(s.skills, id)
+  if (typeof skills === 'string') return skills
   if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`
   if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`
   const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
   if (s.once !== undefined && typeof s.once !== 'boolean') return `"once" on ${id} must be true or false.`
   if (s.once && !check) return `${id} has "once" but no check. "once" means its check runs at its advance and not again at the end.`
   const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}), ...(s.weight ? { weight: s.weight } : {}), ...(s.weightWhy ? { weightWhy: s.weightWhy } : {}), ...(s.weightQuote ? { weightQuote: s.weightQuote } : {}), ...(s.weightOk ? { weightOk: true as const } : {}), ...(s.adds?.length ? { adds: s.adds } : {}) }
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(skills.length ? { skills } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}), ...(s.weight ? { weight: s.weight } : {}), ...(s.weightWhy ? { weightWhy: s.weightWhy } : {}), ...(s.weightQuote ? { weightQuote: s.weightQuote } : {}), ...(s.weightOk ? { weightOk: true as const } : {}), ...(s.adds?.length ? { adds: s.adds } : {}) }
 }
 
 // What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
@@ -1371,7 +1414,9 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
     audit.push({ step: 0, t, kind: 'decided', text: `${topic} → ${choice}${d.reason?.trim() ? ` (${d.reason.trim()})` : ''}` })
   }
   const source = i.source?.trim()
-  const plan: Plan = { title: i.title?.trim() || 'Plan', states, loops, lockedAt: t, ...(source ? { source } : {}) }
+  const skills = skillsFrom(i.skills, 'the plan')
+  if (typeof skills === 'string') return refuse(r, skills)
+  const plan: Plan = { title: i.title?.trim() || 'Plan', states, loops, lockedAt: t, ...(source ? { source } : {}), ...(skills.length ? { skills } : {}) }
   const prior = states.slice(0, at).map(s => s.id)
   const log: LogLine[] = [{ t, icon: '●', tone: 'acc', text: `${drafting ? 'Drafted' : 'Plan locked'} · ${states.length} states, ${loops.length} loop${loops.length === 1 ? '' : 's'}` }]
   if (prior.length) log.push({ t, icon: '✓', tone: 'ok', text: `Done before the lock · ${prior.join(', ')}` })
@@ -2328,6 +2373,7 @@ function reopen(r: Run, st: StateDef, failed: StateDef[], proofs: Proofs, outcom
 }
 
 function amend(r: Run, i: PlanInput, t: string): Acted {
+  if (i.skills !== undefined) return refuse(r, SKILLS_FIXED)
   const st = stateOf(r)!
   const reason = i.reason?.trim()
   if (!reason) return refuse(r, 'amend needs a reason.')
@@ -2514,6 +2560,8 @@ export type VM = {
   planWeight?: Weight
   settingRows?: SettingRow[]
   paused: boolean
+  // Skills every state may call; a state's own ride on the state.
+  skills?: string[]
   source?: string
   signedOff: boolean
   title: string
@@ -3025,7 +3073,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
   const asked = phase === 'live' && !top.paused ? pendingOf(r) : undefined
 
   return {
-    phase, paused: !!top.paused, source: plan?.source, signedOff: top.signedOff, title: plan?.title ?? '', lockedAt: plan?.lockedAt ?? '', step: r.step, states,
+    phase, paused: !!top.paused, source: plan?.source, ...(plan?.skills ? { skills: plan.skills } : {}), signedOff: top.signedOff, title: plan?.title ?? '', lockedAt: plan?.lockedAt ?? '', step: r.step, states,
     loops: (plan?.loops ?? []).map(([from, to]) => ({ from, to, count: r.loops[`${from}>${to}`] ?? 0, hot: r.lastLoop === `${from}>${to}` && r.active === to })),
     active: st ? { ...st, pos: pos + 1, of: ids.length, status: red ? 'trap' : 'active' } : undefined,
     lastCheck, health, spark: r.calls.slice(-24).map(c => c.H), trap, released, attempts, mainFile, next,

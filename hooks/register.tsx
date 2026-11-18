@@ -12,7 +12,7 @@ import {
   rerunOf, snapWanted, snapTaken, helpedBy, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
   timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
-  libraryAsk, notAsked, NOT_LIBRARY, pickLoosens,
+  libraryAsk, notAsked, NOT_LIBRARY, pickLoosens, skillAllowed, noteAllowed,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
 import { mcpProblem, mcpStates, serverList } from './mcp'
@@ -121,6 +121,7 @@ export const SCHEMA = {
           check: { type: 'string', description: 'shell command; exit 0 means the state is done' },
           files: { type: 'array', items: { type: 'string' }, description: 'globs this state may edit' },
           parts: { type: 'array', items: { type: 'string' }, description: "the ids of the system map's parts this state builds, parts with nothing inside them. Sentinel records where they stand when the state starts and what its check proves." },
+          skills: { type: 'array', items: { type: 'string' }, description: 'skills this state calls, as the Skill tool names them (plugin:skill). Fixed when the plan locks.' },
           ref: { type: 'string', description: 'where this state is described (doc section, plan step)' },
           asked: { type: 'array', items: { type: 'string' }, description: `where this state came from: short quotes copied word for word from the plan the user approved or their typed messages, at least 5 words each or a whole message. Sentinel compares them and refuses any that aren't there. Words from a part marked out of scope don't count.` },
           added: { type: 'string', description: 'in place of asked, when nothing the user approved or typed asks for this state: your reason, in a sentence. The state shows as your addition. Added while a plan runs, it goes in and finishes, unless its files can reach the breaking list: then it asks the user when it starts.' },
@@ -146,6 +147,7 @@ export const SCHEMA = {
       required: ['at'],
     },
     source: { type: 'string', description: 'define: where the plan is written' },
+    skills: { type: 'array', items: { type: 'string' }, description: 'define: skills every state may call, as the Skill tool names them (plugin:skill); a state lists its own. While the plan runs, any other skill waits until the user names it. Fixed when the plan locks.' },
     decisions: {
       type: 'array',
       description: 'define: decisions already made',
@@ -354,6 +356,22 @@ export const register: Register = on => {
     return band ?? next(e)
   })
 
+  // Another plugin's after-edit note (impeccable's design findings, say) steers Claude away from the plan, so while one
+  // runs the note is held unless it names a skill the state may use or a plugin the user named. It goes in the plan
+  // log. Start-up and prompt-time notes, and a Stop hook's reason, are left alone.
+  // ponytail: the engine doesn't say which plugin a note came from; only a [name@n] tag in its text names it.
+  on('prompt.attachment', async ($, e, next) => {
+    if (e.origin.kind !== 'hook' || !['PostToolUse', 'PostToolUseFailure'].includes(e.origin.event)) return next(e)
+    const r = await read($, run)
+    if (!isLive(r)) return next(e)
+    const id = (e.agentId !== undefined ? await memberOf($, r, e.agentId) : undefined) ?? r.active
+    if (noteAllowed(r, id, e.text, (await saidNow($)).messages.map(m => m.text))) return next(e)
+    const from = /\[([\w.-]+)@\d+\]/.exec(e.text)?.[1]
+    const text = `Held ${from ? `${from}'s` : 'a'} ${e.origin.event} note: ${e.text.replace(/\s+/g, ' ').slice(0, 200)}`
+    await change($, x => ({ ...x, log: [...x.log, { t: now(), icon: '⊘', tone: 'dim' as const, text }] }))
+    return { text: null }
+  })
+
   // Sentinel's own question. The engine skips the hook that asks, so the one below, which is a hook of its own, is what
   // lets the dashboard answer it and close the dialog. Claude's questions and every other call go through untouched.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
@@ -403,6 +421,18 @@ export const register: Register = on => {
     if (!isLive(r) || NEUTRAL.has(tool)) return tool === 'AskUserQuestion' ? (await ask($, e, next))[0] : next(e)
     // Subagents get the scope guard only; their calls would drown the main loop's health window.
     const sub = e.agentId !== undefined
+
+    // A skill runs when the plan lists it for the state, or the user named it. A helper's is checked against its own
+    // state. A /skill the user types never comes through here.
+    if (tool === 'Skill') {
+      const name = String(input.skill ?? '')
+      const id = (sub ? await memberOf($, r, e.agentId!) : undefined) ?? r.active
+      if (!skillAllowed(r, id, name, (await saidNow($)).messages.map(m => m.text))) {
+        await change($, x => ({ ...x, log: [...x.log, { t: now(), icon: '⊘', tone: 'warn' as const, text: `Held the skill ${name}` }] }))
+        const deny = `Sentinel holds the skill "${name}": the plan doesn't list it for this state and the user hasn't named it. Go on without it. If the state can't, say so in your reply and stop; they allow it by naming it.`
+        return sub ? { deny } : record($, { deny }, { kind: 'look', label: `Skill ${name}`, denied: true })
+      }
+    }
 
     if (EDITS.has(tool)) {
       const file = String(input.file_path ?? input.notebook_path ?? '')

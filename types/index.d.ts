@@ -16,6 +16,8 @@ export type StateDef = {
   once?: true
   // The parts of the system map this state builds (ids of parts with nothing inside them).
   parts?: string[]
+  // Skills Claude may call in this state, as the Skill tool names them (plugin:skill). Fixed at the lock.
+  skills?: string[]
   // Where the state came from, while quote-the-source is on. asked: the words it quotes, compared with the sources.
   // added: Claude's reason, when nothing asked for it.
   asked?: string[]; added?: string
@@ -194,6 +196,8 @@ export type Plan = {
   loops: [string, string][]
   lockedAt: string
   source?: string
+  // Skills Claude may call in every state. Fixed at the lock.
+  skills?: string[]
 }
 
 export type Kind = 'plan' | 'edit' | 'check' | 'look' | 'ask'
@@ -317,9 +321,11 @@ export type Task = { visits: { from: number; to?: number; cont?: boolean; by?: '
 export type PlanInput = {
   action: string
   title?: string
+  // define: skills Claude may call in every state; a state's own go on the state.
+  skills?: unknown
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark; weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[] }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; skills?: unknown; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark; weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[] }[]
   // define, revise, with the Library's state-settings switch on: the plan's weight and instructions on or off. Sentinel
   // turns it into library.settings; with the switch off it is dropped.
   settings?: unknown
