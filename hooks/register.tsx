@@ -456,7 +456,7 @@ export const register: Register = on => {
       const id = tool === 'Bash' ? task?.backgroundTaskId : tool === 'Monitor' ? task?.taskId : undefined
       if (typeof id === 'string' && (await memberOf($, r, e.agentId!))) {
         bgBy.set(id, e.agentId!)
-        firstSeen.set(id, Date.now())
+        firstSeen.set(id, await clockMs($))
       }
       await lane($, r, e.agentId!, { label: tool === 'Bash' ? `Bash ${String(input.command ?? '')}`.slice(0, 80) : lookLabel(tool, input) })
       return ran
@@ -467,6 +467,11 @@ export const register: Register = on => {
       const q = questions?.[0]?.question ?? 'question'
       if (r.handsFree) {
         return record($, { deny: `Sentinel holds this question. ${HANDS_FREE}` }, { kind: 'ask', label: q, denied: true })
+      }
+      // A user who typed in the last ASK_MS is most likely still there to answer.
+      if (await typedLately($)) {
+        const [ran, label] = await ask($, e, next, q)
+        return record($, ran, { kind: 'ask', label })
       }
       // After an escalation, or in a state that needs the user's OK, the question goes through.
       if (r.askToken > 0 || waitOf(stateOf(r))) {
@@ -513,11 +518,11 @@ export const register: Register = on => {
   // What is still in flight when a conversation stops: background shells, monitors and agents, and timers that wake
   // it. They answer into it by themselves, so it is not pushed on.
   on('classic.Stop', async ($, e, next) => {
-    seen('', e.background_tasks, e.session_crons)
+    seen('', await clockMs($), e.background_tasks, e.session_crons)
     return next(e)
   })
   on('classic.SubagentStop', async ($, e, next) => {
-    seen(e.agent_id, e.background_tasks)
+    seen(e.agent_id, await clockMs($), e.background_tasks)
     return next(e)
   })
 
@@ -565,13 +570,13 @@ export const register: Register = on => {
     const looks = await read($, overseers)
     // The Stop input lists a running overseer too, and it holds nothing up. Its id there may not be the agent's.
     const live = (flight('')?.tasks ?? []).filter(t => !looks[t.id] && !Object.values(looks).some(l => t.what === `overseer ${l.state}`.slice(0, 80)))
-    const held = holding(live)
+    const held = holding(live, await clockMs($))
     const busy = !!held.length || (await agentsAtWork($))
     backBusy = busy
     void after($)
     if (held.length) {
       const at = turns
-      $.clock.after(Math.max(0, Math.max(...held.map(t => firstSeen.get(t.id)! + HOLD_MS)) - Date.now()) + 1000, () => void (async () => {
+      $.clock.after(heldTill(held, await clockMs($)), () => void (async () => {
         if (turns !== at || turning) return
         // Past HOLD_MS a shell or a monitor no longer counts as work: a server or a watcher never ends.
         backBusy = await agentsAtWork($)
@@ -646,6 +651,9 @@ async function userSpoke($: $) {
   typedClock = await clockMs($)
   await change($, r => heard(r, Date.now()))
 }
+// A question reaches a user who typed this recently; one who has been away longer, Claude decides for.
+const ASK_MS = 15 * 60_000
+const typedLately = async ($: $) => typedAt > 0 && (await clockMs($)) - typedClock < ASK_MS
 let turnAt = 0
 let lastTurnAt = 0
 let turns = 0
@@ -661,13 +669,16 @@ const TALK_MS = 5 * 60_000
 type Flying = { id: string; what: string }
 // The background work in flight at each conversation's latest stop ('' for the main one), and when each was first seen.
 const inFlight = new Map<string, { at: number; tasks: Flying[] }>()
+// On the engine's clock, which a test can move. named: when a push last named the run, which starts its hold over, so a
+// run the conversation stops beside again is named once per HOLD_MS, not at every stop.
 const firstSeen = new Map<string, number>()
-function seen(agent: string, tasks?: { id: string; status: string; description: string }[], crons?: { id: string; prompt?: string }[]) {
+const named = new Map<string, number>()
+function seen(agent: string, at: number, tasks?: { id: string; status: string; description: string }[], crons?: { id: string; prompt?: string }[]) {
   const live: Flying[] = [
     ...(tasks ?? []).filter(t => !['idle', 'completed', 'failed', 'killed'].includes(t.status)).map(t => ({ id: t.id, what: t.description.slice(0, 80) })),
     ...(crons ?? []).map(c => ({ id: `cron:${c.id}`, what: 'a scheduled wake-up' })),
   ]
-  for (const t of live) if (!firstSeen.has(t.id)) firstSeen.set(t.id, Date.now())
+  for (const t of live) if (!firstSeen.has(t.id)) firstSeen.set(t.id, at)
   inFlight.set(agent, { at: Date.now(), tasks: live })
 }
 // The Stop input of the conversation that just stopped, taken once. undefined when none came: then only the agent list
@@ -678,8 +689,10 @@ function flight(agent: string) {
   inFlight.delete(agent)
   return f && Date.now() - f.at < 60_000 ? f : undefined
 }
-// What still holds: the work that has run for less than HOLD_MS.
-const holding = (tasks: Flying[]) => tasks.filter(t => Date.now() - (firstSeen.get(t.id) ?? Date.now()) < HOLD_MS)
+// What still holds: the work that has run, or gone unnamed, for less than HOLD_MS. heldTill: when the last of it stops holding.
+const since = (t: Flying, at: number) => named.get(t.id) ?? firstSeen.get(t.id) ?? at
+const holding = (tasks: Flying[], at: number) => tasks.filter(t => at - since(t, at) < HOLD_MS)
+const heldTill = (tasks: Flying[], at: number) => Math.max(0, Math.max(...tasks.map(t => since(t, at) + HOLD_MS)) - at) + 1000
 // A member's background shells and monitors, by task id: its agent.
 const bgBy = new Map<string, string>()
 // The states whose member's work is being checked and brought back.
@@ -689,6 +702,9 @@ const bringing = new Set<string>()
 // blocked: then nothing pushes the conversation on while it waits.
 export const PUSH_HOW = 'Unless you need a breaking-change decision (escalate), continue with the next step. If your last reply asked the user something only they can answer, call plan "escalate" with kind "blocked" and a reason instead, then stop.'
 
+// What it says in a state that ends with the user's review, before it asks them: escalate blocked is no way out of it.
+const REVIEW_HOW = "This state ends with the user's review. Carry on with its work, and when it is done call advance with your outcome; that asks them."
+
 // Pushes a stopped main conversation on, unless it waits for the user or for work that wakes it. long: background
 // work that has run past HOLD_MS, named so the model can tell a server from a stuck run.
 async function push($: $, busy: boolean, long: Flying[]) {
@@ -697,6 +713,7 @@ async function push($: $, busy: boolean, long: Flying[]) {
   let n = 0
   let free = false
   let cap = AUTO_CAP
+  let review = false
   const talking = spoke() && (await clockMs($)) - typedClock < TALK_MS
   await change($, r => {
     const out = autoContinue(r, now(), busy, talking)
@@ -705,12 +722,15 @@ async function push($: $, busy: boolean, long: Flying[]) {
     n = out.run.auto
     free = !!out.run.handsFree
     cap = capOf(out.run)
+    review = waitOf(stateOf(out.run)) === 'after' && !pendingOf(out.run)
     return out.run
   })
   if (!go) return
   void after($)
+  const t = await clockMs($)
+  for (const w of long) named.set(w.id, t)
   const still = long.length ? ` Background work has run for over ${HOLD_MS / 60_000} minutes: ${long.map(t => t.what).join('; ')}. If it is a server or a watcher, carry on with the plan beside it.` : ''
-  const how = free ? `${HANDS_FREE} Continue with the next step.` : PUSH_HOW
+  const how = free ? `${HANDS_FREE} Continue with the next step.` : review ? REVIEW_HOW : PUSH_HOW
   tell($, `${TAG} The plan is locked and not finished (state ${state}). ${how}${still} Auto-continue ${n} of ${cap}.` )
 }
 
@@ -2457,11 +2477,11 @@ async function handBack($: $, id: string, answer: string, ended?: string, overdu
   const all = await agents($)
   const bg = [...bgBy].filter(([, a]) => a === m.agent || parentsOf(all, a).includes(m.agent)).map(([t]) => t)
   const flying = (inFlight.get(m.agent)?.tasks ?? []).filter(t => bg.includes(t.id))
-  const held = overdue ? [] : holding(flying)
+  const held = overdue ? [] : holding(flying, await clockMs($))
   if (held.length || all.some(a => a.id !== ended && working(a) && parentsOf(all, a.id).includes(m.agent))) {
     await change($, x => (x.running?.[id]?.agent === m.agent ? { ...x, running: { ...x.running, [id]: { ...x.running[id]!, answer } } } : x))
     if (held.length) {
-      $.clock.after(Math.max(0, Math.max(...held.map(t => firstSeen.get(t.id)! + HOLD_MS)) - Date.now()) + 1000, () => void (async () => {
+      $.clock.after(heldTill(held, await clockMs($)), () => void (async () => {
         const kept = (await read($, run)).running?.[id]
         if (kept?.agent !== m.agent || kept.answer === undefined) return
         // Woken by its work and busy again: its next stop brings it back.

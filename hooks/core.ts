@@ -2472,8 +2472,8 @@ export function autoContinue(r: Run, t: string, busy = false, talking = false): 
   if (!isLive(r)) return { run: r, go: false }
   if (r.quiet) return { run: { ...r, quiet: false }, go: false }
   // The model stopped to wait for the user's answer, for background work that wakes it when done, or after answering
-  // what the user just said. Hands-free, the user isn't there to talk to.
-  if (waitingOn(r) || busy || (talking && !r.handsFree)) return { run: r, go: false }
+  // what the user just said, hands-free or not: one who just typed is there.
+  if (waitingOn(r) || busy || talking) return { run: r, go: false }
   const cap = capOf(r)
   if (r.auto >= cap) return { run: r, go: false }
   const auto = r.auto + 1
