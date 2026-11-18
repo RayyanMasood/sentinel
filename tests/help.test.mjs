@@ -29,7 +29,8 @@ test('help shows every command with what it does, and no line is cut short', () 
 // The engine passes the model only the first 4096 characters of a tool's description, so a line past that is never read.
 test('the plan tool\'s description fits the 4096 characters the model is given', () => {
   const src = readFileSync(new URL('../hooks/register.tsx', import.meta.url), 'utf8')
-  const text = /export const DESCRIPTION = `([\s\S]*?)`\n/.exec(src)?.[1]
+  // A Windows checkout ends lines with \r\n, which a template literal reads as \n.
+  const text = /export const DESCRIPTION = `([\s\S]*?)`\r?\n/.exec(src)?.[1]?.replaceAll('\r\n', '\n')
   assert.ok(text, 'the description was read')
   assert.ok(!text.includes('${'), 'the description has no interpolation, so its length here is its length')
   assert.ok(text.length <= 4096, `the description is ${text.length} characters`)
