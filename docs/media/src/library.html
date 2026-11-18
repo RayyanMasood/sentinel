@@ -36,7 +36,7 @@ fetch('data/library.json').then(r => r.json()).then(({ moments, said }) => {
   // terminal cuts it.
   const told = said.status.slice(said.status.indexOf('Your instructions'))
   const rows = [
-    { at: -1, cls: 'ln you', html: 'Rate limit the public API: 60 requests a minute per key.' },
+    { at: -1, cls: 'ln you', html: 'Rate limit the public API to 60 requests a minute per key, and document the limits for clients.' },
     { at: -1, cls: 'ln say gap', html: 'Plan ready: limiter, load, docs, with two suggestions beyond the brief. Type /sentinel lock to check it as a draft.' },
     { at: 6.0, cls: 'ln you gap', html: '/sentinel lock' },
     { at: 13.2, cls: 'ln tool gap', html: '<b>plan</b><em>(action: "status")</em>', done: [13.6, 'ok'] },

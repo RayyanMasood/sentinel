@@ -41,12 +41,12 @@ fetch('data/flows.json').then(r => r.json()).then(({ moments }) => {
     tool(0.5, 1.0, 'plan', 'action: "flow", name: "review", states: [lint, read], …'),
     { at: 1.0, cls: 'ln res', html: esc(held) },
     { at: 1.6, cls: 'ln say gap', html: 'Drafted review: lint the change, then walk you through the diff. Save it when it looks right.' },
-    { at: 4.9, cls: 'ln you gap', html: 'Sign outgoing webhooks so receivers can check them.' },
+    { at: 4.9, cls: 'ln you gap', html: 'Sign outgoing webhooks so receivers can check them, and document how they verify one.' },
     { at: 5.4, cls: 'ln say gap', html: 'Plan ready: sign, api, docs. Type /sentinel lock to check it as a draft.' },
     { at: 6.6, cls: 'ln you gap', html: '/sentinel lock' },
   ]
   const shows = [[0, 'before'], [1.0, 'drafted'], [4.0, 'saved'], [6.9, 'plan'], [11.4, 'added']]
-  const band = [[0, ''], [1.0, moments.drafted.band, 'ask', ['Save to project', 'Save personal', 'Discard']], [4.0, ''],
+  const band = [[0, ''], [1.0, moments.drafted.band, 'ask', ['Save to project', 'Save for every project', 'Discard']], [4.0, ''],
     [6.9, moments.plan.band, 'warn', ['Review', 'Lock']], [11.4, moments.added.band, 'warn', ['Review', 'Lock']]]
   const term = terminal($('term'), rows, { typed: [5.85, 6.35, 6.6, '/sentinel lock'], band, toast: [1.1, 3.6] })
   const cap = captions($('caps'), [

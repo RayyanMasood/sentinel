@@ -72,7 +72,7 @@ fetch('data/free.json').then(r => r.json()).then(({ moments, said }) => {
     res(13.0, said.done, { full: true }),
   ]
   const shows = [[0, 'locked'], [1.0, 'asks'], [4.1, 'free'], [6.1, 'api'], [7.6, 'decided'], [8.6, 'button'], [10.2, 'reviewed'], [10.9, 'ahead'], [13.0, 'done']]
-  const band = shows.map(([at, m]) => [at, moments[m].band, m === 'asks' ? 'warn' : ''])
+  const band = shows.map(([at, m]) => m === 'asks' ? [at, moments[m].band, 'warn', ['Answer', 'Open']] : [at, moments[m].band, ''])
   const term = terminal($('term'), rows, { typed: [0, 0, 0, ''], band })
   sfx(3.9, 'click')
   const cap = captions($('caps'), [

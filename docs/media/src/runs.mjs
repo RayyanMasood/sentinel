@@ -19,20 +19,21 @@ function band(vm) {
   const s = vm.sweep, c = vm.checking?.at(-1), hl = vm.health
   if (vm.paused) return `Sentinel is paused at ${a.id}.`
   if (vm.trap) return `Sentinel: stuck (${vm.trap.pattern}) in ${a.id}.`
-  if (vm.waiting) return vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts. Reply in the chat.` : `Sentinel: ${a.id} is ready for your review. Reply in the chat.`
+  if (vm.waiting) return vm.waiting.kind === 'before' ? `Sentinel: ${a.id} asks for your OK before it starts.` : `Sentinel: ${a.id} is ready for your review.`
   if (s) return `Sentinel: final checks · ${s.passed} of ${s.total} passed${s.going.length ? ` · running ${s.going.join(', ')}` : ''}`
   if (c) return `Sentinel: ${a.id} ${a.pos}/${a.of} · running the check · ${c.ms < MIN ? 'under a minute' : `${Math.floor(c.ms / MIN)} min`}`
   return `Sentinel: ${a.id} ${a.pos}/${a.of}${hl ? ` · H ${hl.H.toFixed(2)} ${healthWord(hl.H)}` : ''}`
 }
 
 // The Library as the plugin's snapshot carries it (register.tsx, libraryView): the built-ins and the project's own
-// instructions with their switches worked out from the two switches files, and the flows, built-in ones without a file.
+// instructions with their switches worked out from the switches files, the flows, built-in ones without a file, and no
+// preset or needed MCP, so the page shows the Preset line as a new project's.
 const BUILT_FLOWS = BUILTIN_FLOWS.map(f => ({ ...f, scope: 'built-in', trusted: true }))
 function library(project = {}, personal = {}, own = [], flows = BUILT_FLOWS) {
   const items = [...BUILTINS.map(b => ({ ...b, scope: 'built-in', trusted: true })), ...own.map(i => ({ kind: 'told', trusted: true, ...i }))]
   const { weight, on } = libraryOn([...items, ...flows], project, personal)
   return {
-    library: { weight, project, personal, instructions: items.map(i => ({ ...i, on: on.includes(i.name) })), flowsOn: Object.fromEntries(flows.map(f => [f.name, on.includes(f.name)])) },
+    library: { weight, project, personal, instructions: items.map(i => ({ ...i, on: on.includes(i.name) })), flowsOn: Object.fromEntries(flows.map(f => [f.name, on.includes(f.name)])), presets: [], mcps: [], servers: [] },
     flows,
   }
 }
@@ -264,13 +265,17 @@ function reviewFlow() {
   said.saved = `Saved the flow "review" to .sentinel/flows/review.json.`
   keep('saved', emptyRun(), [saved, changelog], { flowSaid: { at: now, ok: true, text: said.saved } })
   wait(3)
+  // What the user typed (flows.html shows it in the terminal); each state quotes it, and the points list it.
+  const asked = 'Sign outgoing webhooks so receivers can check them, and document how they verify one.'
   const plan = {
     action: 'define', title: 'Webhook signatures',
+    messages: [{ kind: 'message', text: asked, at: t() }],
     states: [
-      { id: 'sign', label: 'Sign each delivery', check: 'npm test -- sign', files: ['src/webhooks/sign.ts'], title: 'Sign outgoing webhooks', problem: 'Receivers cannot tell a real delivery from a forged one.', approach: 'Add an HMAC header to each delivery.' },
-      { id: 'api', label: 'Expose the secret', check: 'npm test -- settings', files: ['src/api/settings.ts'], title: 'Let users see their secret', problem: 'Receivers need the secret to check the header.', approach: 'Show it on the settings endpoint.' },
-      { id: 'docs', label: 'Document it', files: ['docs/webhooks.md'], title: 'Explain how to verify', problem: 'Receivers need the steps.', approach: 'Add a section with an example.' },
+      { id: 'sign', label: 'Sign each delivery', asked: ['Sign outgoing webhooks so receivers can check them'], check: 'npm test -- sign', files: ['src/webhooks/sign.ts'], title: 'Sign outgoing webhooks', problem: 'Receivers cannot tell a real delivery from a forged one.', approach: 'Add an HMAC header to each delivery.' },
+      { id: 'api', label: 'Expose the secret', asked: ['so receivers can check them'], check: 'npm test -- settings', files: ['src/api/settings.ts'], title: 'Let users see their secret', problem: 'Receivers need the secret to check the header.', approach: 'Show it on the settings endpoint.' },
+      { id: 'docs', label: 'Document it', asked: ['document how they verify one'], files: ['docs/webhooks.md'], title: 'Explain how to verify', problem: 'Receivers need the steps.', approach: 'Add a section with an example.' },
     ],
+    points: [{ said: 'Sign outgoing webhooks so receivers can check them', states: ['sign', 'api'] }, { said: 'document how they verify one', states: ['docs'] }],
   }
   // After /sentinel lock the run is signed off for review, and a define becomes the draft the user checks. The plugin
   // gives each new draft the Library as it stands.
@@ -301,13 +306,13 @@ function teamInvites() {
     states: [
       st('schema', 'table', 'Invites table', 'npm test -- db/invites', 'db/migrations/0042_invites.sql', 'Store invites', 'Nothing records who was invited to a team.', 'Add an invites table with a token and an expiry date.'),
       st('schema', 'down', 'Migration rolls back', 'npm run db:roundtrip', 'db/down/0042_invites.sql', 'Undo the table cleanly', 'A migration that only goes forward is hard to undo in production.', 'Write the down migration and run both ways.'),
-      st('api', 'create', 'Send an invite', 'npm test -- invites/create', 'src/api/invites/create.ts', 'Invite someone by email', 'Only an admin can add people today, by hand.', 'Add an endpoint that stores the invite and sends the email.'),
-      st('api', 'accept', 'Accept an invite', 'npm test -- invites/accept', 'src/api/invites/accept.ts', 'Join from the link', 'The link in the email has to add the person to the team.', 'Check the token, then add the member.'),
-      st('api', 'expire', 'Expire old invites', 'npm test -- invites/expire', 'src/jobs/expire.ts', 'Old links stop working', 'An invite link should not work forever.', 'A nightly job expires invites older than 7 days.'),
-      st('api', 'limit', 'Limit sends', 'npm test -- invites/limit', 'src/api/invites/limit.ts', 'No invite floods', 'One account could send thousands of emails.', 'Allow 50 invites a day per team.'),
-      st('ui', 'form', 'Invite form', 'npm test -- InviteForm', 'src/ui/InviteForm.tsx', 'Invite from the team page', 'There is nowhere to type an email.', 'A form on the team page, with errors inline.'),
-      st('ui', 'pending', 'Pending invites', 'npm test -- PendingList', 'src/ui/PendingList.tsx', 'See who has not joined', 'Admins cannot tell who still has to accept.', 'List pending invites with resend and cancel.'),
-      st('ui', 'email', 'Invite email', 'npm test -- emails/invite', 'src/emails/invite.tsx', 'A clear email', 'The invite has to say who sent it and to which team.', 'A short email with one button.'),
+      st('API', 'create', 'Send an invite', 'npm test -- invites/create', 'src/api/invites/create.ts', 'Invite someone by email', 'Only an admin can add people today, by hand.', 'Add an endpoint that stores the invite and sends the email.'),
+      st('API', 'accept', 'Accept an invite', 'npm test -- invites/accept', 'src/api/invites/accept.ts', 'Join from the link', 'The link in the email has to add the person to the team.', 'Check the token, then add the member.'),
+      st('API', 'expire', 'Expire old invites', 'npm test -- invites/expire', 'src/jobs/expire.ts', 'Old links stop working', 'An invite link should not work forever.', 'A nightly job expires invites older than 7 days.'),
+      st('API', 'limit', 'Limit sends', 'npm test -- invites/limit', 'src/api/invites/limit.ts', 'No invite floods', 'One account could send thousands of emails.', 'Allow 50 invites a day per team.'),
+      st('UI', 'form', 'Invite form', 'npm test -- InviteForm', 'src/ui/InviteForm.tsx', 'Invite from the team page', 'There is nowhere to type an email.', 'A form on the team page, with errors inline.'),
+      st('UI', 'pending', 'Pending invites', 'npm test -- PendingList', 'src/ui/PendingList.tsx', 'See who has not joined', 'Admins cannot tell who still has to accept.', 'List pending invites with resend and cancel.'),
+      st('UI', 'email', 'Invite email', 'npm test -- emails/invite', 'src/emails/invite.tsx', 'A clear email', 'The invite has to say who sent it and to which team.', 'A short email with one button.'),
       st('release', 'e2e', 'End-to-end', 'npm run e2e -- invites', 'e2e/invites.spec.ts', 'The whole path works', 'Each part passes alone, but nothing tests the path from email to team.', 'A browser test that invites, accepts and checks the team.'),
       st('release', 'flag', 'Behind a flag', 'npm test -- flags', 'src/flags.ts', 'Turn it on slowly', 'A problem should not reach every team at once.', 'Ship it behind a flag, off by default.'),
       st('release', 'docs', 'Document invites', 'npm run docs:check', 'docs/invites.md', 'Explain invites', 'Admins need to know the limits and the expiry.', 'Add a page to the admin guide.'),
@@ -445,12 +450,16 @@ function rateLimits() {
   said.weight = 'The weight is thorough for this project. The built-ins follow it; your own items keep their switches.'
   keep('thorough', emptyRun(), thorough, { flowSaid: { at: now, ok: true, text: said.weight } })
   wait(2)
+  // What the user typed (library.html shows it in the terminal); each state quotes it, and the points list it.
+  const asked = 'Rate limit the public API to 60 requests a minute per key, and document the limits for clients.'
   const plan = {
     action: 'define', title: 'Rate limits',
+    messages: [{ kind: 'message', text: asked, at: t() }],
+    points: [{ said: 'Rate limit the public API to 60 requests a minute per key', states: ['limiter'] }, { said: 'document the limits for clients', states: ['docs'] }],
     states: [
-      { id: 'limiter', label: 'Limit each key', check: 'npm test -- limit', files: ['src/api/limit.ts', 'tests/limit.test.ts'], title: 'Hold each key to 60 a minute', problem: 'One client can flood the API and slow it for everyone.', approach: 'A token bucket per API key, answering 429 with a Retry-After header.' },
+      { id: 'limiter', label: 'Limit each key', asked: ['60 requests a minute per key'], check: 'npm test -- limit', files: ['src/api/limit.ts', 'tests/limit.test.ts'], title: 'Hold each key to 60 a minute', problem: 'One client can flood the API and slow it for everyone.', approach: 'A token bucket per API key, answering 429 with a Retry-After header.' },
       { id: 'load', label: 'Load test', check: 'npm run load -- limit', files: ['tests/load/limit.js'], title: 'Show the limit holds under load', problem: 'A limiter can pass its tests and still leak under real traffic.', approach: 'Send 5,000 requests a minute from 20 keys and count what gets through.' },
-      { id: 'docs', label: 'Document the limits', files: ['docs/api.md'], title: 'Tell clients the limits', problem: 'Clients need to know the limit and what a 429 means.', approach: 'Add a section with the headers and an example.' },
+      { id: 'docs', label: 'Document the limits', asked: ['document the limits for clients'], files: ['docs/api.md'], title: 'Tell clients the limits', problem: 'Clients need to know the limit and what a 429 means.', approach: 'Add a section with the headers and an example.' },
     ],
     depth: [
       { id: 'load', ask: 'proof', text: 'A load test at 5,000 requests a minute shows the limit holds', state: 'load' },
