@@ -1403,13 +1403,14 @@ test('each ready state gets one member agent in its own worktree, made from the 
   const started = said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box; keep the old filter.' }))
   expect(started).toMatch(/Started a member agent for ui in \.claude\/worktrees\/sentinel-ui-\w+\//)
   // The project as it is now, through an index of its own, so HEAD, the branches and the user's index stay as they are.
-  expect(eng.runs.map(x => x.argv.slice(1, 3).join(' '))).toEqual(['read-tree HEAD', 'add -A', 'write-tree', 'commit-tree tree1', 'worktree add'])
-  expect(eng.runs.slice(0, 3).every(x => /^D:\/proj\/\.sentinel\/sentinel-ui-\w+\.index$/.test(x.env?.GIT_INDEX_FILE ?? ''))).toBe(true)
-  expect(eng.runs[1]!.argv).toContain(':(exclude).claude/worktrees')
-  const path = eng.runs[4]!.argv[4]!
+  // git is asked whether it ignores .claude/worktrees/ first; this project doesn't, so the add excludes it.
+  expect(eng.runs.map(x => x.argv.slice(1, 3).join(' '))).toEqual(['read-tree HEAD', 'check-ignore -q', 'add -A', 'write-tree', 'commit-tree tree1', 'worktree add'])
+  expect(eng.runs.slice(0, 4).every(x => /^D:\/proj\/\.sentinel\/sentinel-ui-\w+\.index$/.test(x.env?.GIT_INDEX_FILE ?? ''))).toBe(true)
+  expect(eng.runs[2]!.argv).toContain(':(exclude).claude/worktrees')
+  const path = eng.runs[5]!.argv[4]!
   expect(path).toMatch(/^D:\/proj\/\.claude\/worktrees\/sentinel-ui-\w+$/)
-  expect(eng.runs[4]!.argv.slice(1)).toEqual(['worktree', 'add', '--detach', path, 'snap1'])
-  expect(eng.runs[4]!.env?.GIT_INDEX_FILE).toBeUndefined()
+  expect(eng.runs[5]!.argv.slice(1)).toEqual(['worktree', 'add', '--detach', path, 'snap1'])
+  expect(eng.runs[5]!.env?.GIT_INDEX_FILE).toBeUndefined()
   // One member, started there with the brief and the limits of its state.
   expect(eng.spawns).toHaveLength(1)
   expect(eng.spawns[0]).toMatchObject({ cwd: path, description: 'member ui' })
@@ -1440,7 +1441,7 @@ test('a member that cannot start leaves no worktree behind', async ($: any, on: 
   const { eng } = await parallelAtApi($, on)
   eng.setSpawnDeny('agents are off')
   expect(said(await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' }))).toMatch(/couldn't start a member agent for ui: agents are off/)
-  const path = eng.runs[4]!.argv[4]!
+  const path = eng.runs.find((x: any) => x.argv[2] === 'add' && x.argv[1] === 'worktree')!.argv[4]!
   expect(eng.runs.at(-1)!.argv).toEqual(['git', 'worktree', 'remove', '--force', path])
   expect((await savedRun($, eng)).running).toBeUndefined()
 })
@@ -1448,7 +1449,7 @@ test('a member that cannot start leaves no worktree behind', async ($: any, on: 
 test('a member agent meets the scope of its own state', async ($: any, on: any) => {
   const { eng } = await parallelAtApi($, on)
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
-  const wt = eng.runs[4]!.argv[4]!
+  const wt = eng.runs.find((x: any) => x.argv[2] === 'add' && x.argv[1] === 'worktree')!.argv[4]!
   const edit = async (file: string, agentId?: string) => said(await $.tool.call({ tool: 'Write', file_path: file, content: 'x', ...(agentId ? { agentId } : {}) }))
   // In its worktree the member edits ui's files and not api's, though api is the active state.
   expect(await edit(`${wt}/ui/box.tsx`, 'm-1')).toBe('ok')
@@ -1473,7 +1474,7 @@ test('a member agent meets the scope of its own state', async ($: any, on: any) 
 test('a member check runs in its worktree and a failure goes back to it at most twice', async ($: any, on: any) => {
   const { eng, clock } = await parallelAtApi($, on)
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
-  const wt = eng.runs[4]!.argv[4]!
+  const wt = eng.runs.find((x: any) => x.argv[2] === 'add' && x.argv[1] === 'worktree')!.argv[4]!
   const calls = (await savedRun($, eng)).calls.length
   eng.setBash({ fail: true, text: 'Tests: 1 failed\nexpected a search box' })
   await stopMember($, clock, 'm-1')
@@ -1499,7 +1500,7 @@ test('a member check runs in its worktree and a failure goes back to it at most 
 test('a passing member hands back a staged diff that is applied to the project', async ($: any, on: any) => {
   const { eng, clock } = await parallelAtApi($, on)
   await $.tool.call({ tool: TOOL, action: 'brief', to: 'ui', brief: 'Add the search box.' })
-  const wt = eng.runs[4]!.argv[4]!
+  const wt = eng.runs.find((x: any) => x.argv[2] === 'add' && x.argv[1] === 'worktree')!.argv[4]!
   const patch = 'diff --git a/ui/box.tsx b/ui/box.tsx\nnew file mode 100644\n--- /dev/null\n+++ b/ui/box.tsx\n@@ -0,0 +1 @@\n+box\n'
   eng.setPatch(patch)
   const before = eng.runs.length
@@ -4038,8 +4039,8 @@ test('library: a check that passes without the code change is refused', async ($
   // explore edits nothing, so it takes no snapshot. service takes one as it starts, through an index of its own.
   expect(eng.runs).toHaveLength(0)
   expect(await advance('service', 'found it')).toMatch(/Moved to service/)
-  expect(eng.runs.map(x => x.argv.slice(1, 3).join(' '))).toEqual(['read-tree HEAD', 'add -A', 'write-tree', 'commit-tree tree1'])
-  expect(eng.runs.slice(0, 3).every(x => x.env?.GIT_INDEX_FILE === `${ROOT}/.sentinel/snap.index`)).toBe(true)
+  expect(eng.runs.map(x => x.argv.slice(1, 3).join(' '))).toEqual(['read-tree HEAD', 'check-ignore -q', 'add -A', 'write-tree', 'commit-tree tree1'])
+  expect(eng.runs.slice(0, 4).every(x => x.env?.GIT_INDEX_FILE === `${ROOT}/.sentinel/snap.index`)).toBe(true)
 
   // A test that passes without the code change doesn't show the change works.
   await write(REFUND, 'refund v2')

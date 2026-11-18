@@ -2356,7 +2356,10 @@ async function snapTree($: $, top: string, dir: string, name: string, message: s
   const index = { GIT_INDEX_FILE: `${dir}/${name}.index` }
   const who = { GIT_AUTHOR_NAME: 'Sentinel', GIT_AUTHOR_EMAIL: 'sentinel@localhost', GIT_COMMITTER_NAME: 'Sentinel', GIT_COMMITTER_EMAIL: 'sentinel@localhost' }
   await git($, top, ['read-tree', 'HEAD'], { env: index })
-  await git($, top, ['add', '-A', '--', '.', ':(exclude).claude/worktrees'], { env: index })
+  // Members' worktrees stay out of the snapshot. git 2.52 exits 1 on an exclude that names a path .gitignore ignores once
+  // that path exists, and git add leaves an ignored folder out anyway, so the exclude goes only where git doesn't ignore it.
+  const ignored = (await $.process.run(['git', 'check-ignore', '-q', '.claude/worktrees/'], { cwd: top, timeoutMs: 120_000, env: index }).catch(() => undefined))?.exitCode === 0
+  await git($, top, ['add', '-A', '--', '.', ...(ignored ? [] : [':(exclude).claude/worktrees'])], { env: index })
   const tree = (await git($, top, ['write-tree'], { env: index })).trim()
   return (await git($, top, ['commit-tree', tree, '-p', 'HEAD', '-m', message], { env: who })).trim()
 }

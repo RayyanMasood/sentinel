@@ -227,6 +227,8 @@ export function engine(on: any) {
   let names = ''
   // How the hub's open command ends. Undefined: it can't run at all.
   let hubExit: number | undefined = 0
+  // Whether the project's .gitignore ignores .claude/worktrees/, as git check-ignore answers: exit 0 ignored, 1 not.
+  let ignores = false
   on('process.run', async (_: unknown, e: any) => {
     // Sentinel waits on a check by running sleep. It answers at once here, so Sentinel waits on its clock instead.
     if (e.argv[0] === 'sleep') return { value: { exitCode: 0, stdout: '', stderr: '' } }
@@ -257,6 +259,7 @@ export function engine(on: any) {
       if (!list) return { value: { exitCode: 128, stdout: '', stderr: `fatal: bad object ${e.argv.at(-1)}` } }
       return { value: { exitCode: 0, stdout: list.map(c => (c.how === 'R' ? `R095\t${c.was}\t${c.path}` : `${c.how}\t${c.path}`)).join('\n'), stderr: '' } }
     }
+    if (e.argv[0] === 'git' && e.argv[1] === 'check-ignore') return { value: { exitCode: ignores ? 0 : 1, stdout: '', stderr: '' } }
     const listed = fakeGit(files, e.argv, e.init?.stdin, history.untracked, history.deleted)
     if (listed !== undefined) return { value: { exitCode: 0, stdout: listed, stderr: '' } }
     const out = e.argv[1] === 'write-tree' ? 'tree1' : e.argv[1] === 'commit-tree' ? 'snap1' : e.argv[1] === 'diff' ? (e.argv.includes('--name-only') ? names : patch) : ''
@@ -283,7 +286,7 @@ export function engine(on: any) {
     setUsage: (u: object | Promise<object>) => (usage = u), setUsageFails: (f: boolean) => (usageFails = f), setTools: (t: string[]) => (tools = t),
     setBash: (b: typeof shell) => (shell = b), setCwd: (d: string) => (cwd = d), setAgents: (a: typeof agents) => (agents = a), setSpawnDeny: (d?: string) => (spawnDeny = d), setPatch: (p: string) => (patch = p), setNames: (n: string) => (names = n),
     setSendDeny: (d?: string) => (sendDeny = d), setDuring: (at: string, run: () => Promise<unknown>) => (during = { at, run }), agents: () => agents,
-    setDialog: (d?: (e?: any) => Promise<unknown>) => (dialog = d), setWriteFails: (re?: RegExp) => (writeFails = re), setHead: (h?: string) => (head = h),
+    setDialog: (d?: (e?: any) => Promise<unknown>) => (dialog = d), setWriteFails: (re?: RegExp) => (writeFails = re), setHead: (h?: string) => (head = h), setIgnores: (i: boolean) => (ignores = i),
     setHistory: (h: Partial<typeof history>) => (history = { since: {}, untracked: [], deleted: [], ...h }),
     setApproved: (a: object) => (approved = a), setDropping: (d?: string) => (dropping = d), quoting: () => (quoting = true),
     // Several messages go out in one piece, as two tabs sending at once can.
