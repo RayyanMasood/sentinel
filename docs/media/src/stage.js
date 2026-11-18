@@ -28,30 +28,38 @@ const sfx = (t, name) => { if (t >= 0) SFX.push([Math.round(t * 1000) / 1000, na
 
 // Claude Code: the transcript, Sentinel's line above the prompt, and the prompt.
 // rows: { at, cls, html, done?: [t, 'ok' | 'no'] }; a tool call's dot stays grey until it is done.
+// typed: [from, to, sent, text], or a list of them for a scene with several prompts. toast: [from, to], or a list of
+// [from, to, text] for several toasts with their own words.
 function terminal(win, rows, { typed, band, toast }) {
   const box = win.querySelector('.lines'), view = win.querySelector('.view')
   const els = rows.map(r => box.appendChild(el('div', r.cls, r.html)))
   const bandEl = win.querySelector('.band'), txt = bandEl.querySelector('.txt')
   const prompt = win.querySelector('.prompt'), toastEl = win.querySelector('.toast')
+  const prompts = Array.isArray(typed[0]) ? typed : [typed]
+  const toasts = !toast ? [] : Array.isArray(toast[0]) ? toast : [toast]
   // Its sounds: keys as the prompt types (no faster than a quick typist), Enter, a tick as a check run or plan call
   // finishes and a lower one for anything refused or failed, an alert as the run goes stuck, and a pop for a toast.
   // Reads and edits that go through make no sound.
-  const [from, to, sent, words] = typed
-  let key = -1
-  for (let i = 1; i <= words.length; i++) {
-    const at = from + (to - from) * (i - 0.5) / words.length
-    if (at - key >= 0.07) { sfx(at, words[i - 1] === ' ' ? 'space' : 'key'); key = at }
+  for (const [from, to, sent, words] of prompts) {
+    let key = -1
+    for (let i = 1; i <= words.length; i++) {
+      const at = from + (to - from) * (i - 0.5) / words.length
+      if (at - key >= 0.07) { sfx(at, words[i - 1] === ' ' ? 'space' : 'key'); key = at }
+    }
+    if (words) sfx(sent, 'enter')
   }
-  if (words) sfx(sent, 'enter')
   const alerts = band.filter((c, i) => c[2] === 'err' && band[i - 1]?.[2] !== 'err').map(c => c[0])
   alerts.forEach(a => sfx(a, 'alert'))
   const near = t => alerts.some(a => Math.abs(a - t) < 0.3)
   const quiet = r => r.done[1] === 'ok' && /^<b>(Read|Update|Write|Edit)</.test(r.html)
   rows.forEach(r => r.done && !quiet(r) && !(r.done[1] === 'no' && near(r.done[0])) && sfx(r.done[0], r.done[1] === 'ok' ? 'tick' : 'deny'))
-  if (toast && !near(toast[0])) sfx(toast[0], 'toast')
+  toasts.forEach(([at]) => !near(at) && sfx(at, 'toast'))
   return t => {
     // A toast under the prompt, for the time it shows.
-    if (toastEl) toastEl.style.opacity = toast ? prog(t, toast[0], 0.25) * (1 - prog(t, toast[1], 0.3)) : 0
+    const tst = cue(t, toasts.length ? toasts : [[Infinity, Infinity]])
+    if (toastEl) toastEl.style.opacity = toasts.length ? prog(t, tst[0], 0.25) * (1 - prog(t, tst[1], 0.3)) : 0
+    if (toastEl && tst[2] !== undefined && toastEl.textContent !== tst[2]) toastEl.textContent = tst[2]
+    const [from, to, sent, words] = cue(t, prompts)
     let last = -1
     els.forEach((e, i) => {
       const r = rows[i], k = prog(t, r.at, 0.25)
@@ -242,12 +250,13 @@ function pointer(el, ripple, moves, clicks, { from = [1100, 700], hide = Infinit
   }
 }
 
-// The scene registers itself here; the page plays it unless render.cjs drives it.
+// The scene registers itself here; the page plays it unless render.cjs drives it. A scene with stops is stepped instead.
 function play(scene) {
   scene.sounds ??= SFX
   window.scene = scene
   if (RENDER) return
   Promise.all([document.fonts.ready, scene.ready]).then(() => {
+    if (scene.stops) return stepper(scene)
     const t0 = performance.now()
     const tick = now => {
       scene.seek(((now - t0) / 1000) % scene.duration)
@@ -255,4 +264,45 @@ function play(scene) {
     }
     requestAnimationFrame(tick)
   })
+}
+
+// Stepped by key, for recording: → or Space plays to the next stop and holds there (pressed while playing, it finishes
+// the step at once), ← goes back a stop, Home to the start, 1 to 9 to a chapter. C shows the chapter's name.
+// scene.stops: the times it holds at. scene.chapters: [at, name] pairs. scene.where() tells a test where it is.
+function stepper(scene) {
+  const stops = [0, ...scene.stops.filter(s => s > 0)], chapters = scene.chapters ?? []
+  let t = 0, goal = 0, last = performance.now()
+  const label = document.body.appendChild(el('div', 'chapter'))
+  const after = x => stops.find(s => s > x + 1e-6) ?? scene.duration
+  const before = x => stops.findLast(s => s < x - 1e-6) ?? 0
+  addEventListener('keydown', e => {
+    const k = e.key
+    if (k === 'ArrowRight' || k === ' ' || k === 'PageDown') t < goal ? (t = goal) : (goal = after(goal))
+    else if (k === 'ArrowLeft' || k === 'PageUp') t = goal = before(goal)
+    else if (k === 'Home') t = goal = 0
+    else if (/^[1-9]$/.test(k) && chapters[k - 1]) t = goal = chapters[k - 1][0]
+    else if (k === 'c' || k === 'C') label.classList.toggle('on')
+    else return
+    e.preventDefault()
+  })
+  scene.where = () => ({ t, goal, moving: t < goal, stop: stops.indexOf(goal), stops: stops.length })
+  const tick = now => {
+    t = Math.min(goal, t + (now - last) / 1000)
+    last = now
+    scene.seek(t)
+    label.textContent = cue(t, chapters.length ? chapters : [[0, '']])[1]
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
+// ?fit: the stage grows to fill the window, laid out at its own size and zoomed, so a 1920 × 1080 recording is sharp.
+// Coordinates read from the page (getBoundingClientRect) are zoomed; divide by stageZoom() to place things on the stage.
+const FIT = new URLSearchParams(location.search).has('fit')
+const stageZoom = () => (FIT ? Math.min(innerWidth / 1200, innerHeight / 675) : 1)
+if (FIT) {
+  document.documentElement.classList.add('fit')
+  const fit = () => document.body.style.setProperty('zoom', stageZoom())
+  addEventListener('resize', fit)
+  addEventListener('DOMContentLoaded', fit)
 }

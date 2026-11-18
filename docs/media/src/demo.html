@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sentinel demo</title>
+<script>if (!/[?&](fit|render)\b/.test(location.search)) location.replace(location.pathname + '?fit')</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@800&family=Saira:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="stage.css">
+<style>
+  html.fit { width: 100vw; height: 100vh; background: #dfe4e9; }
+  #term { left: 24px; top: 24px; width: 430px; height: 627px; }
+  #web { left: 470px; top: 24px; width: 706px; height: 627px; }
+  .band.err .txt { color: var(--t-red); }
+  .ln.sys { padding: 6px 10px; border-radius: 4px; background: #241c19; color: #f0c4b2; }
+  .ln.sys .more { color: var(--t-faint); }
+  .chapter { position: absolute; left: 50%; bottom: 2px; translate: -50% 0; padding: 0 10px; color: var(--ink-3); font: 600 12px/20px var(--f-text); letter-spacing: .02em; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .chapter.on { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="win term" id="term">
+  <div class="bar"><i></i><i></i><i></i><span>claude · team-app</span></div>
+  <div class="view"><div class="lines"></div></div>
+  <div class="foot"><div class="band"><span class="txt"></span><span class="btn">Open</span></div><div class="prompt"></div><div class="toast"></div></div>
+</div>
+<div class="win" id="web">
+  <div class="bar"><i></i><i></i><i></i><span class="url">127.0.0.1 · Sentinel · Team invites</span></div>
+  <div class="screen" id="screen"><svg class="rings" id="rings"></svg></div>
+</div>
+<svg class="pointer" id="pointer" viewBox="0 0 22 22"><path d="M3 2 L3 18 L7.5 13.8 L10.6 20.4 L13.4 19.1 L10.3 12.6 L16.4 12.4 Z" fill="#fff" stroke="#10161d" stroke-width="1.4" stroke-linejoin="round"/></svg>
+<div class="ripple" id="ripple"></div>
+<script src="stage.js"></script>
+<script>
+// The demo for the Sentinel video: one plan, played by demo.mjs through Sentinel's own logic, stepped by key.
+// Open it full screen over http from the repo root (demo.check.mjs serves it); → steps, ← goes back, C names the chapter.
+const WEB = { x: 470, y: 24 + 34 }, DASH_W = 860
+fetch('data/demo.json').then(r => r.json()).then(({ moments, said, ask }) => {
+  // ---- the timeline, written beat by beat; T is where the next beat starts ----
+  let T = 0.6
+  const rows = [], shows = [], typed = [], toasts = [], routes = [[0, '']], tasks = [[0, '']], inners = [[0, () => 0]], shots = [[0, () => 0]], marks = [], moves = [], clicks = [], stops = [], chapters = []
+  const lines = s => s.split('\n').filter(Boolean)
+  const more = n => (n ? `\n<span class="more">… +${n} lines (ctrl+o to expand)</span>` : '')
+  const beat = s => (T += s)
+  const chapter = name => chapters.push([T, name])
+  // A stop holds once the beat before it has played out: the camera has moved, a ring has drawn, a toast is up.
+  // What comes after a stop starts a moment later, so the stop still shows the beat before it.
+  const stop = () => { stops.push(beat(1.2)); beat(0.05) }
+  const you = (text, cps = 42) => {
+    const to = T + 0.3 + text.length / cps
+    typed.push([T + 0.3, to, to + 0.35, text])
+    T = to + 0.35
+    rows.push({ at: T, cls: 'ln you', html: esc(text) })
+    beat(0.5)
+  }
+  // What Sentinel sends into the chat as a message of its own.
+  const sys = text => { const ls = lines(text); rows.push({ at: T, cls: 'ln sys gap', html: esc(ls[0]) + more(ls.length - 1) }); beat(0.6) }
+  const claude = text => { rows.push({ at: T, cls: 'ln say gap', html: esc(text) }); beat(0.5) }
+  const call = (name, args, ok = true, dur = 0.45) => { rows.push({ at: T, cls: 'ln tool gap', html: `<b>${name}</b><em>(${esc(args)})</em>`, done: [T + dur, ok ? 'ok' : 'no'] }); beat(dur) }
+  // A result shows its first n lines and says how many more Claude Code folds away, as it does.
+  const out = (text, { no = false, full = false, n = 1 } = {}) => {
+    const ls = lines(text), k = full ? ls.length : n
+    rows.push({ at: T, cls: 'ln res' + (no ? ' no' : ''), html: ls.slice(0, k).map(esc).join('\n') + more(ls.length - k) })
+    beat(0.4)
+  }
+  const show = m => shows.push([T, m])
+  const route = h => routes.push([T, h])
+  // A step's page opens in the plan's box, by the page's own showTask; '' closes it.
+  const task = id => tasks.push([T, id])
+  // The plan's box scrolls on its own: this eases it to where a function says, as the camera does the page.
+  const inner = f => inners.push([T, f])
+  const look = y => shots.push([T, y])
+  const ring = (tone, b, hold = 2.2, pad) => marks.push({ at: T + 0.2, hold, tone, box: b, pad })
+  const toast = (text, hold = 4) => toasts.push([T, T + hold, text])
+  const click = target => { moves.push({ at: T, to: target }); clicks.push(T + 0.85); beat(1.2) }
+
+  // ---- finding things on the dashboard, and where they are on the stage ----
+  let dash, cam = { s: 1, x: 0, y: 0 }
+  const doc = () => dash.doc()
+  const all = s => [...doc().querySelectorAll(s)]
+  const text = t => textEl(doc(), t)
+  const button = t => all('button').find(b => b.textContent.trim().startsWith(t))
+  const at = el => { const b = box(el); return b && [WEB.x + (b.x + b.w / 2 - cam.x) * cam.s, WEB.y + (b.y + b.h / 2 - cam.y) * cam.s] }
+  const termBtn = name => () => { const b = [...document.querySelectorAll('#term .band .btn')].find(x => x.textContent === name); if (!b) return null; const r = b.getBoundingClientRect(), z = stageZoom(); return [(r.left + r.width / 2) / z, (r.top + r.height / 2) / z] }
+  // The camera puts this in the middle of the browser, or as high as the page allows.
+  const centre = find => () => { const b = box(find()); const span = dash.span(); return b ? Math.max(0, Math.min(b.y + b.h / 2 - span / 2, dash.bottom() - span)) : 0 }
+  const top = find => () => { const b = box(find()); return b ? Math.max(0, b.y - 24) : 0 }
+  const plan = () => doc().getElementById('planPanel')
+  const pbox = () => doc().getElementById('pbox')
+  // The plan box's scroll that puts this near its top.
+  const into = find => () => { const e = find(), pb = pbox(); return e && pb ? Math.max(0, e.getBoundingClientRect().top - pb.getBoundingClientRect().top + pb.scrollTop - 16) : 0 }
+  const overseen = () => doc().querySelector('#v-task .k-look')?.closest('li')
+
+  // ---- 1. Ask and draft ----
+  chapter('Ask and draft')
+  you(ask, 48)
+  claude("I'll plan this with Sentinel first.")
+  call('plan', 'action: "define", title: "Team invites", preset: "full-stack", …', true, 0.9)
+  out(said.drafted)
+  toast(said.pick, 5)
+  show('draft')
+  stop()
+  const OPEN = T
+  click(termBtn('Review'))
+  look(() => 0)
+  stop()
+  look(centre(() => text('Preset: full-stack')))
+  ring('blue', () => box(text('Preset: full-stack')))
+  stop()
+  look(centre(() => doc().getElementById('points')))
+  ring('blue', () => box(doc().getElementById('points')))
+  stop()
+  look(centre(() => button('Keep')))
+  ring('blue', () => box(button('Keep')?.closest('div')))
+  stop()
+  click(() => at(button('Keep')))
+  show('kept')
+  stop()
+
+  // ---- 2. Lock ----
+  chapter('Lock')
+  you('/sentinel lock')
+  show('locked')
+  look(top(plan))
+  out(said.locked)
+  stop()
+
+  // ---- 3. A check has to fail first ----
+  chapter('A check has to fail first')
+  call('Read', 'src/api/teams/members.ts')
+  out('Read 96 lines')
+  show('explore')
+  call('Read', 'src/ui/TeamPage.tsx')
+  out('Read 142 lines')
+  call('plan', 'action: "advance", to: "table"', true, 0.8)
+  out(said.table, { n: 3 })
+  show('table')
+  stop()
+  // Sentinel runs the check at the start too, and says nothing while it fails.
+  call('Bash', 'npm test -- db/invites', false, 0.8)
+  out('FAIL db/invites.test.ts\nrelation "invites" does not exist', { no: true, full: true })
+  claude('It fails before any work, as it should. Now the migration.')
+  stop()
+
+  // ---- 4. Side by side ----
+  chapter('Side by side')
+  call('plan', 'action: "brief", to: "form", agent: "quick-worker", …')
+  out(said['brief-form'])
+  call('plan', 'action: "brief", to: "email", agent: "quick-worker", …')
+  out(said['brief-email'])
+  show('briefed')
+  look(top(plan))
+  stop()
+  call('Write', 'db/migrations/0042_invites.sql')
+  out('Wrote 31 lines to db/migrations/0042_invites.sql')
+  show('table-work')
+  call('plan', 'action: "advance", to: "api"', true, 1.0)
+  out(said.api)
+  show('api')
+  stop()
+  look(top(() => doc().getElementById('whoH')))
+  stop()
+  sys(said.formIn)
+  show('form-in')
+  look(top(plan))
+  stop()
+
+  // ---- 5. Edits stay in scope ----
+  chapter('Edits stay in scope')
+  call('Write', 'src/api/invites/create.ts')
+  out('Wrote 54 lines to src/api/invites/create.ts')
+  call('Update', 'src/api/teams/members.ts', false)
+  out(said.refused, { no: true })
+  show('refused')
+  stop()
+  call('plan', 'action: "amend", files: ["src/api/teams/members.ts"], …')
+  out(said.amended)
+  show('amended')
+  stop()
+  call('Update', 'src/api/teams/members.ts')
+  out('Updated src/api/teams/members.ts with 6 additions')
+  sys(said.emailIn)
+  show('email-in')
+  stop()
+
+  // ---- 6. Moving on takes proof ----
+  chapter('Moving on takes proof')
+  show('checking')
+  call('plan', 'action: "advance", to: "e2e"', false, 1.6)
+  out(said.failed, { no: true })
+  show('failed')
+  stop()
+  call('Update', 'src/api/invites/accept.ts')
+  out('Updated src/api/invites/accept.ts with 3 additions and 1 removal')
+  call('plan', 'action: "advance", to: "e2e"', true, 1.2)
+  out(said.e2e)
+  show('e2e')
+  stop()
+
+  // ---- 7. Going in circles ----
+  chapter('Going in circles')
+  for (const v of ['tightens the wait', 'puts the wait back', 'tightens the wait', 'puts the wait back']) {
+    call('Update', 'e2e/invites.spec.ts', true, 0.3)
+    call('Bash', 'npm run e2e -- invites', false, 0.5)
+    out('expected 200, received 404 · POST /invites/accept, second click', { no: true })
+  }
+  show('stuck')
+  sys(said.stuck)
+  stop()
+  toast(said.overseerToast, 5)
+  sys(said.overseer)
+  show('overseer')
+  task('e2e')
+  look(top(plan))
+  stop()
+  inner(into(overseen))
+  ring('red', () => box(overseen()), 2.6)
+  stop()
+
+  // ---- 8. The loop ----
+  chapter('The way back')
+  call('plan', 'action: "advance", to: "api", evidence: "The overseer is right: …"', true, 0.9)
+  out(said.loop)
+  show('loop')
+  task('')
+  inner(() => 0)
+  look(top(plan))
+  stop()
+  ring('blue', () => box(text('1×')), 2.6, 10)
+  stop()
+  call('Update', 'src/api/invites/accept.ts')
+  out('Updated src/api/invites/accept.ts with 2 additions and 2 removals')
+  call('plan', 'action: "advance", to: "e2e"', true, 1.0)
+  out(said.again)
+  show('again')
+  call('plan', 'action: "advance", to: "docs"', true, 1.4)
+  out(said.docs)
+  show('docs')
+  stop()
+
+  // ---- 9. Your OK, or hands-free ----
+  chapter('Your OK, or hands-free')
+  call('plan', 'action: "propose", intent: "A page in the admin guide …"')
+  out(said.proposed)
+  show('asks')
+  look(() => 0)
+  stop()
+  click(() => at(button('Approve and go hands-free') ?? button('Go hands-free') ?? button('Approve')))
+  sys(said.approved)
+  show('free')
+  stop()
+  call('plan', 'action: "decide", topic: "Where the page goes", …')
+  out(said.decided)
+  call('Write', 'docs/invites.md')
+  out('Wrote 40 lines to docs/invites.md')
+  show('decided')
+  look(centre(() => text('Decided')))
+  ring('blue', () => box(text('Decided')?.parentElement))
+  stop()
+
+  // ---- 10. Done means it all still passes ----
+  chapter('Done means it all still passes')
+  show('final')
+  look(() => 0)
+  call('plan', 'action: "advance", to: "done"', true, 2.4)
+  out(said.done, { full: true })
+  show('done')
+  stop()
+  look(centre(() => text('Came back')))
+  ring('green', () => box(text('Came back')?.parentElement))
+  stop()
+
+  // ---- 11. The Library ----
+  chapter('The Library')
+  route('#library')
+  show('library')
+  look(() => 0)
+  stop()
+  you(said.libAsk)
+  call('plan', 'action: "library", command: "on fails-without-change", quote: "turn fails-without-change on …"', true, 0.6)
+  out(said.libReply)
+  toast(said.libToast, 5)
+  show('library-on')
+  look(centre(() => text('fails-without-change') ?? text('Check fails without the change')))
+  ring('green', () => box((text('Check fails without the change') ?? text('fails-without-change'))?.closest('tr,li,div')))
+  stop()
+
+  // ---- 12. The System map ----
+  chapter('The System map')
+  route('#system')
+  show('system')
+  look(() => 0)
+  stop()
+  const D = T + 1
+
+  // ---- drawing it ----
+  const band = [[0, ''], ...shows.map(([at, m]) => {
+    const vm = moments[m].vm, b = moments[m].band
+    const tone = vm.phase === 'draft' ? 'warn' : vm.trap ? 'err' : vm.waiting ? 'warn' : vm.sweep ? 'acc' : ''
+    const btns = vm.phase === 'draft' ? ['Review', 'Lock'] : vm.waiting ? ['Answer', 'Open'] : ['Open']
+    return [at, b, tone, btns]
+  })]
+  const term = terminal($('term'), rows, { typed, band, toast: toasts })
+  // Tall enough that the finished page's lowest sections are drawn.
+  dash = dashboard($('screen'), moments, { width: DASH_W, view: 'map', height: 6000 })
+  const rings = ringer($('rings'))
+  // The pointer shows for each press and goes between them.
+  const away = clicks.map((c, i) => [c + 0.7, moves[i + 1]?.at ?? Infinity])
+  const point = pointer($('pointer'), $('ripple'), moves, clicks, { from: [1100, 640], away })
+  let routed = '', tasked = '', moment = ''
+
+  function seek(t) {
+    moment = cue(t, shows)[1]
+    // Claude Code alone, until Review opens the dashboard beside it.
+    const open = prog(t, OPEN + 0.9, 0.8, inOut), enter = prog(t, OPEN + 1.2, 0.6)
+    $('term').style.transform = `translateX(${lerp(361, 0, open)}px)`
+    $('web').style.opacity = enter
+    $('web').style.transform = `translateX(${(1 - enter) * 36}px) scale(${0.985 + 0.015 * enter})`
+    term(t)
+    dash.show(cue(t, shows)[1], t)
+    const h = cue(t, routes)[1]
+    if (h !== routed) { dash.route(h); routed = h }
+    const k = cue(t, tasks)[1]
+    if (k !== tasked) { dash.eval(k ? `goTask(${JSON.stringify(k)})` : 'hideTask()'); tasked = k }
+    let j = 0
+    while (j + 1 < inners.length && inners[j + 1][0] <= t) j++
+    const pb = pbox()
+    if (pb) pb.scrollTop = j === 0 ? 0 : lerp(inners[j - 1][1](), inners[j][1](), prog(t, inners[j][0], 0.95, inOut))
+    // The camera eases from where the last shot looked to where this one looks.
+    let i = 0
+    while (i + 1 < shots.length && shots[i + 1][0] <= t) i++
+    const y = i === 0 ? shots[0][1]() : lerp(shots[i - 1][1](), shots[i][1](), prog(t, shots[i][0], 0.95, inOut))
+    cam = dash.look(y)
+    rings(t, marks, cam)
+    point(t)
+    document.querySelectorAll('#term .band .btn').forEach(b => b.classList.toggle('press', clicks.some(c => t >= c && t < c + 0.4) && b.textContent === 'Review' && t < OPEN + 2))
+  }
+  // shown: what the walk in demo.check.mjs reads at each stop.
+  const shown = () => ({ moment, route: tasked ? '#task-' + tasked : routed, view: [cam.y, cam.y + dash.span()], toast: getComputedStyle(document.querySelector('#term .toast')).opacity > 0.5 ? document.querySelector('#term .toast').textContent : '' })
+  play({ duration: D, seek, ready: dash.ready, stops, chapters, shown })
+})
+</script>
+</body>
+</html>
