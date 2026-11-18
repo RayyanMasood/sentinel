@@ -1013,6 +1013,8 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   // What a plan is locked with comes from the switches files, never from the model.
   const { library: _library, named: _named, messages: _messages, drawn: _drawn, approved: _approved, ...sent } = raw
   let input = relInput(await $.session.root(), { ...sent, ...(sent.states ? { states: sent.states.map(({ weightOk: _ok, ...s }) => s) } : {}) })
+  // A skip may name a built-in by its title, as the Library page shows it.
+  if (input.action === 'decide' && input.skip) input = { ...input, skip: input.skip.split(',').map(n => BUILTINS.find(b => b.title.toLowerCase() === n.trim().toLowerCase())?.name ?? n.trim()).join(', ') }
   const label = `plan ${input.action}${input.to ? ` → ${input.to}` : ''}`
   if (input.action === 'brief') return brief($, input, label)
   if (input.action === 'flow') return draftFlow($, input, label)

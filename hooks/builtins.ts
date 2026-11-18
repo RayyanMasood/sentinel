@@ -35,7 +35,7 @@ export const BUILTINS: readonly Builtin[] = [
   {
     name: 'failure-list', title: 'Failure list first', at: 'start', kind: 'told', weights: ['standard', 'thorough'],
     text: 'Before writing logic, write down how it can fail and test each item, with the tests written before the code. '
-      + 'Tests written after the code to raise coverage end up restating it.',
+      + 'Tests written after the code to raise coverage end up restating it. A state that writes no logic has nothing to list.',
   },
   {
     name: 'quote-the-source', title: 'Each state quotes what asked for it', at: 'draft', kind: 'checks', weights: ['light', 'standard', 'thorough'],
@@ -47,7 +47,11 @@ export const BUILTINS: readonly Builtin[] = [
   },
   {
     name: 'break-it-once', title: 'A test must be able to fail', at: 'close', kind: 'told', weights: ['standard', 'thorough'],
-    text: "Break the code each new test targets once and watch the test fail, then put the code back. Report any test you couldn't make fail.",
+    // It once had no bound, and a real run read it as a full mutation pass before every advance: hours, and 13 GB of browsers.
+    text: 'For each test this state adds, break the code it targets once by hand, run that test alone and watch it fail, then put '
+      + 'the code back. Do it once, after the code is final: a later fix needs a new break only if it adds a test. No mutation '
+      + 'harness, no full-suite run per break, one browser at a time. Spend about 10 minutes (30 at Thorough): take the riskiest '
+      + "tests first, and report any you couldn't make fail or didn't get to. A state that adds no test has nothing to break.",
   },
   {
     name: 'fails-without-change', title: 'Check fails without the change', at: 'close', kind: 'checks', runs: 2, slow: true, weights: ['thorough'],

@@ -2372,19 +2372,25 @@ const skipsOf = (r: Run, id: string) => r.audit.flatMap(a => (a.skip && a.state 
 // Claude skips an instruction for a state, by name, so the page can show which one and why. Only one the state was told
 // can be skipped: the checks Sentinel runs itself aren't told.
 function skipFor(r: Run, i: PlanInput, t: string): Acted {
-  const name = String(i.skip).trim()
+  // Several names can go in one call, separated by commas, in any case. The engine has already turned a built-in's title
+  // into its name. All or none: one name the state wasn't told refuses the call.
+  const asked = String(i.skip).split(',').map(n => n.trim()).filter(Boolean)
+  const name = asked.join(', ')
   const id = i.to?.trim() || r.active
   const st = r.plan?.states.find(s => s.id === id)
   if (!st) return refuse(r, `There is no state "${id ?? ''}" to skip ${name} for.`)
   const why = i.reason?.trim()
   if (!why) return refuse(r, `Skipping ${name} needs a one-line why in "reason".`)
   const can = [...new Set([...toldFor(r, 'start', st), ...toldFor(r, 'close', st)].map(x => x.name))]
-  if (!can.includes(name)) return refuse(r, `${st.id} wasn't told ${name}, so there is nothing to skip. ${can.length ? `These can: ${can.join(', ')}.` : 'It was told no instruction.'}`)
-  const text = `Skipped ${name} for ${st.id}: ${why}`
+  const found = asked.map(n => can.find(c => c.toLowerCase() === n.toLowerCase()))
+  const not = asked.filter((_, k) => !found[k])
+  if (!asked.length || not.length) return refuse(r, `${st.id} wasn't told ${not.join(', ') || name}, so there is nothing to skip. ${can.length ? `These can: ${can.join(', ')}.` : 'It was told no instruction.'}`)
+  const names = [...new Set(found as string[])]
+  const text = `Skipped ${names.join(', ')} for ${st.id}: ${why}`
   return {
     run: {
       ...r, escalatedAt: undefined,
-      audit: [...r.audit, { step: r.step + 1, t, state: st.id, kind: 'decided', text, by: 'claude', skip: { name, why: why.slice(0, MAX_WHY) } }],
+      audit: [...r.audit, ...names.map(n => ({ step: r.step + 1, t, state: st.id, kind: 'decided' as const, text: `Skipped ${n} for ${st.id}: ${why}`, by: 'claude' as const, skip: { name: n, why: why.slice(0, MAX_WHY) } }))],
       log: [...r.log, { t, icon: '◆', tone: 'acc', text: `Decided · ${text}` }],
     },
     ok: true, text: 'Recorded. Continue with the plan.',
