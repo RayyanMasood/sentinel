@@ -27,10 +27,34 @@ const TAG = '[sentinel]'
 const run = atom({ plugin: 'sentinel', key: 'run' } as const, emptyRun(), { shape: 'run-1' })
 const view = atom({ plugin: 'sentinel', key: 'view' } as const, 'focus' as View, { shape: 'view-1' })
 // The session's typed messages and the files Claude wrote. Apart from `run` because `run` goes to .sentinel/run.json and
-// a typed message must not reach disk unless a quote uses it.
-// ponytail: $.state doesn't outlive the process, so messages and writes from before a restart are gone: such a message
-// can't be quoted, and such a file counts as unwritten. Save the paths if that shows.
+// a typed message must not reach the project folder unless a quote uses it.
 const said = atom({ plugin: 'sentinel', key: 'said' } as const, { messages: [], wrote: [] }, { shape: 'said-1' })
+type Said = { messages: { text: string; at: string }[]; wrote: string[] }
+// $.state doesn't outlive the process (a resume in a new one, a lost hooks worker), so `said` goes to the plugin's own
+// store too, under the session's id, and a session that finds it empty reads it back from there.
+// ponytail: the 10 latest sessions are kept; a session resumed after 10 others started can't quote what it typed before.
+const SAID_SESSIONS = 10
+type SaidKept = Record<string, { at: number; said: Said }>
+const sessionId = ($: $) => Promise.resolve($.session.id()).catch(() => undefined)
+const saidKept = async ($: $) => ((await $.store.get('said').catch(() => undefined)) ?? {}) as SaidKept
+async function saidNow($: $): Promise<Said> {
+  const s = await read($, said)
+  if (s.messages.length || s.wrote.length) return s
+  const id = await sessionId($)
+  const back = id ? (await saidKept($))[id]?.said : undefined
+  if (!back) return s
+  await update($, said, x => (x.messages.length || x.wrote.length ? x : back))
+  return read($, said)
+}
+async function keepSaid($: $, fn: (s: Said) => Said) {
+  await saidNow($)
+  await update($, said, fn)
+  const id = await sessionId($)
+  if (!id) return
+  const all = { ...(await saidKept($)), [id]: { at: Date.now(), said: await read($, said) } }
+  const latest = Object.entries(all).sort(([, a], [, b]) => b.at - a.at).slice(0, SAID_SESSIONS)
+  await $.store.set('said', Object.fromEntries(latest)).catch(() => undefined)
+}
 // The overseers started in this session. An id stays after its agent ends, as its hand-back arrives later than its answer.
 const overseers = atom({ plugin: 'sentinel', key: 'overseers' } as const, {}, { shape: 'overseers-1' })
 // The running measurement of what 1% of the week costs. In the session's state, as a reload of the plugin keeps that
@@ -347,7 +371,7 @@ export const register: Register = on => {
     if (EDITS.has(tool)) {
       const file = String(input.file_path ?? input.notebook_path ?? '')
       const key = pathKey(await $.session.root(), file)
-      if (file) await update($, said, s => (s.wrote.includes(key) ? s : { ...s, wrote: [...s.wrote, key] }))
+      if (file) await keepSaid($, s => (s.wrote.includes(key) ? s : { ...s, wrote: [...s.wrote, key] }))
     }
     // Sentinel's own check runs stay out of the ledger, as does its stop of a check left in the background. Only those
     // calls: a member's own calls may carry Sentinel's origin too, since Sentinel spawned it.
@@ -582,7 +606,7 @@ export const register: Register = on => {
       await userSpoke($)
       // What the person typed, for a quote to use. A prompt they don't see as typed isn't theirs.
       // ponytail: an AskUserQuestion answer doesn't count as a message yet.
-      if (!e.isMeta) await update($, said, s => ({ ...s, messages: [...s.messages, { text: e.text, at: now() }].slice(-MAX_SAID) }))
+      if (!e.isMeta) await keepSaid($, s => ({ ...s, messages: [...s.messages, { text: e.text, at: now() }].slice(-MAX_SAID) }))
     }
     return res
   })
@@ -973,6 +997,15 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   if (input.action === 'brief') return brief($, input, label)
   if (input.action === 'flow') return draftFlow($, input, label)
   if (input.action === 'library') return libraryAction($, input, label)
+  // A plan an earlier session left in .sentinel/run.json: finish closes it in the turn the user asks, with no resume
+  // first, and status and the "No plan is locked" refusals say it's there.
+  const left = isUnfinished(await read($, run)) ? undefined : await saved($)
+  const closing = !!left && input.action === 'finish' && typed
+  if (closing) {
+    const { savedAt, ...rest } = left!
+    await change($, () => (savedAt ? stopClock(rest, savedAt) : rest))
+  }
+  const leftNote = left && !closing ? `An unfinished plan "${left.plan!.title}" from an earlier session is saved in .sentinel. The user brings it back with /sentinel resume, or asks you to close it with finish.` : undefined
   // advance runs the check itself, unless the state's last call is a passing run of it that still holds. Plan calls
   // in between change no files.
   const was = await read($, run)
@@ -1002,7 +1035,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
       input = off.input
       dropped = off.had ? SETTINGS_OFF : undefined
     } else if (was.signedOff || midRun) {
-      const typedNow = (await read($, said)).messages.map(m => m.text)
+      const typedNow = (await saidNow($)).messages.map(m => m.text)
       const sentStates = settledStates(input, base, typedNow)
       if (typeof sentStates === 'string') return record($, { deny: sentStates }, { kind: 'plan', label, denied: true })
       input = sentStates
@@ -1073,9 +1106,9 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     }
     const named = await namedFile($, keptSources(was), whole.source)
     if (named) input = { ...input, named }
-    input = { ...input, messages: (await read($, said)).messages }
+    input = { ...input, messages: (await saidNow($)).messages }
   }
-  if (input.action === 'revise' && addsMidRun(was)) input = { ...input, messages: (await read($, said)).messages }
+  if (input.action === 'revise' && addsMidRun(was)) input = { ...input, messages: (await saidNow($)).messages }
   if (signal?.aborted) return { deny: STOPPED }
   // The drawing joins the map the plan is built on, and what Sentinel finds of it goes with the input.
   let guessed: string[] = []
@@ -1144,8 +1177,8 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
     await markPass($, [...(left ? [left] : []), ...again])
   }
   // The map is saved once the plan locks, and when the map changes in a plan that runs: a draft leaves the file alone.
-  const saved = a.ok && (a.event === 'locked' || input.action === 'map') && a.run.drawing ? await saveMap($, a.run.drawing.map) : undefined
-  const drawnNotes = [guessed.length ? `Sentinel could not find ${guessed.join(', ')} where you cited it, so ${guessed.length === 1 ? 'that outside part is' : 'those outside parts are'} marked as a guess. The user can confirm or remove ${guessed.length === 1 ? 'it' : 'them'}.` : '', saved ?? ''].filter(Boolean).join('\n')
+  const mapSaved = a.ok && (a.event === 'locked' || input.action === 'map') && a.run.drawing ? await saveMap($, a.run.drawing.map) : undefined
+  const drawnNotes = [guessed.length ? `Sentinel could not find ${guessed.join(', ')} where you cited it, so ${guessed.length === 1 ? 'that outside part is' : 'those outside parts are'} marked as a guess. The user can confirm or remove ${guessed.length === 1 ? 'it' : 'them'}.` : '', mapSaved ?? ''].filter(Boolean).join('\n')
   const warn = await atStart($)
   // A plan that names a part whose files changed since the map was drawn: Claude rereads it before relying on the drawing.
   const drifted = a.ok && (input.action === 'define' || input.action === 'revise') ? await driftNote($, a.run) : undefined
@@ -1161,7 +1194,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const inLine = parallel && (input.action === 'define' || input.action === 'revise') && a.run.draft ? lineNote(a.run.draft.plan!.states) : undefined
   if (input.action === 'status') {
     const map = await mapReply($, a.run, input.area)
-    return attach(attach({ result: `${a.text}\nParallel states are ${parallel ? 'on.' : 'off. Only the user turns them on, with /sentinel parallel on.'}${map ? `\n${map}` : ''}` }, warn), beside)
+    return attach(attach({ result: `${a.text}${leftNote ? `\n${leftNote}` : ''}\nParallel states are ${parallel ? 'on.' : 'off. Only the user turns them on, with /sentinel parallel on.'}${map ? `\n${map}` : ''}` }, warn), beside)
   }
   if (a.event === 'locked') {
     void $.ui.open({ id: PANE, title: 'Sentinel' })
@@ -1184,7 +1217,7 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
   const offered = a.event === 'drafted' && flowsSeen?.length
     ? `Flows the user can add while checking the draft: ${flowsSeen.map(f => (f.description ? `${f.name} (${f.description})` : f.name)).join('; ')}. If one fits this plan, suggest it and where in your reply; the user adds it.`
     : undefined
-  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), alone), inLine), unrun), rules), offered), a.ok ? dropped : undefined)
+  return attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(attach(await record($, a.ok ? { result: drawnNotes ? `${a.text}\n${drawnNotes}` : a.text } : { deny: a.text }, { kind: 'plan', label, denied: !a.ok }), note), slow), warn), drifted), beside), apart), alone), inLine), unrun), rules), offered), a.ok ? dropped : undefined), !a.ok && a.text.startsWith('No plan is locked') ? leftNote : undefined)
 }
 
 // ---- the drawing: what the model draws with a plan, merged into the project's map ----
@@ -1330,7 +1363,7 @@ async function namedFile($: $, kept: Source[] | undefined, source: string | unde
   const whole = source?.trim()
   if (!whole) return undefined
   const root = await $.session.root()
-  const { wrote } = await read($, said)
+  const { wrote } = await saidNow($)
   for (const name of new Set([whole, whole.split(',')[0]!.trim(), whole.split(/\s+/)[0]!])) {
     const text = await $.fs.read(/^([a-z]:)?\//i.test(name) ? name : `${root}/${name}`).then(String, () => '')
     if (!text) continue
@@ -1777,7 +1810,7 @@ async function pickPreset($: $, raw: PlanInput, i: PlanInput, label: string, use
   const loose = pickLoosens(before, await libraryNow($))
   // Words recorded as the user's are checked even on a pick that only adds rules.
   if (loose.length || quote) {
-    const wrong = notAsked((await read($, said)).messages.at(-1)?.text, quote, { names: name ? [name] : [...(was ? [was] : []), 'preset'], looser: loose.length > 0 })
+    const wrong = notAsked((await saidNow($)).messages.at(-1)?.text, quote, { names: name ? [name] : [...(was ? [was] : []), 'preset'], looser: loose.length > 0 })
     if (wrong) {
       await back()
       return deny(loose.length
@@ -2093,7 +2126,7 @@ async function libraryAction($: $, i: PlanInput, label: string): Promise<Result>
   const ask = libraryAsk(words, { weight: l.weight, ...(l.project.preset ? { preset: l.project.preset } : {}), ...(f ? { draft: { name: f.name, kind: 'states' in f ? 'flow' : 'instruction' } } : {}) })
   if (typeof ask === 'string') return record($, { deny: ask }, { kind: 'plan', label, denied: true })
   if (!ask.read) {
-    const why = notAsked((await read($, said)).messages.at(-1)?.text, i.quote, ask, l.project.preset)
+    const why = notAsked((await saidNow($)).messages.at(-1)?.text, i.quote, ask, l.project.preset)
     if (why) return record($, { deny: why }, { kind: 'plan', label, denied: true })
   }
   // The switches files and the flow Claude drafted, to tell whether the command changed anything.

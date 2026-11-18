@@ -293,7 +293,7 @@ Commands that change the plan or your Library run only when you type them, send 
 
 Only you skip a state, with the command, by asking Claude, or with Skip on the state's task page. The one exception is hands-free, as above. A skipped state counts as done for the states that need it. Only you close a plan early too, with the command or by asking Claude.
 
-The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off and a plan Claude sent before the sign-off go to `.sentinel/draft.json`, so they can't replace an earlier session's plan. A new session starts empty, and the status line says when the project holds any of these; `/sentinel resume` loads it, an unfinished plan first. While paused, nothing is checked or recorded, it is safe to close the session, and on resume Claude is told to read the plan's status first, since files may have changed.
+The plan is saved to `.sentinel/run.json` on every change. A draft, a sign-off and a plan Claude sent before the sign-off go to `.sentinel/draft.json`, so they can't replace an earlier session's plan. A new session starts empty, and the status line says when the project holds any of these; `/sentinel resume` loads it, an unfinished plan first. Without a resume, Claude's status call names the saved plan, and if you ask Claude to close it, `finish` closes it from disk. What you typed is kept in the plugin's own store (outside the project), so a conversation resumed in a new process can still quote it. While paused, nothing is checked or recorded, it is safe to close the session, and on resume Claude is told to read the plan's status first, since files may have changed.
 
 ## The Dashboard
 

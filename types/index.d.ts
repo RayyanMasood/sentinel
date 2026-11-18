@@ -493,7 +493,8 @@ export type Run = {
 
 declare module 'claude-code' {
   interface PluginState {
-    // said: the session's typed messages and the files Claude wrote. Never saved, unlike run.
+    // said: the session's typed messages and the files Claude wrote. Kept in the plugin's store under the session's id,
+    // never in the project folder, so a session resumed in a new process reads them back.
     // overseers: the agents started to look into a long or stuck state, by agent id, with what each answered and, for a
     // stuck look, the stuck mark's step. They die with the session's process, and so does this.
     // watch: the running measurement of what 1% of the week costs, here so a reload of the plugin keeps it.
