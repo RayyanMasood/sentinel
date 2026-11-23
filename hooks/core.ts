@@ -1,6 +1,6 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, WorkflowRow, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, WorkflowRow, WorkflowRun, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
 import { WEEKLY, costOf, estimate, family, money, shareOf, usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, namesIn, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
@@ -1343,6 +1343,30 @@ export function joinWorkflow(r: Run, a: { call: string; runId: string; model?: s
   const model = ok && (!a.model || rankOf(a.model) > rankOf(ok.model)) ? ok.model : a.model
   runs[i] = { ...w, agents: [...w.agents, { key: a.key, model: model ?? '', requests: 0 }] }
   return { run: { ...r, workflows: runs }, state: w.state, capped: !!ok, ...(model ? { model } : {}) }
+}
+// A step's workflows for its page: what the user approved with the estimate (none for a workflow they named in a step
+// without one), the agents and spend across its runs, and each run. A run the engine refused before any agent is left out.
+export type WorkflowView = {
+  approved?: { agents: number; model: string; usd?: string; upTo?: string }
+  started: number
+  spent: string
+  runs: { runId?: string; started: number; refused: number; models: string[]; usd: string; tokens: WorkflowRun['tokens']; requests: number[] }[]
+}
+export function workflowViews(r: Run): Record<string, WorkflowView> {
+  const out: Record<string, WorkflowView> = {}
+  for (const s of r.plan?.states ?? []) {
+    const ok = s.workflow?.ok ? s.workflow : undefined
+    const runs = (r.workflows ?? []).filter(w => w.state === s.id && w.agents.length)
+    if (!ok && !runs.length) continue
+    const e = ok && estimate({ agents: ok.agents, model: ok.model })
+    out[s.id] = {
+      ...(ok ? { approved: { agents: ok.agents, model: ok.model, ...(e ? { usd: money(e.usd), upTo: money(e.upTo) } : {}) } } : {}),
+      started: runs.reduce((n, w) => n + w.agents.length, 0),
+      spent: money(runs.reduce((n, w) => n + w.usd, 0)),
+      runs: runs.map(w => ({ ...(w.runId ? { runId: w.runId } : {}), started: w.agents.length, refused: w.refused, models: [...new Set(w.agents.map(a => a.model))], usd: money(w.usd), tokens: w.tokens, requests: w.agents.map(a => a.requests) })),
+    }
+  }
+  return out
 }
 // The agent started: its id, and the model the engine named. Refused by the engine: its place goes.
 export const workflowStarted = (r: Run, key: string, id: string | undefined, model: string | undefined): Run => ({
@@ -2705,6 +2729,8 @@ export type VM = {
   settingRows?: SettingRow[]
   // A draft's workflows, with the workflows switch on.
   workflowRows?: WorkflowRow[]
+  // A running or closed plan's workflows, by step: the steps with an approved one or a run.
+  workflows?: Record<string, WorkflowView>
   paused: boolean
   // Skills every state may call; a state's own ride on the state.
   skills?: string[]
@@ -3248,6 +3274,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     ...(r.library ? { planWeight: r.library.weight } : {}),
     ...(r.library?.states ? { settingRows: settingRows(r) } : {}),
     ...(top.draft && r.library?.on.includes(WORKFLOWS) ? { workflowRows: workflowRows(r, top.usage?.windows.some(w => w.kind === WEEKLY) ? top.usage.perPoint : undefined) } : {}),
+    ...(!top.draft && Object.keys(workflowViews(r)).length ? { workflows: workflowViews(r) } : {}),
     ...(facts && { proof: {
       quoted: plan!.states.filter(s => s.asked?.length).length,
       of: plan!.states.filter(s => s.asked?.length || s.added).length,

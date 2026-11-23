@@ -15,7 +15,7 @@
 //  9. workflow-authoring is held in the approved step, or goes through in another.
 // 10. A member is briefed for a step with an approved workflow.
 import { expect, mock } from 'claude-code/testing'
-import { WORKFLOWS } from '../hooks/core'
+import { WORKFLOWS, emptyRun, summarize } from '../hooks/core'
 import { costOf } from '../hooks/usage'
 import type { Run } from '../types'
 import { ROOT, TOOL, endTurn, engine, openPage, said, test, until } from './kit'
@@ -221,6 +221,33 @@ test('workflow-authoring runs in the step with an approved workflow, and is held
   expect(said(await skill())).toBe('Skill loaded')
   await s.advance('form')
   expect(said(await skill())).toMatch(/holds the skill "workflow-authoring"/)
+})
+
+// The step's page reads this. How it can fail: the limits or estimate are missing; a run the engine refused before any
+// agent shows; the step's count or spend leaves a run out or takes another step's in; a run's models, tokens or
+// requests per agent are wrong; a workflow the user named gets limits it never had.
+test("the view of a step's workflows: the limits and estimate, each run with its agents, spend, tokens and requests", () => {
+  const T = { input: 1200, output: 30000, cacheRead: 900000, cacheWrite: 120000 }, NONE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const r = {
+    ...emptyRun(), active: 'scan',
+    plan: { title: 'P', loops: [], states: [{ ...SCAN, workflow: { ...WF, model: 'sonnet' as const, ok: true as const } }, FORM] },
+    workflows: [
+      { state: 'scan', call: 'c1', runId: 'wf_1', agents: [{ id: 'a', model: 'claude-sonnet-5-5', requests: 12 }, { id: 'b', model: 'claude-haiku-5-5', requests: 4 }], refused: 0, usd: 3.1, tokens: T },
+      { state: 'scan', call: 'c2', runId: 'wf_2', agents: [{ id: 'c', model: 'claude-sonnet-5-5', requests: 7 }], refused: 2, usd: 1.25, tokens: T },
+      { state: 'scan', call: 'c3', agents: [], refused: 0, usd: 0, tokens: NONE },
+      { state: 'form', call: 'c4', runId: 'wf_4', agents: [{ id: 'd', model: 'opus', requests: 2 }], refused: 0, usd: 0.5, tokens: T },
+    ],
+  } as unknown as Run
+  const run = (runId: string, started: number, refused: number, models: string[], usd: string, requests: number[]) => ({ runId, started, refused, models, usd, tokens: T, requests })
+  expect(summarize(r).workflows).toEqual({
+    scan: { approved: { agents: 3, model: 'sonnet', usd: '$4.80', upTo: '$9.30' }, started: 3, spent: '$4.35', runs: [
+      run('wf_1', 2, 0, ['claude-sonnet-5-5', 'claude-haiku-5-5'], '$3.10', [12, 4]),
+      run('wf_2', 1, 2, ['claude-sonnet-5-5'], '$1.25', [7]),
+    ] },
+    form: { started: 1, spent: '$0.50', runs: [run('wf_4', 1, 0, ['opus'], '$0.50', [2])] },
+  })
+  // A step with an approved workflow and no run yet shows its limits.
+  expect(summarize({ ...r, workflows: [] } as Run).workflows).toEqual({ scan: { approved: { agents: 3, model: 'sonnet', usd: '$4.80', upTo: '$9.30' }, started: 0, spent: '$0.00', runs: [] } })
 })
 
 test('a step with an approved workflow gets no member', async ($: any, on: any) => {

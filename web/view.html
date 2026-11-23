@@ -749,6 +749,9 @@ button.mcard:not(.now):hover { transform: perspective(600px) rotateX(calc(4deg +
 .tp .fine { margin-top: 6px; font: 500 13px/18px var(--f-disp); color: var(--ink-3); }
 code.blk { display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--r2); background: var(--sunk); border: 1px solid var(--hair); overflow-wrap: anywhere; white-space: pre-wrap; }
 .tp .files { display: grid; gap: 4px; }
+.wfruns { display: grid; gap: var(--s2); max-width: 70ch; margin-top: var(--s2); font-size: 15px; line-height: 1.5; color: var(--ink); }
+.wfruns b { font-weight: 600; overflow-wrap: anywhere; }
+.wfruns .quiet { font-size: 13.5px; }
 .tlist { display: grid; gap: var(--s3); max-width: 70ch; }
 .tlist li { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: var(--s2); font-size: 15px; line-height: 1.5; color: var(--ink); }
 .tlist time { font: 500 13px/22px var(--f-disp); color: var(--ink-3); font-variant-numeric: tabular-nums; }
@@ -3288,6 +3291,7 @@ function nowSec() {
     + dt('Done when', done + (steps.length ? `<span class="cmd">${(all ? steps : steps.slice(0, SHOW)).map(x => `<code>${esc(x)}</code>`).join('')}</span>${steps.length > SHOW ? more(ck, all, `Show all ${steps.length} steps`) : ''}` : ''))
     + dt('May edit', a.files?.length ? a.files.map(code).join(' ') : 'Nothing. It only reads or checks.')
     + (skillsOf(a).length ? dt('Skills', skillsOf(a).map(code).join(' ')) : '')
+    + ((w => w ? dt('Workflow', w.approved ? `${w.started} of ${w.approved.agents} agents started · ${esc(w.spent)}${w.approved.usd ? ` of about ${esc(w.approved.usd)}` : ''}` : `${plural(w.started, 'agent')} started · ${esc(w.spent)}`) : '')(vm.workflows?.[a.id]))
     + (taskMs(s) != null ? dt('On it for', `<span class="num" data-took="${esc(a.id)}">${fmtDur(taskMs(s))}</span>`) : '')
     + (s.flow ? dt('Added by', `Your <b>${esc(s.flow.name)}</b> flow`) : '')
     + (par() ? dt('Runs in', 'The main conversation') : '')
@@ -3642,6 +3646,21 @@ function askedFor(s, h = 'h3') {
     + (asks.some(q => q.source !== undefined) ? `<p class="qsrc qok">${icon('check')}Sentinel found these exact words in its saved copy. <button type="button" class="lnk" data-src="${esc(s.id)}">Open the saved copy</button></p>` : '')
 }
 
+// A step's workflows: what you approved with the estimate, or that you named one, then each run with its agents, models,
+// spend, token split and requests per agent. Turns per agent drive the cost more than the agent count.
+const modelName = m => cap(esc(m))
+function wfBlock(s) {
+  const w = vm.workflows?.[s.id]
+  if (!w) return ''
+  const a = w.approved
+  const head = a ? `<p>You approved up to <b>${a.agents} agents on ${modelName(a.model)}</b> when you locked the plan${a.usd ? `, estimated at about ${esc(a.usd)} (up to ${esc(a.upTo)})` : ''}. Spend isn't capped.</p>`
+    : '<p>You named a workflow in the chat while this step ran, so it has no cap or model limit.</p>'
+  const runs = w.runs.map(r => `<li><b>${esc(r.runId ?? 'Run')}</b> · ${plural(r.started, 'agent')}${r.refused ? `, ${r.refused} refused,` : ''} on ${r.models.map(esc).join(', ')} · ${esc(r.usd)}`
+    + `<br><span class="quiet">Cache reads ${num(r.tokens.cacheRead)}, cache writes ${num(r.tokens.cacheWrite)}, output ${num(r.tokens.output)}, input ${num(r.tokens.input)} tokens. Requests per agent: ${r.requests.join(', ')}.</span></li>`).join('')
+  return `<div class="wfblock"><h3>Workflow</h3>${head}<p>${a ? `${w.started} of ${a.agents}` : w.started} agent${(a ? a.agents : w.started) === 1 ? '' : 's'} started, ${esc(w.spent)} spent so far.</p>`
+    + (runs ? `<ul class="wfruns">${runs}</ul>` : '<p class="quiet">No run yet.</p>') + '</div>'
+}
+
 function taskPage(s, i, T) {
   const k = stOf(s), kind = runKind(), ms = taskMs(s), run = runMs(), act = vm.phase === 'live' ? vm.active : undefined
   // The running task with a closed last visit is a paused one: its clock has stopped.
@@ -3700,7 +3719,7 @@ function taskPage(s, i, T) {
       ${runbar}
       <div class="tp-cols">
         <div class="tp-main">
-          ${askedFor(s)}${stateSettings(s)}
+          ${askedFor(s)}${stateSettings(s)}${wfBlock(s)}
           <h3>Why it's needed</h3>${s.problem ? `<p>${ticks(s.problem)}</p>` : `<p class="quiet">No description was written for this state. Its label is “${esc(s.label)}”.</p>`}
           ${s.approach ? `<h3>The approach</h3><p>${ticks(s.approach)}</p>` : ''}
           ${s.outcome ? `<h3>What was done</h3><p>${ticks(s.outcome)}</p>` : s.status === 'done' ? `<h3>What was done</h3>${s.evidence ? `<p>Already done when the plan was locked. Evidence: ${ticks(s.evidence)}</p>` : '<p class="quiet">No summary was written when this state finished.</p>'}` : ''}

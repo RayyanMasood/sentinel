@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { act, emptyRun, libraryOn, lockDraft, observe, summarize } from '../hooks/core.ts'
+import { act, emptyRun, keepWorkflow, libraryOn, lockDraft, observe, summarize } from '../hooks/core.ts'
 import { BUILTIN_FLOWS, BUILTINS } from '../hooks/builtins.ts'
 import { parseSystem } from '../hooks/system.ts'
 
@@ -259,6 +259,24 @@ VARIANTS.wfDraft = { ...VARIANTS.draft, workflowRows: [
   { state: 'scan', agents: 8, model: 'sonnet', why: 'Eight <b>reports</b> can be read alone.', usd: '$12.80', upTo: '$24.80', share: 'about 2.1%', kept: false },
   { state: 'audit', agents: 3, model: 'haiku', why: 'Three logs, one each.', usd: '$0.15', upTo: '$0.18', kept: true },
 ] }
+// A running plan with a workflow kept on scan: two runs there (one with markup in its id) and one the engine refused
+// before any agent; a workflow the user named in form; wrap with none.
+VARIANTS.wfRun = (() => {
+  const T = { input: 1200, output: 30000, cacheRead: 900000, cacheWrite: 120000 }, NONE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const d = act({ ...emptyRun(), signedOff: true }, { action: 'define', title: 'Reports', states: [
+    { id: 'scan', label: 'Scan the reports', files: [], workflow: { agents: 3, model: 'sonnet', why: 'Three reports can be read alone.' } },
+    { id: 'form', label: 'Fix the form', check: 'npm test -- form', files: ['src/**'] },
+    { id: 'wrap', label: 'Wrap up', check: 'npm test' },
+  ] }, '09:01', {}, now)
+  if (!d.ok) throw new Error(d.text)
+  const r = lockDraft(keepWorkflow(d.run, 'scan'), '09:02')
+  return page({ ...r, workflows: [
+    { state: 'scan', call: 'c1', runId: 'wf_<b>1</b>', agents: [{ id: 'a', model: 'claude-sonnet-5-5', requests: 12 }, { id: 'b', model: 'claude-haiku-5-5', requests: 4 }], refused: 0, usd: 3.1, tokens: T },
+    { state: 'scan', call: 'c2', runId: 'wf_2', agents: [{ id: 'c', model: 'claude-sonnet-5-5', requests: 7 }], refused: 2, usd: 1.25, tokens: T },
+    { state: 'scan', call: 'c3', agents: [], refused: 0, usd: 0, tokens: NONE },
+    { state: 'form', call: 'c4', runId: 'wf_4', agents: [{ id: 'd', model: 'opus', requests: 2 }], refused: 0, usd: 0.5, tokens: T },
+  ] })
+})()
 VARIANTS.pickDraft ={ ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'backend', why: 'the plan is <b>API</b> work.' } } }
 VARIANTS.quoteDraft = { ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'none', was: 'backend', quote: 'stop using the <i>backend</i> preset' } } }
 
@@ -475,13 +493,17 @@ const bin = process.env.PATH.split(delimiter).find(p => p.includes('_npx') && p.
 const { chromium } = createRequire(join(bin ?? process.cwd(), 'x.js'))('playwright')
 const browser =await chromium.launch({ channel: 'chrome' }).catch(() => chromium.launch())
 const errors = []
+// The pages load nothing from outside but Google's fonts, which the check doesn't need. Antivirus that scans web traffic
+// can add its own script to each page, and when its host is slow the page's load waits on it past the timeout. So every
+// request that leaves this machine gets an empty answer: a stylesheet for the fonts, a script for anything else.
+const offline = p => p.route(u => !['127.0.0.1', 'localhost'].includes(u.hostname), r => r.fulfill({ status: 200, contentType: /fonts\.(googleapis|gstatic)\.com/.test(r.request().url()) ? 'text/css' : 'text/javascript', body: '' }))
+
 async function open(variant, hash, opts = {}) {
   write(VARIANTS[variant])
   const ctx = await browser.newContext({ viewport: { width: opts.width ?? 1440, height: opts.height ?? 900 }, colorScheme: opts.dark ? 'dark' : 'light', reducedMotion: opts.motion === false ? 'reduce' : 'no-preference' })
   const p = await ctx.newPage()
   p.setDefaultTimeout(4000)
-  // Fonts come from Google; the check doesn't need them.
-  await p.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
+  await offline(p)
   p.on('console', m => { if (m.type() === 'error' && !p.sendsFail) errors.push(`${variant}${hash}: ${m.text()}`) })
   p.on('pageerror', e => errors.push(`${variant}${hash}: ${e.message}`))
   await p.goto(base + hash)
@@ -1343,7 +1365,7 @@ async function hubPage() {
       })
       const pg = await ctx.newPage()
       pg.setDefaultTimeout(7000)
-      await pg.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
+      await offline(pg)
       pg.on('console', m => { if (m.type() === 'error' && !pg.sendsFail) errors.push(`hub: ${m.text()}`) })
       pg.on('pageerror', e => errors.push(`hub: ${e.message}`))
       await pg.goto(line)
@@ -1996,7 +2018,7 @@ try {
   // With a project weight and the personal default on, the switch reads on: no weight clears it.
   write({ ...VARIANTS.library, library: { ...VARIANTS.library.library, project: { weight: 'light' }, personal: { on: { [XS]: true } } } })
   p = await browser.newContext({ viewport: { width: 1440, height: 900 } }).then(c => c.newPage())
-  await p.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
+  await offline(p)
   await p.goto(`${base}#library`)
   await p.waitForSelector(`#xsw [data-sw=${XS}]`)
   check(await p.locator(`#xsw [data-sw=${XS}]`).isChecked() && !await p.locator(`#xsw [data-sw=${XW}]`).isChecked(), 'switch: the personal default holds under a project weight, row by row')
@@ -2181,6 +2203,38 @@ try {
   // The rows at each width, light and dark, and the Library's two Experimental rows.
   await layout('wfDraft', '', 'workflow-draft')
   await layout('library', '#library', 'workflow-library')
+  // The workflow on a running plan: the step's page and the side panel. How it can fail:
+  //  1. The step's page misses the limits, the estimate or that spend isn't capped.
+  //  2. A run misses its id, agents, refusals, models, spend, token split or requests per agent, or its id runs as markup.
+  //  3. A run the engine refused before any agent shows.
+  //  4. A workflow the user named shows limits, or doesn't say it has none.
+  //  5. A step without a workflow shows the block.
+  //  6. The side panel's Now has no Workflow row, or the wrong count or spend.
+  const flat1 = async l => (await l.innerText()).replace(/\s+/g, ' ')
+  p = await open('wfRun', '#task-scan')
+  const wfb = p.locator('#v-task .wfblock')
+  const head = await flat1(wfb)
+  check(head.includes("You approved up to 3 agents on Sonnet when you locked the plan, estimated at about $4.80 (up to $9.30). Spend isn't capped."), `workflow page: the limits and estimate (${head})`)
+  check(head.includes('3 of 3 agents started, $4.35 spent so far.'), `workflow page: the step's count and spend (${head})`)
+  check(await wfb.locator('li').count() === 2, 'workflow page: two runs, the one with no agents left out')
+  const r1 = await flat1(wfb.locator('li').first()), r2 = await flat1(wfb.locator('li').nth(1))
+  check(r1.includes('wf_<b>1</b> · 2 agents on claude-sonnet-5-5, claude-haiku-5-5 · $3.10'), `workflow page: the first run's id, agents, models and spend (${r1})`)
+  check(r1.includes('Cache reads 900k, cache writes 120k, output 30k, input 1.2k tokens.') && r1.includes('Requests per agent: 12, 4.'), `workflow page: the first run's tokens and requests (${r1})`)
+  check(r2.includes('wf_2 · 1 agent, 2 refused, on claude-sonnet-5-5 · $1.25'), `workflow page: the second run's refusals (${r2})`)
+  await p.context().close()
+  p = await open('wfRun', '')
+  const nowRow = await flat1(p.locator('#side .sec').first())
+  check(nowRow.includes('Workflow 3 of 3 agents started · $4.35 of about $4.80'), `workflow: the side panel's row (${nowRow})`)
+  await p.context().close()
+  p = await open('wfRun', '#task-form')
+  const named = await flat1(p.locator('#v-task .wfblock'))
+  check(named.includes('You named a workflow in the chat while this step ran, so it has no cap or model limit.') && named.includes('1 agent started, $0.50 spent so far.') && !named.includes('approved'), `workflow page: a workflow the user named (${named})`)
+  await p.context().close()
+  p = await open('wfRun', '#task-wrap')
+  check(await p.locator('#v-task .wfblock').count() === 0, 'workflow page: a step without one has no block')
+  await p.context().close()
+  await layout('wfRun', '#task-scan', 'workflow-run')
+  await layout('wfRun', '', 'workflow-run-side')
   if (only === 'workflow') break others
   }
 
