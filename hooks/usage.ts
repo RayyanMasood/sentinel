@@ -46,6 +46,48 @@ export function shareOf(usd: number, price: number | undefined): string | undefi
 
 const money = (usd: number) => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
 
+// What one model response and one workflow cost. Dollars per million tokens: input, output, cache read. A cache write costs
+// 1.25 x input. A model matches when its id contains the key, so a longer id goes before the shorter one it contains
+// ('opus-5-5' before 'opus-5'), and a suffix such as "[1m]" or a date does not matter.
+const RATES: [string, [number, number, number]][] = [
+  ['fable-5-2', [8, 40, 0.2]], ['mythos', [8, 40, 0.2]],
+  ['opus-5-5', [4, 20, 0.2]], ['sonnet-5-5', [2, 10, 0.1]], ['haiku-5-5', [0.1, 0.5, 0.01]],
+  ['opus-5', [5, 25, 0.5]], ['sonnet-5', [2, 10, 0.2]], ['haiku-4-5', [1, 5, 0.1]],
+]
+type Tokens = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+export type Family = 'haiku' | 'sonnet' | 'opus' | 'fable'
+
+// Full ids and the bare aliases both land here. 'mythos' is the fable family.
+export const family = (model: string | undefined): Family | undefined => {
+  const m = model?.toLowerCase() ?? ''
+  return m.includes('mythos') ? 'fable' : (['haiku', 'sonnet', 'opus', 'fable'] as const).find(f => m.includes(f))
+}
+
+// Dollars for one response. Undefined for a model not in the table: 0 would read as free.
+// For workflow agents only: they write the cache on the 5-minute tier (1.25 x input), as the 23 Nov probe's transcripts
+// showed. The main conversation writes on the 1-hour tier (2 x) and the engine's usage doesn't say which, so this
+// undercounts it by up to 30%.
+export function costOf(u: Tokens, model: string | undefined): number | undefined {
+  const m = model?.toLowerCase() ?? ''
+  const rate = RATES.find(([key]) => m.includes(key))?.[1]
+  if (!rate) return undefined
+  const [input, output, read] = rate
+  return (u.input_tokens * input + u.output_tokens * output + u.cache_read_input_tokens * read + u.cache_creation_input_tokens * input * 1.25) / 1e6
+}
+
+// Dollars per agent, typical and 90th percentile, measured on 23 Nov 2026 over 401 of the user's subagents.
+// ponytail: fixed as measured. Learning them from finished runs is the upgrade; until then they drift from the user's real use.
+const PER_AGENT: Record<Family, { typical: number; p90: number }> = {
+  opus: { typical: 2.3, p90: 4.35 }, sonnet: { typical: 1.6, p90: 3.1 }, haiku: { typical: 0.05, p90: 0.06 }, fable: { typical: 11.5, p90: 18.5 },
+}
+export const perAgent = (model: string | undefined) => { const f = family(model); return f && PER_AGENT[f] }
+
+// A workflow's cost before it runs: usd is the typical figure, upTo the 90th percentile.
+export function estimate({ agents, model }: { agents: number; model: string | undefined }): { usd: number; upTo: number } | undefined {
+  const p = perAgent(model)
+  return p && { usd: agents * p.typical, upTo: agents * p.p90 }
+}
+
 // What the page and the terminal show: the cost always, and the share of the week with a weekly figure and a price.
 export function usageView(u: Usage | undefined): UsageView | undefined {
   if (!u) return undefined
