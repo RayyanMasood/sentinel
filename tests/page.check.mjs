@@ -223,7 +223,7 @@ const VARIANTS = {
     draftLibrary: { weight: 'standard', on: library().library.instructions.filter(i => i.on).map(i => i.name), told: [] },
     depth: [
       { id: 'perf', ask: 'expert', text: 'Time the search on 50,000 orders', state: 'perf' },
-      { id: 'raw', ask: 'raw', text: 'Start from the slow-query log, not a guess at which filters matter' },
+      { id: 'raw', ask: 'raw', text: 'Start from the slow-query log, not a guess at which filters matter', on: true },
     ],
   }),
 }
@@ -1750,7 +1750,11 @@ try {
   check(await p.locator('#slip .deep label').count() === 2, 'depth items')
   check((await p.locator('#slip').innerText()).replace(/\s+/g, ' ').includes('Skills Claude may use In every state: ponytail:ponytail-review. In page: impeccable:impeccable. Any other skill waits until you name it in the chat.'), 'draft: the skills Claude may use, plan-wide and per state')
   check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted && i.name !== XS && i.name !== XW).length, 'a switch per trusted instruction')
+  check(!(await p.locator('#slip [data-deep=perf]').isChecked()) && await p.locator('#slip [data-deep=raw]').isChecked(), 'depth: the answer Claude recommends starts ticked')
   await p.locator('#slip [data-deep=perf]').check()
+  await sent('depth tick', b => b.kind === 'deep' && b.draft === VARIANTS.draft.draftKey && b.id === 'perf' && b.on === true)
+  await p.locator('#slip [data-deep=raw]').uncheck()
+  await sent('depth untick', b => b.kind === 'deep' && b.id === 'raw' && b.on === false)
   await p.locator('#slip [data-plan=failure-list]').uncheck()
   const key = VARIANTS.draft.draftKey
   await sent('libplan', b => b.kind === 'libplan' && b.draft === key && b.weight === 'standard' && !b.on.includes('failure-list'))

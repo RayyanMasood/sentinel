@@ -407,8 +407,9 @@ export type PlanInput = {
 // One thing the user asked for: their words, and either the steps that deliver it or Claude's reason for leaving it out.
 export type Point = { said: string; states: string[] } | { said: string; left: string }
 // An answer the user may tick. ask: the question it answers. state: a state of the draft that is there for it, taken
-// out at the lock unless the user ticks it.
-export type Depth = { id: string; text: string; ask?: 'expert' | 'raw' | 'methods' | 'proof'; state?: string }
+// out at the lock unless the user ticks it. on: ticked. Claude sets it on the answers it recommends, and the user's ticks
+// on the page change it; a lock with no ids takes the ticked ones.
+export type Depth = { id: string; text: string; ask?: 'expert' | 'raw' | 'methods' | 'proof'; state?: string; on?: true }
 
 export type Run = {
   signedOff: boolean

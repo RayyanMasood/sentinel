@@ -170,11 +170,12 @@ export const SCHEMA = {
     },
     depth: {
       type: 'array',
-      description: 'define, for a draft the user locks with /sentinel lock: your answers to what an expert would do here, the rawest material to start from, the methods, and what shows the result is right. The user ticks the ones they want as they lock it; nothing is ticked unless they pick it',
+      description: 'define, for a draft the user locks with /sentinel lock: your answers to what an expert would do here, the rawest material to start from, the methods, and what shows the result is right. Set on for the ones you recommend: they start ticked, and the user unticks what they don\'t want or ticks others as they lock it',
       items: {
         type: 'object',
         properties: {
-          id: { type: 'string', description: 'a short word the user ticks with /sentinel lock <id>' },
+          id: { type: 'string', description: 'a short word the user ticks with /sentinel lock <id>; not "none"' },
+          on: { type: 'boolean', description: 'true for an answer you recommend: it starts ticked' },
           text: { type: 'string', description: 'the answer, one line' },
           ask: { type: 'string', enum: ['expert', 'raw', 'methods', 'proof'], description: 'the question it answers' },
           state: { type: 'string', description: 'a state of this plan that is there only for this answer: Sentinel takes it out unless the user ticks the answer' },
@@ -281,10 +282,10 @@ export const register: Register = on => {
     const locking = /^lock(?:\s+(.+))?$/.exec(arg)
     if (locking) {
       const r = await read($, run)
-      // The ids after lock tick the draft's depth answers.
-      const picked = locking[1]?.split(/\s+/) ?? []
+      // The ids after lock are the draft's depth answers to tick, and none ticks none. Without ids, the ticked ones go in.
+      const picked = locking[1] === 'none' ? [] : locking[1]?.split(/\s+/)
       if (r.draft) return { text: await lockNow($, picked) }
-      if (picked.length) return { text: 'There is no draft to lock yet. Tick its depth answers with the /sentinel lock that locks it.' }
+      if (picked) return { text: 'There is no draft to lock yet. Tick its depth answers with the /sentinel lock that locks it.' }
       await change($, x => ({ ...x, ...freshCount(x, new Date().toISOString()), signedOff: true, review: true, held: undefined }))
       // A define the model sent before the sign-off becomes the draft as it is. One that starts partway needs the
       // checks of its earlier states run, so the model sends that one again.
@@ -837,14 +838,14 @@ async function openPane($: $, focus: boolean) {
   await $.ui.open({ id: PANE, title: 'Sentinel' })
 }
 
-// Locks the draft with the depth answers the user ticked, by id; none are ticked unless picked. A state that an
-// unticked answer names comes out first, unless a ticked one names it too. /sentinel lock, the band's Lock and the
-// dashboard's all come here.
-async function lockNow($: $, picked: string[] = [], free = false): Promise<string> {
+// Locks the draft with the depth answers ticked: those picked by id, or without a pick the ones ticked now (Claude's
+// recommended ones, as the user left them on the page). A state that an unticked answer names comes out first, unless
+// a ticked one names it too. /sentinel lock, the band's Lock and the dashboard's all come here.
+async function lockNow($: $, picked?: string[], free = false): Promise<string> {
   const r = await read($, run)
   const depth = (r.draft && r.held?.depth) || []
-  const ticked = (id: string) => picked.some(p => p.toLowerCase() === id.toLowerCase())
-  const unknown = picked.filter(p => !depth.some(x => x.id.toLowerCase() === p.toLowerCase()))
+  const ticked = (id: string) => (picked ? picked.some(p => p.toLowerCase() === id.toLowerCase()) : !!depth.find(x => x.id === id)?.on)
+  const unknown = (picked ?? []).filter(p => !depth.some(x => x.id.toLowerCase() === p.toLowerCase()))
   if (r.draft && unknown.length) {
     return depth.length ? `${unknown.join(', ')} ${unknown.length > 1 ? 'are' : 'is'} not one of the draft's depth answers: ${depth.map(x => x.id).join(', ')}. Nothing was locked.`
       : 'The draft has no depth answers to tick. Lock it with /sentinel lock alone.'
@@ -878,7 +879,8 @@ async function lockNow($: $, picked: string[] = [], free = false): Promise<strin
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
   const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, stands, flows, unsaved ?? ''].filter(Boolean).join(' ')
   later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''}${free ? ` ${HANDS_FREE}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${flows ? ` ${flows}` : ''}${unsaved ? ` ${unsaved}` : ''}`
+  const tickedNow = chosen.map(x => (x.state ? `${x.id} (keeps ${x.state})` : x.id)).join(', ')
+  return `Locked "${d.plan!.title}" at ${d.active}.${chosen.length ? ` Ticked ${tickedNow}.` : ''}${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${flows ? ` ${flows}` : ''}${unsaved ? ` ${unsaved}` : ''}`
 }
 
 const keepNow = ($: $, id: string) => change($, x => keepAdded(x, id, now()))
@@ -3622,7 +3624,7 @@ async function fromPage($: $, m: Record<string, unknown>) {
       const why = await answerRow($, row.id, true)
       if (why) return toast(why)
     }
-    const out = await lockNow($, Array.isArray(m.picked) ? m.picked.filter((x): x is string => typeof x === 'string') : [], free)
+    const out = await lockNow($, Array.isArray(m.picked) ? m.picked.filter((x): x is string => typeof x === 'string') : undefined, free)
     if (!out.startsWith('Locked')) return toast(out)
     if (kept.length) await change($, x => ({ ...x, audit: [...x.audit, ...kept.map(row => ({ step: x.step, t: now(), state: x.active ?? '', kind: 'decided' as const, text: `${row.weight ? `Went ${row.weight} for the whole plan` : `Turned ${row.name} off`} hands-free: ${row.why}` }))] }))
     const why = m.keep === 'project' && pl ? await keepAsProject($, pl) : undefined
@@ -3643,6 +3645,11 @@ async function fromPage($: $, m: Record<string, unknown>) {
   if (m.kind === 'setrow' && r.draft && m.draft === draftKey(r) && typeof m.id === 'string') {
     const why = await answerRow($, m.id, m.keep === true)
     return why ? toast(why) : undefined
+  }
+  // A depth answer ticked or unticked on the draft card. The tick is kept in the draft, so a lock typed later takes it.
+  if (m.kind === 'deep' && r.draft && m.draft === draftKey(r) && typeof m.id === 'string') {
+    const tick = (d: Depth): Depth => (d.id === m.id ? { ...d, on: m.on === true ? true : undefined } : d)
+    return void (await change($, x => (x.held?.depth && draftKey(x) === m.draft ? { ...x, held: { ...x.held, depth: x.held.depth.map(tick) } } : x)))
   }
   if (m.kind === 'wfrow' && r.draft && m.draft === draftKey(r) && typeof m.state === 'string') {
     const why = await answerWorkflow($, m.state, m.keep === true, draftKey(r))

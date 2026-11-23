@@ -24,7 +24,8 @@ export const COMMANDS: readonly (readonly [string, readonly (readonly [string, s
   ]],
   ['The plan', [
     ['lock', 'sign off a plan agreed in chat or already under way; again to lock the draft'],
-    ['lock <id> <id>', 'lock the draft with those depth answers ticked'],
+    ['lock <id> <id>', 'lock the draft with those depth answers ticked; lock alone takes the ticked ones'],
+    ['lock none', 'lock the draft with no depth answer ticked'],
     ['add <flow> start|end|before <state>|after <state>', 'add a flow to the draft'],
     ['drop <flow>', 'take a flow out of the draft'],
     ['hands-free|hands-free off', 'let Claude make the calls that would wait for you, or take them back'],
@@ -1591,7 +1592,8 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
   const rail = `${states.map(s => s.id).join(' → ')} → done`
   const before = (prior.length ? `\nDone before the lock: ${prior.join(', ')}.` : '') + mapNote(drawing)
   if (drafting) {
-    const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
+    const marked = depth.filter(d => d.on).map(d => d.id)
+    const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')})${marked.length ? `, starting from the ones you marked on (${marked.join(', ')})` : ''}; a state named by one they leave unticked comes out.` : ''
     const waits = (r.review || !additions.length ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`)
       + (looser.length ? `Looser than the plan, so these wait for the user's answer: ${looser.join(', ')}. If they lock it without answering, the plan's weight stands.\n` : '')
       + unkept.map(id => `The workflow on ${id} waits for the user's Keep on the draft, where it shows a cost estimate. If they lock it without keeping it, ${id} runs without it.\n`).join('')
@@ -1668,13 +1670,14 @@ function depthOf(raw: PlanInput['depth'], states: StateDef[]): Depth[] | string 
   for (const d of raw ?? []) {
     const id = typeof d?.id === 'string' ? d.id.trim() : ''
     if (!/^[A-Za-z0-9][\w-]*$/.test(id)) return `Bad depth id "${id}": use letters, digits, - and _, so the user can tick it with /sentinel lock <id>.`
+    if (id.toLowerCase() === 'none') return `Depth id "${id}" is kept for /sentinel lock none, which locks with nothing ticked. Use another id.`
     if (out.some(x => x.id.toLowerCase() === id.toLowerCase())) return `Depth id "${id}" is used twice.`
     const text = clip(d.text, 300)
     if (!text) return `Depth item ${id} needs text: the answer the user ticks.`
     if (d.ask !== undefined && !ASKS.includes(d.ask)) return `ask on depth item ${id} is expert, raw, methods or proof.`
     const state = typeof d.state === 'string' ? d.state.trim() : ''
     if (state && !states.some(s => s.id === state)) return `Depth item ${id} names "${state}", which is not one of the states. Send "depth" again as it should be.`
-    out.push({ id, text, ...(d.ask ? { ask: d.ask } : {}), ...(state ? { state } : {}) })
+    out.push({ id, text, ...(d.ask ? { ask: d.ask } : {}), ...(state ? { state } : {}), ...(d.on === true ? { on: true as const } : {}) })
   }
   return out
 }

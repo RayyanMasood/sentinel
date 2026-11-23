@@ -3891,7 +3891,7 @@ test('library: depth items the user leaves unticked take their states out', asyn
   expect(await sentinel('lock perf nope')).toBe("nope is not one of the draft's depth answers: perf, raw, proof. Nothing was locked.")
   expect(said(await plan({ action: 'status' }))).toMatch(/waiting for the user to lock/)
   // Ticked: perf keeps bench. Unticked: proof takes csv out, and its loop goes with it.
-  expect(await sentinel('lock PERF raw')).toBe('Locked "Refunds" at explore. Took out csv, named by answers you left unticked.')
+  expect(await sentinel('lock PERF raw')).toBe('Locked "Refunds" at explore. Ticked perf (keeps bench), raw. Took out csv, named by answers you left unticked.')
   const run = await savedRun($, eng)
   expect(run.plan!.states.map(s => s.id)).toEqual(['explore', 'service', 'bench', 'verify'])
   expect(run.plan!.loops).toEqual([['verify', 'service']])
@@ -3908,7 +3908,7 @@ test('library: depth items the user leaves unticked take their states out', asyn
   await sentinel('reset')
   await sentinel('lock')
   await plan({ ...DEPTH_PLAN, depth: [{ id: 'a', text: 'Answer A.', state: 'csv' }, { id: 'b', text: 'Answer B.', state: 'csv' }] })
-  expect(await sentinel('lock b')).toBe('Locked "Partial refunds" at explore.')
+  expect(await sentinel('lock b')).toBe('Locked "Partial refunds" at explore. Ticked b (keeps csv).')
   expect((await savedRun($, eng)).plan!.states.map(s => s.id)).toContain('csv')
   expect(eng.submitted.at(-1)).toMatch(/Active state: explore\. The user chose: Answer B\. The user left out: Answer A\. Call/)
   // Signed off in plan mode, the plan locks at once with every state, and a bad depth refuses nothing.

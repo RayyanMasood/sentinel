@@ -139,7 +139,7 @@ Thorough is slower: `fails-without-change` runs a state's check up to twice more
 
 "Told" means Claude reads the text: start and close texts arrive with the state, final texts at the lock and with the last state, and draft and every-turn texts in the system prompt. "Sentinel checks" means Sentinel acts itself. `quote-the-source` compares each state's quote with its sources (see [Proof Each State Was Asked For](#proof-each-state-was-asked-for)). `fails-first` runs the check once before any edit. `fails-without-change` reruns a passing check in a scratch copy that has the state's test changes but not its code changes, and refuses the advance if it still passes, until Claude tightens the check or records why with `decide`. Every told block ends by saying the project's own rules (such as CLAUDE.md) win where they differ. A start or close instruction that doesn't fit a state is skipped with `decide`, naming it in `skip` by name or title; several go in one call, separated by commas. `break-it-once` is bounded: once per new test, by hand, about 10 minutes (30 at Thorough), with no mutation harness. A state that adds no test has nothing to break, and one that writes no logic has nothing for `failure-list`.
 
-`depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. You tick the ones you want as you lock it, on the dashboard or with `/sentinel lock <id> <id>`. A state that only an unticked answer names comes out.
+`depth-before-size` asks Claude for answers to "what would an expert do here", listed as `depth` on the draft. The ones Claude recommends start ticked. Untick what you don't want on the dashboard and lock, or type `/sentinel lock` to take the ticked ones, `/sentinel lock <id> <id>` to take only those, or `/sentinel lock none` for none. A state that only an unticked answer names comes out.
 
 ### Settings per State
 
@@ -285,7 +285,8 @@ To run it from a clone, start a session with `claude --plugin-dir <path to senti
 | `/sentinel fine <part>` | clear the Changed since drawn mark on a part or an area until its files change again |
 | `/sentinel browser` | open the dashboard in your browser |
 | `/sentinel lock` | sign off a plan agreed in chat or already under way; again to lock the draft |
-| `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked |
+| `/sentinel lock <id> <id>` | lock the draft with those depth answers ticked; `lock` alone takes the ticked ones |
+| `/sentinel lock none` | lock the draft with no depth answer ticked |
 | `/sentinel source` | print the saved copy of what the plan quotes, with each quote marked |
 | `/sentinel hands-free`, `hands-free off` | let Claude make the calls that would wait for you, or take them back |
 | `/sentinel pause`, `resume` | stop enforcing the plan and keep it; enforce it again, or pick up an earlier session's plan, draft or sign-off |
@@ -333,7 +334,7 @@ That page comes from a small background process, `web/hub.mjs`, on port 40999. I
 - **Where the time went** draws every tool call as a bar on its state's row, with health below and stuck stretches shaded.
 - **Every call** lists the active state's calls with file versions, check results and the health arithmetic.
 - **Now**, beside the plan, has the active state and its check runs, then what was decided without you, what you were asked, the tokens used per model, and the log.
-- **Library** has the Preset line on top, with the preset in use, the needed MCPs and the chooser, then Change for and two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers to tick and the plan's own copy of the switches.
+- **Library** has the Preset line on top, with the preset in use, the needed MCPs and the chooser, then Change for and two tabs, Instructions and Flows. Each row has its switch, its moment and what it costs per state; the weight sits above with the extra words and check runs it adds. It holds what Claude drafted, and has an editor for each kind. On a draft, the "Before you lock it" card has the depth answers, with Claude's recommended ones ticked and the plan's own copy of the switches.
 - **System** shows once the project has a map, with or without a plan running. See [The System Map](#the-system-map). A banner names the parts that changed since the map was drawn, with Redraw this area and It's fine on each.
 - **The draft card** also says how many states quote their source, notes the sections nothing quotes, lists What you asked for, folds the quotes, and asks about each state Claude added. At the finish, "Claude added along the way" lists those states with your answers.
 

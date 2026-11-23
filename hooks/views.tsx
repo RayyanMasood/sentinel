@@ -322,8 +322,8 @@ export function renderPane(el: Els, vm: VM, view: View, on: PaneActions) {
       )
     }
     if (vm.depth?.length) {
-      rows.push(gap(), line(['Deeper, not bigger', undefined, true]), para('Tick the answers you want as you lock it: /sentinel lock <id> <id>. A state named by one you leave unticked comes out.', 'dim'))
-      for (const d of vm.depth) rows.push(<Box flexDirection="row"><Box flexShrink={0}>{line([`${d.id}  `, 'acc', true])}</Box><Box flexShrink={1}>{para(d.state ? `${d.text} (keeps ${d.state})` : d.text)}</Box></Box>)
+      rows.push(gap(), line(['Deeper, not bigger', undefined, true]), para("✓ marks the ticked ones: Claude's recommendations, as you left them on the dashboard. /sentinel lock takes those, /sentinel lock <id> <id> takes the ones you name, and /sentinel lock none takes none. A state named by one left unticked comes out.", 'dim'))
+      for (const d of vm.depth) rows.push(<Box flexDirection="row"><Box flexShrink={0}>{line([`${d.on ? '✓' : '·'} ${d.id}  `, 'acc', true])}</Box><Box flexShrink={1}>{para(d.state ? `${d.text} (keeps ${d.state})` : d.text)}</Box></Box>)
     }
     if (vm.loops.length) rows.push(gap(), line(['Loops', undefined, true]), para(vm.loops.map(l => `${l.from} → ${l.to}`).join(', ')))
     const decided = vm.audit.filter(a => a.kind === 'decided')

@@ -2200,11 +2200,18 @@ function settingsBlock() {
 }
 
 // Claude's answers to "what would an expert do here", for the user to tick. One that names a state takes that state out
-// of the plan at the lock unless it is ticked. depthPicked: the ticked ids, kept while the draft changes.
+// of the plan at the lock unless it is ticked. The ones Claude recommends start ticked; each tick goes to Sentinel at
+// once, so a lock typed in the terminal takes it too.
 const ASK = { expert: 'What an expert would add', raw: 'The raw material to start from', methods: 'Methods and tools', proof: 'What shows it is right' }
-const depthPicked = new Set()
-const depthBlock = () => !vm.depth?.length ? '' : `<div class="wide"><h3>Deeper, not bigger</h3><p class="lead">Claude's suggestions beyond the brief. Tick the ones you want; the rest stay out of the plan.</p>
-  <div class="deep">${vm.depth.map(x => `<label><input type="checkbox" class="pick" data-deep="${esc(x.id)}"${depthPicked.has(x.id) ? ' checked' : ''}><span>${ASK[x.ask] ? `<span class="k">${ASK[x.ask]}</span>` : ''}<b>${esc(x.text)}</b></span>${x.state ? `<p>Keeps the state ${code(x.state)} in the plan.</p>` : ''}</label>`).join('')}</div></div>`
+// Ticks sent that the page's copy of the draft doesn't show yet, so a redraw before Sentinel's answer doesn't undo them.
+const deepSent = new Map()
+const deepOn = x => {
+  const s = deepSent.get(x.id)
+  if (s && (s.key !== vm.draftKey || s.on === !!x.on)) deepSent.delete(x.id)
+  return deepSent.has(x.id) ? s.on : !!x.on
+}
+const depthBlock = () => !vm.depth?.length ? '' : `<div class="wide"><h3>Deeper, not bigger</h3><p class="lead">Claude's suggestions beyond the brief, with the ones it recommends ticked. Untick what you don't want; unticked ones stay out of the plan.</p>
+  <div class="deep">${vm.depth.map(x => `<label><input type="checkbox" class="pick" data-deep="${esc(x.id)}"${deepOn(x) ? ' checked' : ''}><span>${ASK[x.ask] ? `<span class="k">${ASK[x.ask]}</span>` : ''}<b>${esc(x.text)}</b></span>${x.state ? `<p>Keeps the state ${code(x.state)} in the plan.</p>` : ''}</label>`).join('')}</div></div>`
 // The instructions this plan locks with. Each switch changes the draft's copy; planKeep: also make them the project's
 // switches at the lock.
 let planKeep = false
@@ -2294,8 +2301,10 @@ function onAct(e) {
   if (act === 'ready') return send({ kind: 'ready', state: a, at: vm.blocked.at }, { q: vm.blocked.what, ans: 'It is ready', where: 'Claude goes on.' })
   if (act === 'hint') return send({ kind: 'hint', state: a, trap: vm.trap.step, text: text('try') }, { q: `Claude is ${PATTERN[vm.trap.pattern]} on ${a}`, ans: 'Your note is with Claude', where: 'The run stays red until the check moves.' })
   if (act === 'lock' || act === 'lockfree') {
-    const picked = (vm.depth ?? []).filter(x => depthPicked.has(x.id)).map(x => x.id)
-    return send({ kind: 'lock', draft: vm.draftKey, ...(act === 'lockfree' ? { free: true } : {}), ...(vm.depth?.length ? { picked } : {}), ...(planKeep ? { keep: 'project' } : {}) }, { q: vm.title, ans: act === 'lockfree' ? 'Locked, hands-free' : 'Locked', where: 'Claude starts on the first state.' })
+    // The ticks as shown, which may be ahead of the page's copy of the draft.
+    const boxes = [...$('slip').querySelectorAll('[data-deep]')]
+    const picked = boxes.filter(x => x.checked).map(x => x.dataset.deep)
+    return send({ kind: 'lock', draft: vm.draftKey, ...(act === 'lockfree' ? { free: true } : {}), ...(boxes.length ? { picked } : {}), ...(planKeep ? { keep: 'project' } : {}) }, { q: vm.title, ans: act === 'lockfree' ? 'Locked, hands-free' : 'Locked', where: 'Claude starts on the first state.' })
   }
   if (act === 'planweight') {
     const pl = vm.draftLibrary, w = b.dataset.pw, ins = vm.library?.instructions ?? []
@@ -2312,7 +2321,10 @@ $('slip').addEventListener('toggle', e => { if (e.target.id === 'askRows') quote
 // A picked option clears the typed answer, and typing clears a picked option, on questions that take one answer.
 $('slip').addEventListener('change', e => {
   const t = e.target
-  if (t.dataset.deep) return t.checked ? depthPicked.add(t.dataset.deep) : depthPicked.delete(t.dataset.deep)
+  if (t.dataset.deep) {
+    deepSent.set(t.dataset.deep, { on: t.checked, key: vm.draftKey })
+    return send({ kind: 'deep', draft: vm.draftKey, id: t.dataset.deep, on: t.checked })
+  }
   if (t.name === 'pkeep') return (planKeep = !!t.value)
   if (t.dataset.plan) {
     const pl = vm.draftLibrary
