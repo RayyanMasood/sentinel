@@ -66,7 +66,7 @@ const drafted = act({ ...emptyRun(), signedOff: true, review: true }, plan, '', 
 if (!drafted.draft) throw new Error('no draft')
 const standardOn = libraryOn(BUILTINS.map(b => ({ ...b })), {}, {}).on
 // A draft with the Library's settings per state on: mixed weights, one addition on two states, and a plan setting held for the user.
-const XS = 'state-settings'
+const XS = 'state-settings', XW = 'state-workflows'
 const settingsPlan = {
   action: 'define', title: 'Card payments',
   library: {
@@ -255,7 +255,11 @@ VARIANTS.presetMissing = (() => { const v = page(emptyRun(), library({ preset: '
 VARIANTS.mcpDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, mcps: [UNITY, { name: 'amp', state: 'sign-in', server: 'amp' }] } }
 VARIANTS.missingDraft = { ...VARIANTS.draft, library: { ...VARIANTS.draft.library, using: { name: 'game-dev', missing: true } } }
 // Drafts on a preset Claude picked: on its own reason, or on the user's words dropping the one in use.
-VARIANTS.pickDraft = { ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'backend', why: 'the plan is <b>API</b> work.' } } }
+VARIANTS.wfDraft = { ...VARIANTS.draft, workflowRows: [
+  { state: 'scan', agents: 8, model: 'sonnet', why: 'Eight <b>reports</b> can be read alone.', usd: '$12.80', upTo: '$24.80', share: 'about 2.1%', kept: false },
+  { state: 'audit', agents: 3, model: 'haiku', why: 'Three logs, one each.', usd: '$0.15', upTo: '$0.18', kept: true },
+] }
+VARIANTS.pickDraft ={ ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'backend', why: 'the plan is <b>API</b> work.' } } }
 VARIANTS.quoteDraft = { ...VARIANTS.draft, draftLibrary: { ...VARIANTS.draft.draftLibrary, preset: { name: 'none', was: 'backend', quote: 'stop using the <i>backend</i> preset' } } }
 
 // ---- a system map ----
@@ -1606,8 +1610,8 @@ async function hubPage() {
   }
 }
 
-// ONLY=presets, ONLY=points, ONLY=looks, ONLY=bars, ONLY=changed or ONLY=pick runs that block alone, for trying a break on it in seconds.
-const only = process.env.ONLY, quick = ['presets', 'points', 'looks', 'bars', 'changed', 'pick'].includes(only)
+// ONLY=presets, ONLY=points, ONLY=looks, ONLY=bars, ONLY=changed, ONLY=workflow or ONLY=pick runs that block alone, for trying a break on it in seconds.
+const only = process.env.ONLY, quick = ['presets', 'points', 'looks', 'bars', 'changed', 'workflow', 'pick'].includes(only)
 try {
   if (!quick) {
   await hubPage()
@@ -1647,10 +1651,10 @@ try {
   check(await p.locator('#wLabel').textContent() === 'This project: Standard, the usual', 'weight label')
   check(same(await p.locator('#swScope button').allTextContents(), ['This project', 'Every project']), 'Change for has two places while no preset is in use')
   check(await p.locator('.wcard[aria-pressed=true] .wn').textContent() === 'Standard', 'Standard picked')
-  check(await p.locator('.irow').count() === BUILTINS.length - 1 + own.length, 'a row for each instruction, and the experimental switch apart')
+  check(await p.locator('.irow').count() === BUILTINS.length - 2 + own.length, 'a row for each instruction, and the experimental switches apart')
   check(await p.locator('.mg-h').count() === 5, 'a group for each moment')
   check(await p.locator('.irow[data-ins="project/release-notes"] .tag.off').textContent() === 'Not trusted', 'untrusted row marked')
-  check((await p.locator('#tot').textContent()).includes(`${standardOn.length + 2} of ${BUILTINS.length - 1 + own.length}`), 'totals count what is on')
+  check((await p.locator('#tot').textContent()).includes(`${standardOn.length + 2} of ${BUILTINS.length - 2 + own.length}`), 'totals count what is on')
   await p.locator('.irow[data-ins="built-in/failure-list"] .ck.sw').click()
   await sent('libon', b => b.kind === 'libon' && b.name === 'failure-list' && b.scope === 'project' && b.on === false)
   await p.locator('.wcard[data-weight=thorough]').click()
@@ -1723,7 +1727,7 @@ try {
   p = await open('draft', '')
   check(await p.locator('#slip .deep label').count() === 2, 'depth items')
   check((await p.locator('#slip').innerText()).replace(/\s+/g, ' ').includes('Skills Claude may use In every state: ponytail:ponytail-review. In page: impeccable:impeccable. Any other skill waits until you name it in the chat.'), 'draft: the skills Claude may use, plan-wide and per state')
-  check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted && i.name !== XS).length, 'a switch per trusted instruction')
+  check(await p.locator('#slip .planins input').count() === VARIANTS.draft.library.instructions.filter(i => i.trusted && i.name !== XS && i.name !== XW).length, 'a switch per trusted instruction')
   await p.locator('#slip [data-deep=perf]').check()
   await p.locator('#slip [data-plan=failure-list]').uncheck()
   const key = VARIANTS.draft.draftKey
@@ -1975,25 +1979,27 @@ try {
   if (shots) await p.screenshot({ path: join(shots, 'graph.png'), fullPage: true })
   await p.context().close()
 
-  // The experimental switch has a row of its own, and only the user's click sends it.
+  // The experimental switches have a row each, and only the user's click sends one.
   p = await open('library', '#library')
   check(await p.locator('.irow[data-ins="built-in/state-settings"]').count() === 0, 'switch: not in the list')
-  check(await p.locator('#xsw .tag').textContent() === 'Experimental', 'switch: says experimental')
+  check(same(await p.locator('#xsw .tag').allTextContents(), ['Experimental', 'Experimental']), 'switch: two rows, each says experimental')
   check((await p.locator('#xsw').innerText()).includes('testing'), 'switch: says it is for testing')
-  check(!await p.locator('#xsw input').isChecked(), 'switch: off by default')
+  check(!await p.locator(`#xsw [data-sw=${XS}]`).isChecked() && !await p.locator(`#xsw [data-sw=${XW}]`).isChecked(), 'switch: both off by default')
   await p.locator('.wcard[data-weight=thorough]').click()
   await sent('a weight, for the switch case', b => b.kind === 'libweight' && b.weight === 'thorough')
-  check(!await p.locator('#xsw input').isChecked(), 'switch: a weight leaves it off')
-  await p.locator('#xsw .ck.sw').click()
+  check(!await p.locator(`#xsw [data-sw=${XS}]`).isChecked() && !await p.locator(`#xsw [data-sw=${XW}]`).isChecked(), 'switch: a weight leaves both off')
+  await p.locator(`#xsw .ck.sw:has([data-sw=${XS}])`).click()
   await sent('libon for the switch', b => b.kind === 'libon' && b.name === XS && b.on === true && b.scope === 'project')
+  await p.locator(`#xsw .ck.sw:has([data-sw=${XW}])`).click()
+  await sent('libon for the workflows switch', b => b.kind === 'libon' && b.name === XW && b.on === true && b.scope === 'project')
   await p.context().close()
   // With a project weight and the personal default on, the switch reads on: no weight clears it.
   write({ ...VARIANTS.library, library: { ...VARIANTS.library.library, project: { weight: 'light' }, personal: { on: { [XS]: true } } } })
   p = await browser.newContext({ viewport: { width: 1440, height: 900 } }).then(c => c.newPage())
   await p.route(/fonts\.(googleapis|gstatic)\.com/, r => r.fulfill({ status: 200, contentType: 'text/css', body: '' }))
   await p.goto(`${base}#library`)
-  await p.waitForSelector('#xsw input')
-  check(await p.locator('#xsw input').isChecked(), 'switch: the personal default holds under a project weight')
+  await p.waitForSelector(`#xsw [data-sw=${XS}]`)
+  check(await p.locator(`#xsw [data-sw=${XS}]`).isChecked() && !await p.locator(`#xsw [data-sw=${XW}]`).isChecked(), 'switch: the personal default holds under a project weight, row by row')
   check((await p.locator('#wLabel').textContent()) === 'This project: Light', 'switch: it counts as no change to the weight')
   await p.context().close()
 
@@ -2146,6 +2152,38 @@ try {
   //  2. Claude's reason or the user's words run as markup.
   //  3. Picking no preset reads as a preset named "none".
   //  4. A draft with no pick shows the line.
+  // The workflows Claude proposed, on the draft card. How it can fail:
+  //  1. The row misses the limits, the estimate or the share of the week, or Claude's reason runs as markup.
+  //  2. The stub doesn't stop for an unkept workflow, or doesn't say that only Keep approves one.
+  //  3. Keep or Run it normally sends the wrong step, the wrong answer or no draft key.
+  //  4. A draft with no workflow shows the block.
+  wf: {
+  if (quick && only !== 'workflow') break wf
+  p = await open('wfDraft', '')
+  const block = p.locator('#slip .wide', { hasText: 'Workflows Claude proposed' })
+  const first = (await block.locator('li').first().innerText()).replace(/\s+/g, ' ')
+  check(first.includes('Up to 8 agents on Sonnet, about $12.80 (up to $24.80), about 2.1% of your week.') && first.includes('Eight <b>reports</b> can be read alone.'), `workflow: the row's limits, estimate, share and reason (${first})`)
+  check(await block.locator('li b').count() === 0, 'workflow: the reason runs no markup')
+  check((await block.locator('li').nth(1).innerText()).includes('You kept it.'), 'workflow: a kept row says so')
+  check((await p.locator('#stub h2').innerText()) === 'A workflow needs your answer', 'workflow: the stub stops for it')
+  check(await p.locator('#stub [data-act=lock]').isDisabled(), 'workflow: Lock waits for the answer')
+  check((await p.locator('#stub').innerText()).includes('Only Keep approves a workflow.'), 'workflow: the stub says only Keep approves one')
+  const key = VARIANTS.wfDraft.draftKey
+  await block.locator('li').first().locator('[data-act=wfrow][data-keep]').click()
+  await sent('wfrow keep', b => b.kind === 'wfrow' && b.draft === key && b.state === 'scan' && b.keep === true)
+  await block.locator('li').nth(1).locator('[data-act=wfrow]').click()
+  await sent('wfrow run normally', b => b.kind === 'wfrow' && b.draft === key && b.state === 'audit' && b.keep === false)
+  if (shots) await p.screenshot({ path: join(shots, 'workflow-draft.png'), fullPage: true })
+  await p.context().close()
+  p = await open('draft', '')
+  check(await p.locator('#slip .wide', { hasText: 'Workflows Claude proposed' }).count() === 0, 'workflow: a draft with none has no block')
+  await p.context().close()
+  // The rows at each width, light and dark, and the Library's two Experimental rows.
+  await layout('wfDraft', '', 'workflow-draft')
+  await layout('library', '#library', 'workflow-library')
+  if (only === 'workflow') break others
+  }
+
   pick: {
   if (quick && only !== 'pick') break pick
   const line = async v => {

@@ -1,8 +1,8 @@
 // The plan, the ledger and the stuck detector. Pure functions over `Run`:
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
-import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
+import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, WorkflowRow, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
-import { usageView } from './usage.ts'
+import { WEEKLY, estimate, money, shareOf, usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, namesIn, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
@@ -823,6 +823,7 @@ export function act(r: Run, i: PlanInput, t: string, proofs: Proofs = {}, now = 
   if (i.action === 'define') return define(r, i, t, proofs, now)
   if (i.action === 'revise') {
     if (isLive(r) && !r.draft && changesSkills(r, i)) return refuse(r, SKILLS_FIXED)
+    if (isLive(r) && !r.draft && changesWorkflow(r, i)) return refuse(r, WORKFLOW_FIXED)
     if (addsMidRun(r)) return addStates(r, i, t)
     const whole = revised(r, i)
     if (typeof whole === 'string') return refuse(r, whole)
@@ -1103,6 +1104,7 @@ function here(r: Run, final = false): string {
       : waitOf(st) === 'after' ? 'The user reviews it when it is done: advance tells them, then stop your turn until they answer.' : '',
     `Files you may edit: ${st.files.length ? st.files.join(', ') : 'none in this state'}.`,
     skillsFor(r, st.id).length ? `Skills you may use here: ${skillsFor(r, st.id).join(', ')}. Any other waits until the user names it.` : '',
+    workflowHere(st),
     st.ref ? `Details: ${st.ref}` : '',
     askedLine(st),
     mapHere(r, st),
@@ -1230,6 +1232,75 @@ export function noteAllowed(r: Run, id: string | null | undefined, text: string,
   return !!from && typed.some(m => named(m, from))
 }
 
+// A step's workflow, as the Library's state-workflows switch allows it: up to `agents` agents that only read, on `model` at most.
+// ok is the user's, set when they keep it on the draft; whatever Claude sends for it goes.
+const WORKFLOW_MODELS = ['haiku', 'sonnet', 'opus', 'fable'] as const
+export const WORKFLOW_FIXED = "A step's workflow is set when the plan locks: the user approves it on the draft."
+export const WORKFLOW_NO_FILES = 'A step with a workflow lists no files: its agents only read.'
+export const WORKFLOWS_OFF ="The Library's workflows switch is off, so Sentinel dropped workflow from this plan's states. Only the user turns it on."
+function workflowFrom(v: unknown, id: string): StateDef['workflow'] | string {
+  const w = (v && typeof v === 'object' && !Array.isArray(v) ? v : undefined) as Record<string, unknown> | undefined
+  if (!w) return `workflow on ${id} is { agents, model, why }: how many agents (1 to 50), the dearest model they may run on (${WORKFLOW_MODELS.join(', ')}), and one line on why the step splits.`
+  const agents = w.agents
+  if (typeof agents !== 'number' || !Number.isInteger(agents) || agents < 1 || agents > 50) return `agents in the workflow on ${id} is a whole number from 1 to 50.`
+  const model = typeof w.model === 'string' ? w.model.trim().toLowerCase() : ''
+  if (!WORKFLOW_MODELS.includes(model as never)) return `model in the workflow on ${id} is ${WORKFLOW_MODELS.join(', ')}: the dearest model its agents may run on.`
+  const why = clip(w.why, MAX_WHY)
+  if (!why) return `The workflow on ${id} needs why: one line on why the step splits into parts that need no part's result.`
+  return { agents, model: model as (typeof WORKFLOW_MODELS)[number], why }
+}
+// What a revise of a running plan would change about workflows: a step with one that is new or different, or one that has one
+// and is sent without it.
+function changesWorkflow(r: Run, i: PlanInput): boolean {
+  return (i.states ?? []).some(s => {
+    const had = r.plan?.states.find(x => x.id === s.id?.trim())?.workflow
+    if (s.workflow === undefined) return !!had
+    const now = workflowFrom(s.workflow, '')
+    return typeof now === 'string' || !had || JSON.stringify(now) !== JSON.stringify({ agents: had.agents, model: had.model, why: had.why })
+  })
+}
+// With the switch off, what Claude sent for it goes. had: there was something to drop.
+export function withoutWorkflows(i: PlanInput): { input: PlanInput; had: boolean } {
+  const had = !!i.states?.some(s => s.workflow !== undefined)
+  return { had, input: had ? { ...i, states: i.states?.map(({ workflow: _w, ...s }) => s) } : i }
+}
+const sameWorkflow = (a: StateDef['workflow'], b: StateDef['workflow']) => !!a && !!b && a.agents === b.agents && a.model === b.model && a.why === b.why
+// The workflows on a draft, for its card: each with the estimate, and the share of the week when a weekly price is kept.
+export function workflowRows(r: Run, price?: number): WorkflowRow[] {
+  return (r.plan?.states ?? []).flatMap(s => {
+    const w = s.workflow
+    if (!w) return []
+    const e = estimate({ agents: w.agents, model: w.model })
+    const share = e && shareOf(e.usd, price)
+    return [{ state: s.id, agents: w.agents, model: w.model, why: w.why, ...(e ? { usd: money(e.usd), upTo: money(e.upTo) } : {}), ...(share ? { share } : {}), kept: !!w.ok }]
+  })
+}
+// Keep on the draft's card. Only the user sets ok; a define keeps it while the workflow stays the same.
+export const keepWorkflow = (r: Run, id: string): Run => (r.draft
+  ? { ...r, draft: { ...r.draft, plan: { ...r.draft.plan!, states: r.draft.plan!.states.map(s => (s.id === id && s.workflow ? { ...s, workflow: { ...s.workflow, ok: true as const } } : s)) } } }
+  : r)
+// Run it normally: the step stays, without its workflow.
+export const dropWorkflow = (held: PlanInput, id: string): PlanInput => ({
+  ...held, states: held.states?.map(s => (idOf(s) === id ? (({ workflow: _w, ...rest }) => rest)(s) : s)),
+})
+// What the lock says about the draft's workflows: the kept ones run, the others go.
+export function workflowLock(states: readonly StateDef[]): string {
+  const kept = states.filter(s => s.workflow?.ok).map(s => `${s.id} runs its workflow: up to ${s.workflow!.agents} agents on ${s.workflow!.model}.`)
+  const gone = states.filter(s => s.workflow && !s.workflow.ok).map(s => `${s.id} runs without its workflow: nobody pressed Keep.`)
+  return [...kept, ...gone].join(' ')
+}
+// The start of a step with an approved workflow. Worded as the 23 Nov probe found Claude runs it: told only "haiku or
+// cheaper", Opus and Haiku stopped at a dearer agent to ask; told that Sentinel holds the agents to it, both ran. An
+// added prompt line nobody explained read to Opus as an injection.
+const workflowHere = (st: StateDef) => {
+  const w = st.workflow
+  if (!w?.ok) return ''
+  return `Workflow: the user approved a workflow for this step when they locked the plan: at most ${w.agents} agents in all, counting any rerun in this step, on ${w.model}. `
+    + `Write its script and run it with the Workflow tool, then wait for its result before you advance. Sentinel holds the agents to that as they start: one that asks for a dearer model, or names none, runs on ${w.model}, and one past the ${w.agents}th is refused. `
+    + `It also adds a line to each agent's prompt naming this step. Give every agent() a model, and put each agent() call inside parallel() or pipeline(), so a refused agent comes back as null instead of ending the run. `
+    + 'The agents only read, and this step\'s check still decides.'
+}
+
 // One state as sent. A string says what is wrong. proofOf sets asked and added; okAt and look are Sentinel's own.
 function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | string {
   const id = (s.id ?? '').trim()
@@ -1245,13 +1316,16 @@ function stateFrom(s: NonNullable<PlanInput['states']>[number]): StateDef | stri
   const parts = Array.isArray(s.parts) ? [...new Set(s.parts.filter((p): p is string => typeof p === 'string').map(p => p.trim()).filter(Boolean))] : []
   const skills = skillsFrom(s.skills, id)
   if (typeof skills === 'string') return skills
+  const workflow = s.workflow === undefined ? undefined : workflowFrom(s.workflow, id)
+  if (typeof workflow === 'string') return workflow
+  if (workflow && (s.files ?? []).some(f => typeof f === 'string' && f.trim())) return WORKFLOW_NO_FILES
   if (group && !/^[A-Za-z0-9][\w-]*(\/[A-Za-z0-9][\w-]*)*$/.test(group)) return `Bad group "${group}" on ${id}: use letters, digits, - and _, with / for a group inside a group.`
   if (s.wait !== undefined && ![true, false, 'before', 'after'].includes(s.wait)) return `wait on ${id} is "before" (the user OKs your plan for it first) or "after" (they review the finished work).`
   const wait: Wait | undefined = s.wait === 'after' ? 'after' : s.wait ? 'before' : undefined
   if (s.once !== undefined && typeof s.once !== 'boolean') return `"once" on ${id} must be true or false.`
   if (s.once && !check) return `${id} has "once" but no check. "once" means its check runs at its advance and not again at the end.`
   const flow = typeof s.flow?.name === 'string' && typeof s.flow.as === 'string' ? { name: s.flow.name, as: s.flow.as, why: String(s.flow.why ?? '') } : undefined
-  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(skills.length ? { skills } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}), ...(s.weight ? { weight: s.weight } : {}), ...(s.weightWhy ? { weightWhy: s.weightWhy } : {}), ...(s.weightQuote ? { weightQuote: s.weightQuote } : {}), ...(s.weightOk ? { weightOk: true as const } : {}), ...(s.adds?.length ? { adds: s.adds } : {}) }
+  return { id, label: s.label?.trim() || id, ...(check ? { check } : {}), ...(s.once ? { once: true as const } : {}), files: (s.files ?? []).map(f => f.trim()).filter(Boolean), ...(parts.length ? { parts } : {}), ...(skills.length ? { skills } : {}), ...(ref ? { ref } : {}), ...(group ? { group } : {}), ...(title ? { title } : {}), ...(problem ? { problem } : {}), ...(approach ? { approach } : {}), ...(wait ? { wait } : {}), ...(needs ? { needs } : {}), ...(flow ? { flow } : {}), ...(s.weight ? { weight: s.weight } : {}), ...(s.weightWhy ? { weightWhy: s.weightWhy } : {}), ...(s.weightQuote ? { weightQuote: s.weightQuote } : {}), ...(s.weightOk ? { weightOk: true as const } : {}), ...(s.adds?.length ? { adds: s.adds } : {}), ...(workflow ? { workflow } : {}) }
 }
 
 // What is wrong with these states as a plan. Nothing can run beside a state in `done`, so it can't share files with one.
@@ -1402,10 +1476,13 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
       const was = r.draft?.plan?.states.find(x => x.id === s.id)
       if (s.added && was?.okAt && was.added === s.added) states[k] = { ...s, okAt: was.okAt }
       if (s.weight && was?.weightOk && was.weight === s.weight && was.weightWhy === s.weightWhy) states[k] = { ...states[k]!, weightOk: true }
+      if (was?.workflow?.ok && sameWorkflow(s.workflow, was.workflow)) states[k] = { ...states[k]!, workflow: { ...s.workflow!, ok: true } }
     }
   }
   const looser = looserLeft(i.library, states)
-  const drafting = r.review || additions.length > 0 || looser.length > 0
+  // A workflow runs only once the user keeps it on the draft, so a plan with one is drafted even after a plan-mode sign-off.
+  const unkept = states.filter(s => s.workflow && !s.workflow.ok).map(s => s.id)
+  const drafting = r.review || additions.length > 0 || looser.length > 0 || unkept.length > 0
   const audit: Audit[] = []
   for (const d of i.decisions ?? []) {
     const topic = d.topic?.trim()
@@ -1432,6 +1509,7 @@ function define(r: Run, i: PlanInput, t: string, proofs: Proofs, now: number): A
     const ticks = depth.length ? ` As they lock it they tick the depth answers they want (${depth.map(d => d.id).join(', ')}); a state named by one they leave unticked comes out.` : ''
     const waits = (r.review || !additions.length ? '' : `Nothing the user approved asks for ${additions.join(', ')}, so this waits for their answer instead of locking.\n`)
       + (looser.length ? `Looser than the plan, so these wait for the user's answer: ${looser.join(', ')}. If they lock it without answering, the plan's weight stands.\n` : '')
+      + unkept.map(id => `The workflow on ${id} waits for the user's Keep on the draft, where it shows a cost estimate. If they lock it without keeping it, ${id} runs without it.\n`).join('')
     const text = `${waits}Draft saved: ${rail}, starting at ${run.active}.${before}\nThe user checks it in the Sentinel pane and locks it with /sentinel lock, or tells you what to change (then call revise with what changes).${ticks} Stop here and wait for them.`
     return { run: { ...r, review: true, draft: run, held: { ...i, named: undefined, messages: undefined, depth: depth.length ? depth : undefined, points: points.length ? points : undefined }, quiet: true }, ok: true, event: 'drafted', text }
   }
@@ -1718,6 +1796,9 @@ export function instructionOf(raw: unknown): InstructionDef | string {
 // The Library's experimental switch. Only the user turns it on. With it off, a plan has one weight for all its states, as
 // it always has, and Claude never hears of anything else.
 export const STATE_SETTINGS = 'state-settings'
+// The second experimental switch: Claude may give a step a workflow. Like the first, no weight sets it and only the user turns it on.
+export const WORKFLOWS = 'state-workflows'
+const EXPERIMENTAL = [STATE_SETTINGS, WORKFLOWS]
 // The built-ins a state's own weight can move. Every other instruction is the plan's.
 const WEIGHT_MOVES = ['fast-checks', 'failure-list', 'fails-first', 'break-it-once', 'fails-without-change']
 const WEIGHT_RANK: Record<Weight, number> = { light: 0, standard: 1, thorough: 2 }
@@ -1727,12 +1808,12 @@ type LibItem = { name: string; weights?: readonly Weight[]; trusted?: boolean; o
 const sw = (s: Switches, name: string) => (s.on && Object.hasOwn(s.on, name) ? s.on[name] : undefined)
 // An item's switch flipped by hand, if it has one, from the closest place that has one: this project, the preset in
 // use, every project. A place that picks a weight takes the built-ins over, so a farther switch no longer counts for
-// them. The user's own items keep it, and so does state-settings, which is in no weight.
+// them. The user's own items keep it, and so do the experimental switches, which are in no weight.
 function handOn(it: LibItem, ...places: Switches[]): boolean | undefined {
   for (const s of places) {
     const v = sw(s, it.name)
     if (v !== undefined) return v
-    if (s.weight && it.weights && !it.own && it.name !== STATE_SETTINGS) return undefined
+    if (s.weight && it.weights && !it.own && !EXPERIMENTAL.includes(it.name)) return undefined
   }
   return undefined
 }
@@ -1755,9 +1836,9 @@ export function handOf(items: readonly LibItem[], project: Switches = {}, person
 }
 
 // A switches file with a weight picked: the built-ins' switches go, so the weight sets them; the user's items keep theirs.
-// state-settings keeps its switch, since no weight decides it.
+// The experimental switches keep theirs, since no weight decides them.
 export function withWeight(s: Switches, weight: Weight, builtins: readonly string[]): Switches {
-  const on = Object.fromEntries(Object.entries(s.on ?? {}).filter(([name]) => !builtins.includes(name) || name === STATE_SETTINGS))
+  const on = Object.fromEntries(Object.entries(s.on ?? {}).filter(([name]) => !builtins.includes(name) || EXPERIMENTAL.includes(name)))
   return { weight, ...(Object.keys(on).length ? { on } : {}) }
 }
 
@@ -1843,7 +1924,8 @@ export function libraryAsk(words: string, ctx: { weight: Weight; preset?: string
   if (v === 'flow' && rest.length === 1 && rest[0]!.toLowerCase() === 'discard') return { names: [...(ctx.draft ? [ctx.draft.name, ctx.draft.kind] : []), 'flow', 'instruction'], looser: false }
   if ((v === 'on' || v === 'off') && rest.length) {
     const p = place(rest)
-    if (p.name.toLowerCase() === STATE_SETTINGS) return 'Only the user turns state-settings on or off. Ask them to type the command.'
+    const exp = EXPERIMENTAL.find(n => n === p.name.toLowerCase())
+    if (exp) return `Only the user turns ${exp} on or off. Ask them to type the command.`
     return { names: [p.name], looser: v === 'off', ...(p.place ? { place: p.place } : {}) }
   }
   if (v === 'weight' && rest.length) {
@@ -1971,7 +2053,7 @@ export function planSettings(lib: PlanLibrary, sent: unknown, items: readonly { 
     const weight = x?.weight
     if (!name && weight === undefined) return 'Each of "settings" names a weight, or an instruction with name and on.'
     if (!name && !isWeight(weight)) return 'A weight in "settings" is light, standard or thorough.'
-    if (name === STATE_SETTINGS) return 'Only the user turns state-settings on or off.'
+    if (name && EXPERIMENTAL.includes(name)) return `Only the user turns ${name} on or off.`
     if (name && !items.some(it => it.name === name && it.trusted !== false)) return `There is no instruction "${name}" to set.`
     if (name && typeof x.on !== 'boolean') return `${name} in "settings" needs "on", true or false.`
     const why = clip(x.why, MAX_WHY)
@@ -2116,8 +2198,8 @@ export function lockDraft(r: Run, t: string, now = Date.now()): Run {
   const d = r.draft!
   // The clock starts at the lock, not at the draft.
   const tasks = Object.fromEntries(Object.entries(d.tasks ?? {}).map(([id, k]) => [id, { ...k, visits: k.visits.map(v => ({ ...v, from: now })) }]))
-  // A lock keeps what the user hasn't answered.
-  const states = d.plan!.states.map(s => (s.added && !s.okAt ? { ...s, okAt: t } : s))
+  // A lock keeps what the user hasn't answered, except a workflow: only Keep approves one, so an unkept one goes.
+  const states = d.plan!.states.map(s => (s.added && !s.okAt ? { ...s, okAt: t } : s)).map(s => (s.workflow && !s.workflow.ok ? (({ workflow: _w, ...rest }) => rest)(s) : s))
   return { ...d, plan: { ...d.plan!, lockedAt: t, states }, startedAt: now, tasks, log: [...d.log, { t, icon: '●', tone: 'acc', text: 'Locked by the user' }], ...(d.drawing ? { drawing: { ...d.drawing, locked: d.drawing.map } } : {}), ...(r.refused ? { refused: r.refused } : {}), ...keepCount(r), ...(r.flowDraft ? { flowDraft: r.flowDraft } : {}) }
 }
 
@@ -2380,6 +2462,7 @@ function amend(r: Run, i: PlanInput, t: string): Acted {
   const files = (i.files ?? []).map(f => f.trim()).filter(Boolean)
   const check = i.check?.trim()
   if (!files.length && !check) return refuse(r, 'amend needs files to add, or a new check.')
+  if (files.length && st.workflow) return refuse(r, WORKFLOW_NO_FILES)
   const risky = files.find(f => breakingKind(f))
   if (risky && !r.breakingOk) return refuse(r, `${risky} looks like ${breakingKind(risky)}, which is on the breaking list. Call plan with action "escalate" and kind "breaking", ask the user, then amend.`)
   // A member edits its state's files in its own worktree, and its work comes back over the project's.
@@ -2559,6 +2642,8 @@ export type VM = {
   // The plan's weight, with any Library; the settings Claude chose, only with the per-state settings on.
   planWeight?: Weight
   settingRows?: SettingRow[]
+  // A draft's workflows, with the workflows switch on.
+  workflowRows?: WorkflowRow[]
   paused: boolean
   // Skills every state may call; a state's own ride on the state.
   skills?: string[]
@@ -3101,6 +3186,7 @@ export function summarize(top: Run, look: MapLook = {}): VM {
     ...(top.draft && { points: top.held?.points ?? [] }),
     ...(r.library ? { planWeight: r.library.weight } : {}),
     ...(r.library?.states ? { settingRows: settingRows(r) } : {}),
+    ...(top.draft && r.library?.on.includes(WORKFLOWS) ? { workflowRows: workflowRows(r, top.usage?.windows.some(w => w.kind === WEEKLY) ? top.usage.perPoint : undefined) } : {}),
     ...(facts && { proof: {
       quoted: plan!.states.filter(s => s.asked?.length).length,
       of: plan!.states.filter(s => s.asked?.length || s.added).length,

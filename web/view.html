@@ -933,8 +933,9 @@ label.lrow:hover { background: color-mix(in srgb, var(--ink) 7%, var(--panel)); 
 .slow-cells i.on { background: var(--amber-fill); box-shadow: none; }
 .wnote { margin-top: var(--s2); font-size: 13.5px; color: var(--ink-3); }
 .wnote b { color: var(--ink); font-weight: 600; }
-/* The experimental switch: a row of its own, under the weights. No weight turns it on. */
-.xsw { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: var(--s3); margin-top: var(--s3); padding: 8px var(--s4) 8px var(--s2); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); }
+/* The experimental switches: a row each, under the weights. No weight turns them on. */
+.xsw { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }
+.xsw > div { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: var(--s3); padding: 8px var(--s4) 8px var(--s2); border-radius: var(--r1); background: color-mix(in srgb, var(--ink) 4%, var(--panel)); }
 .xsw:empty { display: none; }
 .xsw b { font: 600 14.5px/1.3 var(--f-text); }
 .xsw .tag { margin-left: 8px; vertical-align: 1px; }
@@ -1950,6 +1951,12 @@ function stub(kind, n, done) {
     return { k: 'Your sign-off', h: many ? `${owed.length} states need your answer` : 'One state needs your answer', p: `Keep or take out ${many ? 'the states' : 'the state'} Claude added, then lock the plan.`,
       acts: [['Lock the plan', 'lock', 'pri', 'lock', true], LOCK_FREE, ['Ask for changes', null, '', 'changes']], fine: `Or type ${code('/sentinel lock')} in the chat, which keeps ${many ? 'them' : 'it'}. Lock and go hands-free does too, and ${FREE_NOTE}` }
   }
+  const flows = kind === 'draft' ? (vm.workflowRows ?? []).filter(r => !r.kept) : []
+  if (flows.length) {
+    const many = flows.length > 1
+    return { k: 'Your sign-off', h: many ? `${flows.length} workflows need your answer` : 'A workflow needs your answer', p: `Keep ${many ? 'each' : 'it'} to let its agents run, or run the step normally, then lock the plan.`,
+      acts: [['Lock the plan', 'lock', 'pri', 'lock', true], LOCK_FREE, ['Ask for changes', null, '', 'changes']], fine: `Only Keep approves a workflow. Lock and go hands-free, or ${code('/sentinel lock')} in the chat, runs ${many ? 'those steps' : 'the step'} normally.` }
+  }
   const loose = kind === 'draft' ? (vm.settingRows ?? []).filter(r => r.owed) : []
   if (loose.length) {
     return { k: 'Your sign-off', h: loose.length > 1 ? `${loose.length} looser settings need your answer` : 'A looser setting needs your answer', p: "Keep it or use the plan's setting, then lock the plan.",
@@ -2112,7 +2119,7 @@ const SLIP = {
     const flows = `Add a saved flow</h3><p>In the List below, press <b>Add a flow here</b> between two parts to put one of your flows there, and Remove to take one out.${fl.length ? ` This draft already has ${and(fl.map(x => `<b>${esc(x)}</b>`))}.` : ''}</p>`
     return `<div class="slip-h"><h2>Before you lock it</h2>${from ? `<span class="quiet">From ${esc(srcName(from))}. ${esc(from.origin)}.</span>` : vm.source ? `<span class="quiet">From ${code(short(vm.source))}</span>` : ''}</div>`
       + `<div class="slip-b">${where ? `${where}<div>${locking}<h3 class="gap">${flows}</div>` : `<div>${locking}</div><div><h3>${flows}</div>`}`
-      + pointsBlock() + quotesBlock() + settingsBlock() + depthBlock() + planInsBlock()
+      + pointsBlock() + quotesBlock() + workflowBlock() + settingsBlock() + depthBlock() + planInsBlock()
       + chgBox('draftchg', 'For example: split a state into the route and its tests.') + '</div>'
   },
   stuck() {
@@ -2168,6 +2175,15 @@ function quotesBlock() {
   }).join('')}</ul></details></div>`
 }
 
+// The workflows Claude gave steps, with the Library's workflows switch on. Each runs only once kept, with its estimate shown.
+function workflowBlock() {
+  const rows = vm.workflowRows
+  if (!rows?.length) return ''
+  const btn = (r, label, keep) => `<button type="button" class="btn sm${keep ? ' pri' : ''}" data-act="wfrow" data-state="${esc(r.state)}"${keep ? ' data-keep="1"' : ''}>${label}</button>`
+  const cost = r => r.usd ? `, about ${r.usd} (up to ${r.upTo})${r.share ? `, ${r.share} of your week` : ''}` : ''
+  return `<div class="wide"><h3>Workflows Claude proposed</h3><p class="lead">The agents only read. Sentinel holds them to the number and the model you keep here. The spend isn't capped.</p><ul class="setl">${rows.map(r => `<li${r.kept ? '' : ' class="open"'}><span class="sts">${code(r.state)}</span><span><span class="mini${r.kept ? '' : ' need'}">${r.agents} on ${esc(cap(r.model))}</span></span><span class="why">Up to ${r.agents} agents on ${esc(cap(r.model))}${cost(r)}. ${r.kept ? 'You kept it. ' : ''}Claude's reason: “${esc(r.why)}”</span><span class="row">${r.kept ? btn(r, 'Run it normally') : btn(r, 'Keep', true) + btn(r, 'Run it normally')}</span></li>`).join('')}</ul></div>`
+}
+
 // What Claude set apart from the plan's weight, one row for each reason, with the Library's settings per state on.
 function settingsBlock() {
   const rows = vm.settingRows
@@ -2190,7 +2206,7 @@ const depthBlock = () => !vm.depth?.length ? '' : `<div class="wide"><h3>Deeper,
 // switches at the lock.
 let planKeep = false
 function planInsBlock() {
-  const pl = vm.draftLibrary, ins = (vm.library?.instructions ?? []).filter(i => i.trusted !== false && i.name !== XS)
+  const pl = vm.draftLibrary, ins = (vm.library?.instructions ?? []).filter(i => i.trusted !== false && !XALL.includes(i.name))
   if (!pl || !ins.length) return ''
   const diff = ins.filter(i => weighted(i) && pl.on.includes(i.name) !== i.weights.includes(pl.weight)).length
   return `<div class="wide"><h3>Instructions for this plan</h3>
@@ -2283,6 +2299,7 @@ function onAct(e) {
     return planSend(w, pl.on.filter(n => !ins.some(i => moves(i) && i.name === n)).concat(ins.filter(i => moves(i) && i.weights.includes(w) && i.trusted !== false).map(i => i.name)))
   }
   if (act === 'setrow') return send({ kind: 'setrow', draft: vm.draftKey, id: b.dataset.row, keep: b.dataset.keep === '1' })
+  if (act === 'wfrow') return send({ kind: 'wfrow', draft: vm.draftKey, state: b.dataset.state, keep: b.dataset.keep === '1' })
   if (act === 'keepadded' || act === 'dropadded') return send({ kind: act, draft: vm.draftKey, state: b.dataset.st })
   if (act === 'draftchg') return send({ kind: 'draft', text: text('chg') }, { q: 'The draft', ans: 'Changes asked for', where: 'Check the draft again once it changes.' })
   if (act === 'pause' || act === 'resume') return send({ kind: act, state: a })
@@ -4647,10 +4664,12 @@ const kindCell = i => i.kind === 'checks' ? `<span class="kb checks">${icon('che
 const libItems = () => [...(vm.library?.instructions ?? []), ...(vm.flows ?? []).map(f => ({ ...f, kind: 'flow' }))]
 // The experimental switch: a built-in with its own row, which no weight turns on.
 const XS = 'state-settings'
+const XW = 'state-workflows'
+const XALL = [XS, XW]
 // What a weight sets. Your own items keep their switches, even with a list of weights.
 const LOCK_FREE = ['Lock and go hands-free', null, '', 'lockfree']
 const FREE_NOTE = 'Claude makes the calls that would wait for you, and lists them for you to check.'
-const weighted = i => i.weights && !i.own && i.name !== XS
+const weighted = i => i.weights && !i.own && !XALL.includes(i.name)
 const pick = (s, n) => s.on && Object.hasOwn(s.on, n) ? s.on[n] : undefined
 // What a weight picked on the draft moves: what it sets, and your own with a list unless you switched them, as libraryOn has it.
 const moves = i => weighted(i) || (i.own && i.weights?.length && below('project').every(k => pick(switches()[k], i.name) === undefined))
@@ -4717,7 +4736,7 @@ function renderLib() {
   $('askf').placeholder = ins ? 'For example: keep each check under a minute, and run whole suites only at the final checks.' : 'For example: after any state that edits web/, check the page at three widths.'
   $('t-ins').hidden = !ins
   $('t-flows').hidden = ins
-  $('nIns').textContent = (vm.library?.instructions ?? []).filter(i => shownIn(i, swScope) && i.name !== XS).length
+  $('nIns').textContent = (vm.library?.instructions ?? []).filter(i => shownIn(i, swScope) && !XALL.includes(i.name)).length
   $('nFl').textContent = (vm.flows ?? []).filter(f => shownIn(f, swScope)).length
   renderPresets()
   if (ins) renderIns()
@@ -4941,7 +4960,7 @@ function renderIns() {
   $('noLib').hidden = !!L
   $('wsect').hidden = !L
   if (!L) { put($('ilist'), ''); put($('tot'), ''); put($('idet'), ''); put($('xsw'), ''); return }
-  const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope) && i.name !== XS)
+  const sw = switches(), w = weightOf(swScope), shown = libItems().filter(i => shownIn(i, swScope)), all = L.instructions.filter(i => shownIn(i, swScope) && !XALL.includes(i.name))
   // Where the weight comes from, when it isn't the place on screen.
   const wFrom = below(swScope).find(k => sw[k]?.weight)
   $('wLabel').textContent = `${SCOPE[swScope]}: ${cap(w.weight)}${!wFrom ? ', the usual' : wFrom !== swScope ? ` from ${LNAME(wFrom)}` : ''}${w.diff ? `, ${plural(w.diff, 'change')}` : ''}`
@@ -4958,9 +4977,11 @@ function renderIns() {
   if (!scopes.includes(insScope)) insScope = 'All'
   put($('insScope'), scopes.map(x => `<button type="button" data-ins-scope="${esc(x)}" aria-pressed="${x === insScope}">${esc(x)}</button>`).join(''))
   const m = onMap(swScope), q = insQ.trim().toLowerCase()
-  const xs = L.instructions.find(i => i.name === XS)
-  put($('xsw'), xs ? `<label class="ck sw"><input type="checkbox" data-sw="${XS}"${m.on[XS] ? ' checked' : ''}${live ? '' : ' disabled'} aria-label="${esc(xs.title)} on"></label>
-    <div><b>${esc(xs.title)}</b><span class="tag sm">Experimental</span><p>Claude can set a weight for one state, add an instruction to one state, or skip one with a reason, and each shows on the draft. This is here for testing. With it off, plans run as they did before.</p></div>` : '')
+  // The experimental switches, one row each. No weight sets them, and they stay out of the list below.
+  const XSAY = { [XS]: 'Claude can set a weight for one state, add an instruction to one state, or skip one with a reason, and each shows on the draft. This is here for testing. With it off, plans run as they did before.',
+    [XW]: 'Claude can propose a workflow for one step: up to a number of agents on a model you approve on the draft, with a cost estimate. Its agents only read. This is here for testing. With it off, plans run as they did before.' }
+  put($('xsw'), XALL.map(n => L.instructions.find(i => i.name === n)).filter(Boolean).map(x => `<div><label class="ck sw"><input type="checkbox" data-sw="${esc(x.name)}"${m.on[x.name] ? ' checked' : ''}${live ? '' : ' disabled'} aria-label="${esc(x.title)} on"></label>
+    <div><b>${esc(x.title)}</b><span class="tag sm">Experimental</span><p>${XSAY[x.name]}</p></div></div>`).join(''))
   const list = all.filter(i => (insScope === 'All' || i.scope === tabKey(insScope)) && `${i.name} ${i.title ?? ''} ${i.description ?? ''} ${i.text}`.toLowerCase().includes(q))
   if (!all.some(i => insKey(i) === insSel)) insSel = all[0] ? insKey(all[0]) : ''
   const row = i => {

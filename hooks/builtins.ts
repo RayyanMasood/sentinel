@@ -1,7 +1,7 @@
 // The Library items Sentinel ships. Read-only: the user switches them on or off, or copies one to edit it. A weight
-// turns on the built-ins that list it; sources-first, close-phase and state-settings are in no weight, so they start off.
+// turns on the built-ins that list it; sources-first, close-phase, state-settings and state-workflows are in no weight, so they start off.
 import type { FlowDef, InstructionDef, Weight } from '../types'
-import { STATE_SETTINGS } from './core.ts'
+import { STATE_SETTINGS, WORKFLOWS } from './core.ts'
 
 export const WEIGHTS: readonly Weight[] = ['light', 'standard', 'thorough']
 
@@ -91,6 +91,13 @@ export const BUILTINS: readonly Builtin[] = [
       + 'each with why or quote. A quote is compared with what the user typed: for an instruction turned on or a stricter weight, its name and one more '
       + 'word will do; anything looser needs at least 5 words that name it. A stricter setting applies with its reason shown. A looser one with only a reason waits '
       + 'for the user on the draft; hands-free it goes through and is listed for them. Leave alone a state that fits the plan.',
+  },
+  {
+    name: WORKFLOWS, title: 'Workflows in a step', at: 'draft', kind: 'told', weights: [],
+    text: 'You may give a step a workflow: define and revise take workflow on a state, { agents, model, why }. '
+      + 'Give one only when the step\'s reading, judging or measuring splits into many independent parts, it will take more than about an hour, and no part needs another part\'s result. '
+      + 'The step then lists no files and only reads: its agents report, and you or a later step make the changes. model is the dearest model its agents may run on (haiku, sonnet, opus or fable), '
+      + 'and why says what the parts are. The user approves it on the draft, where it shows a cost estimate. Leave alone a step that does not split that way.',
   },
 ]
 

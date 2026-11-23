@@ -11,7 +11,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, snapTaken, helpedBy, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
-  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, WORKFLOWS, WORKFLOWS_OFF, withoutWorkflows, keepWorkflow, dropWorkflow, workflowLock, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
   libraryAsk, notAsked, NOT_LIBRARY, pickLoosens, skillAllowed, noteAllowed,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
@@ -122,6 +122,7 @@ export const SCHEMA = {
           files: { type: 'array', items: { type: 'string' }, description: 'globs this state may edit' },
           parts: { type: 'array', items: { type: 'string' }, description: "the ids of the system map's parts this state builds, parts with nothing inside them. Sentinel records where they stand when the state starts and what its check proves." },
           skills: { type: 'array', items: { type: 'string' }, description: 'skills this state calls, as the Skill tool names them (plugin:skill). Fixed when the plan locks.' },
+          workflow: { type: 'object', description: "only when the Library's workflows switch is on: { agents, model, why } for a step whose reading, judging or measuring splits into many independent parts, takes more than about an hour, and needs no part's result for another. The step lists no files and only reads. model: haiku, sonnet, opus or fable, the dearest its agents may run on. The user approves it on the draft, with a cost estimate. Fixed when the plan locks.", properties: { agents: { type: 'number' }, model: { type: 'string' }, why: { type: 'string' } } },
           ref: { type: 'string', description: 'where this state is described (doc section, plan step)' },
           asked: { type: 'array', items: { type: 'string' }, description: `where this state came from: short quotes copied word for word from the plan the user approved or their typed messages, at least 5 words each or a whole message. Sentinel compares them and refuses any that aren't there. Words from a part marked out of scope don't count.` },
           added: { type: 'string', description: 'in place of asked, when nothing the user approved or typed asks for this state: your reason, in a sentence. The state shows as your addition. Added while a plan runs, it goes in and finishes, unless its files can reach the breaking list: then it asks the user when it starts.' },
@@ -338,13 +339,15 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const band = e.props.hasSurvey ? undefined : renderBand($.ui.resolve(e), summarize(await read($, run), looked), {
+    const r = await read($, run)
+    const band = e.props.hasSurvey ? undefined : renderBand($.ui.resolve(e), summarize(r, looked), {
       open: focus => void openPane($, focus),
       system: () => void update($, view, () => 'system').then(() => lookAll($)).then(() => openPane($, false)),
       lock: () => void lockNow($),
       keep: id => void keepNow($, id),
       takeOut: id => void takeOut($, id).then(t => $.ui.toast(`Sentinel: ${t}`)),
       setRow: (id, keep) => void answerRow($, id, keep).then(t => (t ? $.ui.toast(`Sentinel: ${t}`) : undefined)),
+      wfRow: (id, keep) => void answerWorkflow($, id, keep, draftKey(r)).then(t => (t ? $.ui.toast(`Sentinel: ${t}`) : undefined)),
       resume: () => void resume($),
       answer: () => void answerNow($),
       asking: stopOpen !== undefined,
@@ -825,8 +828,10 @@ async function lockNow($: $, picked: string[] = [], free = false): Promise<strin
     if (why) return `Sentinel couldn't take out ${gone.join(', ')}: ${why}`
   }
   let d: Run | undefined
+  let flows = ''
   await change($, x => {
     if (!x.draft) return x
+    flows = workflowLock(x.draft.plan?.states ?? [])
     const locked = lockDraft(x.draft.library ? { ...x, draft: { ...x.draft, library: { ...x.draft.library, mcps } } } : x, now())
     return (d = free ? handsFree(locked, true, now()) : locked)
   })
@@ -834,9 +839,9 @@ async function lockNow($: $, picked: string[] = [], free = false): Promise<strin
   void after($)
   const unsaved = d.drawing ? await saveMap($, d.drawing.map) : undefined
   const took = gone.length ? `Sentinel took out ${gone.join(', ')}, there only for answers the user left unticked.` : ''
-  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, stands, unsaved ?? ''].filter(Boolean).join(' ')
+  const picks = [chosen.length ? `The user chose: ${texts(chosen)}.` : '', left.length ? `The user left out: ${texts(left)}.` : '', took, stands, flows, unsaved ?? ''].filter(Boolean).join(' ')
   later($, `${TAG} The user checked the draft and locked "${d.plan!.title}". Active state: ${d.active}.${picks ? ` ${picks}` : ''}${free ? ` ${HANDS_FREE}` : ''} Call ${TOOL} with action "status" first, then continue the work.`)
-  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${unsaved ? ` ${unsaved}` : ''}`
+  return `Locked "${d.plan!.title}" at ${d.active}.${gone.length ? ` Took out ${gone.join(', ')}, named by answers you left unticked.` : ''}${unanswered.length ? ` Kept ${unanswered.join(', ')}, which Claude added.` : ''}${stands ? ` ${stands}` : ''}${flows ? ` ${flows}` : ''}${unsaved ? ` ${unsaved}` : ''}`
 }
 
 const keepNow = ($: $, id: string) => change($, x => keepAdded(x, id, now()))
@@ -852,6 +857,19 @@ async function answerRow($: $, id: string, keep: boolean): Promise<string> {
     return changeDraft($, held => (held.library ? { ...held, library: planLibrary({ ...answerSetting(held.library, row.key!, keep, l.items), items: l.items, project: l.project, preset: l.preset, personal: l.personal, pick: held.library.preset }) } : held), '')
   }
   return changeDraft($, held => (row.kind === 'weight' ? dropWeights(held, row.states) : dropAdd(held, row.states, row.name!)), '')
+}
+
+// Keep or Run it normally on a workflow the draft shows, from the page or the band. key: the draft the user saw, checked
+// again inside the change, so a revise that lands meanwhile isn't kept. Keep needs no replay; Run it normally takes it
+// out of what Claude sent, so a later replay doesn't bring it back.
+async function answerWorkflow($: $, id: string, keep: boolean, key: string | undefined): Promise<string> {
+  const stale = 'That workflow has changed. Check the draft again.'
+  const r = await read($, run)
+  if (draftKey(r) !== key || !r.draft?.plan?.states.find(s => s.id === id)?.workflow) return stale
+  if (!keep) return changeDraft($, held => dropWorkflow(held, id), '')
+  let why = ''
+  await change($, x => (draftKey(x) === key ? keepWorkflow(x, id) : ((why = stale), x)))
+  return why
 }
 
 // Takes a state Claude added out of the draft. Only those: a state with a quote was asked for, and a flow's is the user's.
@@ -1098,6 +1116,13 @@ async function planCall($: $, raw: PlanInput, user = false, signal?: AbortSignal
         const { settings: _settings, ...rest } = input
         input = { ...rest, library: planLibrary({ ...got, items: l.items, project: l.project, preset: l.preset, personal: l.personal, pick: base.preset }) }
       }
+    }
+    // The workflows switch, the same way, read from the draft's copy of the Library, or the run's when no draft is open.
+    const wfLib = input.action === 'define' ? input.library : (was.draft ?? was).library
+    if (!wfLib?.on.includes(WORKFLOWS)) {
+      const off = withoutWorkflows(input)
+      input = off.input
+      if (off.had) dropped = [dropped, WORKFLOWS_OFF].filter(Boolean).join('\n')
     }
   }
   // The preset Claude picked, on record: the plan's decisions list it, and the draft card shows it.
@@ -1629,7 +1654,7 @@ async function promptSection($: $): Promise<string> {
   const text = librarySection(at('always'), running ? [] : [...at('draft'), ...((await parallelOn($)) ? [PARALLEL_DRAFT] : [])])
   // While no plan runs, each item's name and switch, so an ask that names one ("the overseer") reaches it, and the
   // presets Claude can pick from for the next plan.
-  const items = l ? `The Library's items here, for "library" on or off: ${[...l.items, ...l.flows].filter(x => x.name !== STATE_SETTINGS).map(x => `${x.name} ${l.on.includes(x.name) ? 'on' : 'off'}`).join(', ')}.` : ''
+  const items = l ? `The Library's items here, for "library" on or off: ${[...l.items, ...l.flows].filter(x => x.name !== STATE_SETTINGS && x.name !== WORKFLOWS).map(x => `${x.name} ${l.on.includes(x.name) ? 'on' : 'off'}`).join(', ')}.` : ''
   return [text, items, l ? await presetLines($, l).catch(() => '') : ''].filter(Boolean).join('\n')
 }
 
@@ -3570,15 +3595,20 @@ async function fromPage($: $, m: Record<string, unknown>) {
   // told comes from the Library as it is now.
   if (m.kind === 'libplan' && r.draft && m.draft === draftKey(r) && WEIGHTS.includes(m.weight as Weight) && Array.isArray(m.on)) {
     const l = await libraryNow($)
-    // The experimental switch isn't one of the draft's choices: it stays as the plan was drafted.
-    const picked = [...l.items, ...l.flows].filter(x => x.trusted && x.name !== STATE_SETTINGS && (m.on as unknown[]).includes(x.name)).map(x => x.name)
-    const on = r.held?.library?.on.includes(STATE_SETTINGS) ? [...picked, STATE_SETTINGS] : picked
+    // The experimental switches aren't among the draft's choices: they stay as the plan was drafted.
+    const switches = [STATE_SETTINGS, WORKFLOWS]
+    const picked = [...l.items, ...l.flows].filter(x => x.trusted && !switches.includes(x.name) && (m.on as unknown[]).includes(x.name)).map(x => x.name)
+    const on = [...picked, ...switches.filter(n => r.held?.library?.on.includes(n))]
     const why = await changeDraft($, held => ({ ...held, library: planLibrary({ weight: m.weight as Weight, on, items: l.items, project: l.project, preset: l.preset, personal: l.personal, settings: cardSettings(held.library?.settings, m.weight as Weight, on), pick: held.library?.preset }) }), '')
     return why ? toast(why) : undefined
   }
   // An answer on the draft card's settings. The row comes from the draft as it stands, so a stale page changes nothing.
   if (m.kind === 'setrow' && r.draft && m.draft === draftKey(r) && typeof m.id === 'string') {
     const why = await answerRow($, m.id, m.keep === true)
+    return why ? toast(why) : undefined
+  }
+  if (m.kind === 'wfrow' && r.draft && m.draft === draftKey(r) && typeof m.state === 'string') {
+    const why = await answerWorkflow($, m.state, m.keep === true, draftKey(r))
     return why ? toast(why) : undefined
   }
   // The update check's mark, said to be fine from the page. It needs no plan.

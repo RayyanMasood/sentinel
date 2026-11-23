@@ -44,7 +44,7 @@ export function shareOf(usd: number, price: number | undefined): string | undefi
   return share < 0.1 ? 'under 0.1%' : `about ${Number(share.toFixed(1))}%`
 }
 
-const money = (usd: number) => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
+export const money = (usd: number) => (usd >= 100 ? `$${Math.round(usd)}` : `$${usd.toFixed(2)}`)
 
 // What one model response and one workflow cost. Dollars per million tokens: input, output, cache read. A cache write costs
 // 1.25 x input. A model matches when its id contains the key, so a longer id goes before the shorter one it contains

@@ -27,6 +27,9 @@ export type StateDef = {
   // weightQuote: the user's words that asked for it. weightOk: the user asked for it or kept it, which a weight looser than
   // the plan's needs. adds: instructions on top.
   weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[]
+  // With the Library's state-workflows switch on: the step reads, judges or measures in parts, with up to `agents` agents on
+  // `model` at most, and `why` it splits. The step lists no files. ok: the user kept it on the draft; Sentinel sets it.
+  workflow?: { agents: number; model: 'haiku' | 'sonnet' | 'opus' | 'fable'; why: string; ok?: true }
   // A state a flow put in the plan: the flow's name, the name of this copy (review, or review-2 for a second one), and
   // why it is there (the user added it, or one of their rules).
   flow?: FlowMark
@@ -63,6 +66,9 @@ export type Switches = { weight?: Weight; on?: Record<string, boolean>; mcps?: s
 export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; held?: true }
 // One row of the draft card's settings: what differs from the plan, for the states it covers. owed: it waits for the user.
 // kept: they kept a looser one. id: what an answer names.
+// A workflow on the draft's card: its limits, Claude's reason, the estimate (usd typical, upTo the 90th percentile) and
+// the share of the week when a weekly price is kept. kept: the user pressed Keep.
+export type WorkflowRow = { state: string; agents: number; model: string; why: string; usd?: string; upTo?: string; share?: string; kept: boolean }
 export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true; looser?: true }
 // preset: the preset Claude picked for this plan, the one in use before (none when missing), and Claude's reason or the
 // user's words. Sentinel sets it; the draft card shows it.
@@ -325,7 +331,7 @@ export type PlanInput = {
   skills?: unknown
   // revise: every state id of the plan, in order.
   order?: string[]
-  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; skills?: unknown; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark; weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[] }[]
+  states?: { id?: string; label?: string; check?: string; files?: string[]; parts?: string[]; skills?: unknown; ref?: string; evidence?: string; asked?: unknown; added?: unknown; once?: unknown; group?: string; title?: string; problem?: string; approach?: string; wait?: boolean | Wait; needs?: string[]; flow?: FlowMark; weight?: Weight; weightWhy?: string; weightQuote?: string; weightOk?: true; adds?: { name: string; why: string }[]; workflow?: unknown }[]
   // define, revise, with the Library's state-settings switch on: the plan's weight and instructions on or off. Sentinel
   // turns it into library.settings; with the switch off it is dropped.
   settings?: unknown
