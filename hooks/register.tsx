@@ -11,7 +11,7 @@ import {
   instructionOf, libraryOn, withWeight, librarySection, toldHere, mapHere, dropStates, addsMidRun, keepAdded, sourceText,
   rerunOf, snapWanted, snapTaken, helpedBy, type Without, keptSources, pathKey, askedLine, globMatch, globFolder, repoOf,
   stopAsk, readAnswer, stopSettled, stopText, signedDrops, dropAsk, dropText, redrawAsk, redrawSame, redrawText, type Answer, type StopAsk,
-  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, WORKFLOWS, WORKFLOWS_OFF, withoutWorkflows, keepWorkflow, dropWorkflow, workflowLock, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
+  timeDue, timeMarked, timeNote, overseerPrompt, overseerSays, type TimeMark, lookPrint, span, STATE_SETTINGS, WORKFLOWS, WORKFLOWS_OFF, withoutWorkflows, keepWorkflow, dropWorkflow, workflowLock, workflowHeld, startWorkflow, joinWorkflow, workflowStarted, workflowStepOf, workflowSpend, WORKFLOW_AGENT, handOf, planStates, toldEntry, SETTINGS_OFF, looserLeft, planSettings, settledStates, withoutSettings, memberGap, settingRows, keepWeights, dropWeights, dropAdd, answerSetting, cardSettings,
   libraryAsk, notAsked, NOT_LIBRARY, pickLoosens, skillAllowed, noteAllowed,
 } from './core'
 import { checkLine, renderBand, renderPane, sweepLine } from './views'
@@ -425,6 +425,20 @@ export const register: Register = on => {
     // Subagents get the scope guard only; their calls would drown the main loop's health window.
     const sub = e.agentId !== undefined
 
+    // A workflow runs in a step the user approved one for, or once they name one. A helper's call is checked against
+    // its own step, as its skills are. Its agents tie to the step through this call's id (agent.spawn below).
+    if (tool === 'Workflow' && r.library?.on.includes(WORKFLOWS)) {
+      const id = (sub ? await memberOf($, r, e.agentId!) : undefined) ?? r.active!
+      const held = workflowHeld(r, id, (await saidNow($)).messages.map(m => m.text))
+      if (held) {
+        await change($, x => ({ ...x, log: [...x.log, { t: now(), icon: '⊘', tone: 'warn' as const, text: `Held a Workflow call in ${id}` }] }))
+        return sub ? { deny: held } : record($, { deny: held }, { kind: 'look', label: 'Workflow', denied: true })
+      }
+      await change($, x => startWorkflow(x, id, String(input.tool_use_id ?? '')))
+      // A helper's goes on through its own lane below.
+      if (!sub) return record($, await next(e), { kind: 'look', label: 'Workflow' })
+    }
+
     // A skill runs when the plan lists it for the state, or the user named it. A helper's is checked against its own
     // state. A /skill the user types never comes through here.
     if (tool === 'Skill') {
@@ -451,7 +465,7 @@ export const register: Register = on => {
       const own = sub ? await memberOf($, r, e.agentId!) : undefined
       const scope = own && own !== member
         ? `You work on ${own} in .claude/worktrees/${r.running![own]!.name}/. Edit ${rel} there.`
-        : outOfScope(r, rel, root, member ?? r.active)
+        : outOfScope(r, rel, root, member ?? workflowStepOf(r, e.agentId) ?? r.active)
       // The main conversation may fix a done state's files; advance runs that state's check again.
       // ponytail: its helpers may not, as their calls stay out of the ledger that advance reads.
       const fix = scope && !sub && !member ? fixOf(r, rel, root) : undefined
@@ -607,7 +621,8 @@ export const register: Register = on => {
     const busy = !!held.length || (await agentsAtWork($))
     backBusy = busy
     void after($)
-    if (held.length) {
+    // A workflow's result wakes the conversation by itself, so no timer waits on it.
+    if (held.length && !held.some(t => t.wf)) {
       const at = turns
       $.clock.after(heldTill(held, await clockMs($)), () => void (async () => {
         if (turns !== at || turning) return
@@ -624,8 +639,29 @@ export const register: Register = on => {
   // Tokens: every model response, the main conversation's and its subagents', while a plan is under way.
   on('turn.step', async function* ($, e, next) {
     const res = yield* next(e)
-    if (res.usage) spent($, res.usage, e.effort, e.agentId !== undefined)
+    if (res.usage) spent($, res.usage, e.effort, e.agentId)
     return res
+  })
+
+  // A workflow agent starting while a plan runs: tied to its run and step, held to the step's approved count and model,
+  // and told it only reads. The count and the place are taken in one change, so agents starting at once can't pass it.
+  let wfKeys = 0
+  on('agent.spawn', async ($, e, next) => {
+    if (!e.workflow) return next(e)
+    const r = await read($, run)
+    if (!isLive(r) || !r.library?.on.includes(WORKFLOWS)) return next(e)
+    const key = `a${++wfKeys}`
+    const got: { j?: ReturnType<typeof joinWorkflow> } = {}
+    await change($, x => (got.j = joinWorkflow(x, { call: e.tool_use_id, runId: e.workflow!.runId, model: e.model, key })).run)
+    const j = got.j!
+    if (j.deny) return { deny: j.deny }
+    // Moved to the approved model: said once per run for each model asked, or for none named.
+    const moved = j.capped && j.model !== e.model ? `In ${j.state}'s workflow ${e.workflow.runId}, an agent that ${e.model ? `asked for ${e.model}` : 'named no model'} runs on ${j.model}` : undefined
+    if (moved) await change($, x => (x.log.some(l => l.text === moved) ? x : { ...x, log: [...x.log, { t: now(), icon: '↓', tone: 'warn' as const, text: moved }] }))
+    const ran = await next({ ...e, ...(j.model ? { model: j.model } : {}), ...(j.capped ? { prompt: `${e.prompt}\n\n${WORKFLOW_AGENT(j.state)}` } : {}) })
+      .catch((err: unknown) => ({ deny: err instanceof Error ? err.message : String(err) }))
+    await change($, x => workflowStarted(x, key, ran.deny === undefined ? ran.agentId : undefined, ran.deny === undefined ? ran.model : undefined))
+    return ran
   })
 
   // A prompt the person typed answers what waits on them and resets the auto-continue count. In the turn it starts, the
@@ -654,7 +690,7 @@ export const register: Register = on => {
     const keep = () => `A Sentinel plan is locked ("${r.plan!.title}", active state ${r.active}). Keep that fact. Call ${TOOL} with action "status" to reload the details and decisions.`
     const res = await next(e.agentId !== undefined || !isLive(r) ? e : { ...e, instructions: [e.instructions, keep()].filter(Boolean).join('\n\n') })
     // The summary's own request counts too; the engine doesn't say which model made it.
-    if ('usage' in res && res.usage) spent($, { ...res.usage, model: 'compaction' }, undefined, e.agentId !== undefined)
+    if ('usage' in res && res.usage) spent($, { ...res.usage, model: 'compaction' }, undefined, e.agentId)
     return res
   }).catch(($, e, next) => next(e))
 
@@ -699,16 +735,17 @@ const CHECK_RUNS = 3
 // A turn that ends within TALK_MS of the user's prompt most likely answered it: a question, or being told to stop.
 // Pushing on then would talk over them; a long stretch of work after their prompt still gets pushed on.
 const TALK_MS = 5 * 60_000
-type Flying = { id: string; what: string }
+// wf: a workflow run, which holds until it ends: its result wakes the conversation.
+type Flying = { id: string; what: string; wf?: true }
 // The background work in flight at each conversation's latest stop ('' for the main one), and when each was first seen.
 const inFlight = new Map<string, { at: number; tasks: Flying[] }>()
 // On the engine's clock, which a test can move. named: when a push last named the run, which starts its hold over, so a
 // run the conversation stops beside again is named once per HOLD_MS, not at every stop.
 const firstSeen = new Map<string, number>()
 const named = new Map<string, number>()
-function seen(agent: string, at: number, tasks?: { id: string; status: string; description: string }[], crons?: { id: string; prompt?: string }[]) {
+function seen(agent: string, at: number, tasks?: { id: string; type?: string; status: string; description: string }[], crons?: { id: string; prompt?: string }[]) {
   const live: Flying[] = [
-    ...(tasks ?? []).filter(t => !['idle', 'completed', 'failed', 'killed'].includes(t.status)).map(t => ({ id: t.id, what: t.description.slice(0, 80) })),
+    ...(tasks ?? []).filter(t => !['idle', 'completed', 'failed', 'killed'].includes(t.status)).map(t => ({ id: t.id, what: t.description.slice(0, 80), ...(t.type === 'workflow' ? { wf: true as const } : {}) })),
     ...(crons ?? []).map(c => ({ id: `cron:${c.id}`, what: 'a scheduled wake-up' })),
   ]
   for (const t of live) if (!firstSeen.has(t.id)) firstSeen.set(t.id, at)
@@ -724,7 +761,7 @@ function flight(agent: string) {
 }
 // What still holds: the work that has run, or gone unnamed, for less than HOLD_MS. heldTill: when the last of it stops holding.
 const since = (t: Flying, at: number) => named.get(t.id) ?? firstSeen.get(t.id) ?? at
-const holding = (tasks: Flying[], at: number) => tasks.filter(t => at - since(t, at) < HOLD_MS)
+const holding = (tasks: Flying[], at: number) => tasks.filter(t => t.wf || at - since(t, at) < HOLD_MS)
 const heldTill = (tasks: Flying[], at: number) => Math.max(0, Math.max(...tasks.map(t => since(t, at) + HOLD_MS)) - at) + 1000
 // A member's background shells and monitors, by task id: its agent.
 const bgBy = new Map<string, string>()
@@ -3300,9 +3337,9 @@ function attach(ran: Result, note: string | undefined): Result {
   return { ...ran, context: [...(ran.context ?? []), note] } as Result
 }
 
-// Never throws: it runs after the response has gone on its way.
-function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, sub: boolean) {
-  void change($, r => addSpend(r, u, effort === undefined ? undefined : String(effort), sub, new Date().toISOString()))
+// Never throws: it runs after the response has gone on its way. agent: the subagent's id, absent for the main conversation.
+function spent($: $, u: Parameters<typeof addSpend>[1], effort: unknown, agent: string | undefined) {
+  void change($, r => workflowSpend(addSpend(r, u, effort === undefined ? undefined : String(effort), agent !== undefined, new Date().toISOString()), agent, u))
     .then(() => meter($)).then(() => after($)).catch(() => undefined)
 }
 

@@ -2,7 +2,7 @@
 // no `$` here, so the pane, the browser view and the tests read the same numbers.
 import type { Audit, AuditKind, Call, Depth, Drawing, Evidence, FlowDef, FlowState, FlowWhen, Fingerprint, InstructionAt, InstructionDef, Kind, Lane, LogLine, Look, MapChanges, MapLook, MapNode, MapRunState, Marks, Member, OverseerWord, Plan, PlanInput, PlanLibrary, PlanSetting, Point, Refused, Run, WorkflowRow, SettingRow, Source, Spend, StateDef, Switches, SysTreePart, SystemMap, SystemView, Task, Tone, Trap, Trip, View, Wait, Weight, UsageView, UsageWindow } from '../types'
 import { rollOf, statusOf, tally } from './mapstatus.ts'
-import { WEEKLY, estimate, money, shareOf, usageView } from './usage.ts'
+import { WEEKLY, costOf, estimate, family, money, shareOf, usageView } from './usage.ts'
 import { checkQuote, checkSetting, MIN_WORDS, namesIn, nearest, sectionOf, spanOf, squash, unquoted, unquotedSections } from './quote.ts'
 import { changesOf, checkDrawing, dropParts, stateReads, treeOf } from './system.ts'
 export type { PlanInput }
@@ -165,6 +165,7 @@ export function briefRefusal(r: Run, i: PlanInput, parallel: boolean): string | 
   if (!st) return `"${id}" is not one of the states.`
   if (r.running?.[id]) return `${id} already has a member agent.`
   if (waitOf(st)) return `${id} needs the user's OK, so you do it yourself when it comes up.`
+  if (st.workflow?.ok) return `${id} runs the workflow the user approved, so you do it yourself when it comes up: a member agent can't start one.`
   if (!readyOf(r).includes(id)) {
     const done = doneOf(r)
     const open = needsOf(r.plan!.states, id).filter(n => !done.includes(n))
@@ -1211,8 +1212,12 @@ function changesSkills(r: Run, i: PlanInput): boolean {
   if (i.skills !== undefined && !same(i.skills, r.plan?.skills)) return true
   return (i.states ?? []).some(s => s.skills !== undefined && !same(s.skills, r.plan?.states.find(x => x.id === s.id?.trim())?.skills))
 }
-// The skills a state may call: the plan's and its own.
-export const skillsFor = (r: Run, id?: string | null): string[] => [...new Set([...(r.plan?.skills ?? []), ...(r.plan?.states.find(s => s.id === id)?.skills ?? [])])]
+// The skills a state may call: the plan's and its own, and workflow-authoring where the user approved a workflow, as the
+// Workflow tool asks for it before a script is written.
+export const skillsFor = (r: Run, id?: string | null): string[] => {
+  const st = r.plan?.states.find(s => s.id === id)
+  return [...new Set([...(r.plan?.skills ?? []), ...(st?.skills ?? []), ...(st?.workflow?.ok ? ['workflow-authoring'] : [])])]
+}
 // A name as a whole word in a text: letters, digits, - and _ on neither side.
 const named = (text: string, word: string) => new RegExp(`(^|[^\\w-])${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^\\w-])`, 'i').test(text)
 // The words that name a skill: plugin:skill, the plugin and the skill alone.
@@ -1299,6 +1304,62 @@ const workflowHere = (st: StateDef) => {
     + `Write its script and run it with the Workflow tool, then wait for its result before you advance. Sentinel holds the agents to that as they start: one that asks for a dearer model, or names none, runs on ${w.model}, and one past the ${w.agents}th is refused. `
     + `It also adds a line to each agent's prompt naming this step. Give every agent() a model, and put each agent() call inside parallel() or pipeline(), so a refused agent comes back as null instead of ending the run. `
     + 'The agents only read, and this step\'s check still decides.'
+}
+
+// While the plan runs, with the switch on. A Workflow call goes through in a step with an approved workflow, or once the
+// user has named a workflow in a message. id: the step the caller works on. A string: why it's held.
+export const workflowHeld = (r: Run, id: string, typed: string[]): string | undefined =>
+  stateOf(r, id)?.workflow?.ok || typed.some(m => /\bworkflows?\b/i.test(m)) ? undefined
+    : `Sentinel holds the Workflow call: ${id} has no workflow the user approved. Do the step without one. If it can't be done without, say so in your reply and stop; the user allows one by naming a workflow.`
+const NO_TOKENS = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+// A Workflow call that went through: its run belongs to the caller's step.
+// ponytail: a call the engine then refuses leaves a run with no agents; the page skips those.
+export const startWorkflow = (r: Run, id: string, call: string): Run =>
+  ({ ...r, workflows: [...(r.workflows ?? []), { state: id, ...(call ? { call } : {}), agents: [], refused: 0, usd: 0, tokens: NO_TOKENS }] })
+// Unknown models rank dearest, so the approved one stands.
+const rankOf = (model: string) => {
+  const f = family(model)
+  return f ? WORKFLOW_MODELS.indexOf(f) : WORKFLOW_MODELS.length
+}
+export const WORKFLOW_AGENT = (state: string) => `Sentinel: you are an agent of the workflow the user approved for the step ${state}. Only read: don't edit or write files.`
+// A workflow agent starting. It joins the run its Workflow call or its run id names, else a new run in the active step
+// (a resume, or a run the gate never saw). The step's approved workflow caps the agents across all its runs, counted
+// here since the engine's agentIndex starts over on a resume, and sets the dearest model: none named, or a dearer one,
+// runs on it. A workflow the user named in a step without one gets neither. The agent holds its place by key until it
+// starts or the engine refuses it.
+export function joinWorkflow(r: Run, a: { call: string; runId: string; model?: string; key: string }): { run: Run; state: string; deny?: string; model?: string; capped: boolean } {
+  const all = r.workflows ?? []
+  const at = all.findIndex(w => (!!a.call && w.call === a.call) || (!!a.runId && w.runId === a.runId))
+  const runs = at < 0 ? [...all, { state: r.active!, agents: [], refused: 0, usd: 0, tokens: NO_TOKENS }] : [...all]
+  const i = at < 0 ? runs.length - 1 : at
+  const w = { ...runs[i]!, ...(a.runId && !runs[i]!.runId ? { runId: a.runId } : {}) }
+  const cap = stateOf(r, w.state)?.workflow
+  const ok = cap?.ok ? cap : undefined
+  const used = runs.reduce((n, x) => n + (x.state === w.state ? x.agents.length : 0), 0)
+  if (ok && used >= ok.agents) {
+    runs[i] = { ...w, refused: w.refused + 1 }
+    return { run: { ...r, workflows: runs }, state: w.state, capped: true, deny: `Sentinel holds this step's workflow to ${ok.agents} agents, as approved.` }
+  }
+  const model = ok && (!a.model || rankOf(a.model) > rankOf(ok.model)) ? ok.model : a.model
+  runs[i] = { ...w, agents: [...w.agents, { key: a.key, model: model ?? '', requests: 0 }] }
+  return { run: { ...r, workflows: runs }, state: w.state, capped: !!ok, ...(model ? { model } : {}) }
+}
+// The agent started: its id, and the model the engine named. Refused by the engine: its place goes.
+export const workflowStarted = (r: Run, key: string, id: string | undefined, model: string | undefined): Run => ({
+  ...r, workflows: r.workflows?.map(w => ({ ...w, agents: w.agents.flatMap(x => (x.key !== key ? [x] : id === undefined ? [] : [{ id, model: model ?? x.model, requests: x.requests }])) })),
+})
+// The step whose workflow an agent belongs to: its edits are checked against that step, wherever the plan has moved.
+export const workflowStepOf = (r: Run, agentId: string | undefined) => (agentId === undefined ? undefined : r.workflows?.find(w => w.agents.some(x => x.id === agentId))?.state)
+// A workflow agent's response: its tokens and cost go to its run, and one request to the agent.
+export function workflowSpend(r: Run, agentId: string | undefined, u: Usage): Run {
+  if (agentId === undefined || !workflowStepOf(r, agentId)) return r
+  return {
+    ...r, workflows: r.workflows!.map(w => (!w.agents.some(x => x.id === agentId) ? w : {
+      ...w, usd: w.usd + (costOf(u, u.model) ?? 0),
+      tokens: { input: w.tokens.input + u.input_tokens, output: w.tokens.output + u.output_tokens, cacheRead: w.tokens.cacheRead + u.cache_read_input_tokens, cacheWrite: w.tokens.cacheWrite + u.cache_creation_input_tokens },
+      agents: w.agents.map(x => (x.id === agentId ? { ...x, requests: x.requests + 1 } : x)),
+    })),
+  }
 }
 
 // One state as sent. A string says what is wrong. proofOf sets asked and added; okAt and look are Sentinel's own.

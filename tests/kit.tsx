@@ -278,7 +278,8 @@ export function engine(on: any) {
     spawns.push(e)
     if (spawnDeny) return { deny: spawnDeny }
     agents = [...agents, { id: `m-${spawns.length}`, status: 'running', description: e.description, name: e.name }]
-    return { model: 'm' }
+    // Core sets agentId; members find theirs by name, and a workflow's agents carry it, as the engine's do.
+    return { model: 'm', ...(e.workflow ? { agentId: `m-${spawns.length}` } : {}) }
   })
   return {
     files, submitted, commands, reads, runs, spawns, sent, statuses, outs, stops, toasts, memory, store,

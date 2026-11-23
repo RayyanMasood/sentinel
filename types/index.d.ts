@@ -68,7 +68,20 @@ export type PlanSetting = { weight?: Weight; name?: string; on?: boolean; why?: 
 // kept: they kept a looser one. id: what an answer names.
 // A workflow on the draft's card: its limits, Claude's reason, the estimate (usd typical, upTo the 90th percentile) and
 // the share of the week when a weekly price is kept. kept: the user pressed Keep.
-export type WorkflowRow = { state: string; agents: number; model: string; why: string; usd?: string; upTo?: string; share?: string; kept: boolean }
+// A workflow run in a plan step: the Workflow call that started it, the engine's run id once an agent carries it, and
+// what its agents started and spent. An agent's key holds its place while it starts; requests: its model responses.
+// refused: agents Sentinel held past the step's approved count.
+export type WorkflowRun = {
+  state: string
+  call?: string
+  runId?: string
+  agents: { key?: string; id?: string; model: string; requests: number }[]
+  refused: number
+  usd: number
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number }
+}
+
+export type WorkflowRow ={ state: string; agents: number; model: string; why: string; usd?: string; upTo?: string; share?: string; kept: boolean }
 export type SettingRow = { id: string; kind: 'plan' | 'weight' | 'add'; states: string[]; key?: string; weight?: Weight; name?: string; on?: boolean; why?: string; quote?: string; owed: boolean; kept?: true; looser?: true }
 // preset: the preset Claude picked for this plan, the one in use before (none when missing), and Claude's reason or the
 // user's words. Sentinel sets it; the draft card shows it.
@@ -456,6 +469,8 @@ export type Run = {
   // The instructions and switches the plan was locked with. A run saved before it existed behaves as Standard did:
   // fails-first on, nothing told.
   library?: PlanLibrary
+  // Workflow runs started while the plan ran, in order.
+  workflows?: WorkflowRun[]
   // fails-without-change: the project as the active state's visit began, as a commit. state and enteredAt name the
   // visit. An empty sha: the snapshot failed, and the log said so.
   snap?: { state: string; enteredAt: number; sha: string }
